@@ -45,6 +45,11 @@ pub mod web_link;
 pub mod window;
 pub mod window_tab;
 pub mod workspace;
+pub mod ownstack_palette;
+pub mod ownstack_chat;
+pub mod ownstack_audit;
+pub mod ownstack_status;
+pub mod ownstack_onboarding;
 
 #[cfg(windows)]
 extern crate windows_sys as windows;

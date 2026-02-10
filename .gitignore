@@ -10,3 +10,20 @@ vendor/
 
 .DS_Store
 *.patch
+
+# OwnStack Temp & Logs
+*_errors.txt
+*_check.txt
+*_verification.txt
+test_output*.txt
+test_results.txt
+final_test_output.txt
+comp_err*.txt
+agent_errors.txt
+build_errors.txt
+temp_ownstack/
+.env
+*.key
+*.pem
+.ownstack/secrets/
+.ownstack/audit.jsonl

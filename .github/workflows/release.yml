@@ -1,4 +1,4 @@
-name: Release
+name: Release OwnStack IDE
 
 on:
   schedule:
@@ -73,17 +73,17 @@ jobs:
       - name: Crate msi installer
         run: |
           candle.exe -arch "x64" -ext WixUIExtension -ext WixUtilExtension \
-            -out "./lapce.wixobj" "extra/windows/wix/lapce.wxs"
+            -out "./ownstack-ide.wixobj" "extra/windows/wix/lapce.wxs"
 
           light.exe -ext WixUIExtension -ext WixUtilExtension \
-            -out "./Lapce-windows.msi" -sice:ICE61 -sice:ICE91 \
-            "./lapce.wixobj"
+            -out "./OwnStack-windows.msi" -sice:ICE61 -sice:ICE91 \
+            "./ownstack-ide.wixobj"
 
       - name: Create portable
         shell: pwsh
         run: |
           cargo build --profile release-lto --features lapce-app/portable
-          Compress-Archive ./target/release-lto/lapce.exe ./Lapce-windows-portable.zip
+          Compress-Archive ./target/release-lto/ownstack-ide.exe ./OwnStack-windows-portable.zip
 
       - name: Create lapce-proxy archive
         shell: pwsh
@@ -97,11 +97,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lapce-windows
+          name: ownstack-windows
           path: |
             ./lapce-proxy-windows-*.gz
-            ./Lapce-windows-portable.zip
-            ./Lapce-windows.msi
+            ./OwnStack-windows-portable.zip
+            ./OwnStack-windows.msi
           retention-days: 1
 
   linux:
@@ -118,15 +118,15 @@ jobs:
 
       - name: Gzip
         run: |
-          mkdir Lapce
-          cp ./target/linux_amd64/lapce Lapce/
-          tar -zcvf ./lapce-linux-amd64.tar.gz Lapce
+          mkdir OwnStack
+          cp ./target/linux_amd64/ownstack-ide OwnStack/
+          tar -zcvf ./ownstack-linux-amd64.tar.gz OwnStack
 
-          rm -rf Lapce
+          rm -rf OwnStack
 
-          mkdir Lapce
-          cp ./target/linux_arm64/lapce Lapce/
-          tar -zcvf ./lapce-linux-arm64.tar.gz Lapce
+          mkdir OwnStack
+          cp ./target/linux_arm64/ownstack-ide OwnStack/
+          tar -zcvf ./ownstack-linux-arm64.tar.gz OwnStack
 
       - name: Fetch dependencies
         run: cargo fetch --locked
@@ -139,9 +139,9 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lapce-linux
+          name: ownstack-linux
           path: |
-            ./lapce-linux-*.tar.gz
+            ./ownstack-linux-*.tar.gz
             ./vendor.tar.gz
           retention-days: 1
 
@@ -174,7 +174,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lapce-${{ matrix.os-name }}-${{ matrix.os-version }}
+          name: ownstack-${{ matrix.os-name }}-${{ matrix.os-version }}
           path: |
             ./target/linux_*/*
           retention-days: 1
@@ -204,7 +204,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lapce-${{ matrix.os-name }}-${{ matrix.os-version }}
+          name: ownstack-${{ matrix.os-name }}-${{ matrix.os-version }}
           path: |
             ./target/*
           retention-days: 1
@@ -238,7 +238,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lapce-proxy-linux
+          name: ownstack-proxy-linux
           path: |
             ./lapce-proxy-linux-*.gz
           retention-days: 1
@@ -276,7 +276,7 @@ jobs:
 
       - name: Rename
         run: |
-          cp ./target/release-lto/macos/Lapce.dmg ./target/release-lto/macos/Lapce-macos.dmg
+          cp ./target/release-lto/macos/Lapce.dmg ./target/release-lto/macos/OwnStack-macos.dmg
 
       - name: Gzip lapce-proxy
         run: |
@@ -286,7 +286,7 @@ jobs:
       - name: Notarize Release Build
         uses: lando/notarize-action@v2
         with:
-          product-path: "./target/release-lto/macos/Lapce-macos.dmg"
+          product-path: "./target/release-lto/macos/OwnStack-macos.dmg"
           appstore-connect-username: ${{ secrets.NOTARIZE_USERNAME }}
           appstore-connect-password: ${{ secrets.NOTARIZE_PASSWORD }}
           appstore-connect-team-id: CYSGAZFR8D
@@ -296,14 +296,14 @@ jobs:
       - name: "Staple Release Build"
         uses: lapce/xcode-staple@062485d6eeafe841c18a412f012e80f49e23c517
         with:
-          product-path: "./target/release-lto/macos/Lapce-macos.dmg"
+          product-path: "./target/release-lto/macos/OwnStack-macos.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lapce-macos
+          name: ownstack-macos
           path: |
             ./target/release-lto/macos/lapce-proxy-darwin-*.gz
-            ./target/release-lto/macos/Lapce-macos.dmg
+            ./target/release-lto/macos/OwnStack-macos.dmg
           retention-days: 3
 
   publish:
@@ -341,7 +341,7 @@ jobs:
       - if: env.TAG_NAME == 'nightly'
         run: |
           {
-            echo 'SUBJECT=Lapce development build'
+            echo 'SUBJECT=OwnStack IDE development build'
             echo 'PRERELEASE=--prerelease'
           } | tee -a $GITHUB_ENV
 
@@ -354,7 +354,7 @@ jobs:
       - if: env.TAG_NAME != 'nightly'
         run: |
           {
-            echo 'SUBJECT=Lapce release build'
+            echo 'SUBJECT=OwnStack IDE release build'
             echo 'PRERELEASE='
           } | tee -a $GITHUB_ENV
 
@@ -364,10 +364,10 @@ jobs:
           DEBUG: api
         run: |
           gh release create $TAG_NAME $PRERELEASE --title "$TAG_NAME" --target $GITHUB_SHA \
-            lapce-macos/* \
-            lapce-linux/* \
-            lapce-debian*/*/* \
-            lapce-ubuntu*/*/* \
-            lapce-fedora*/* \
-            lapce-proxy-linux/* \
-            lapce-windows/*
+            ownstack-macos/* \
+            ownstack-linux/* \
+            ownstack-debian*/*/* \
+            ownstack-ubuntu*/*/* \
+            ownstack-fedora*/* \
+            ownstack-proxy-linux/* \
+            ownstack-windows/*

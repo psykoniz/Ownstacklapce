@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    RequestId, RpcError, RpcMessage,
+    RequestId, RpcError, RpcMessage, OwnStackRpc,
     dap_types::{
         self, DapId, RunDebugConfig, Scope, StackFrame, Stopped, ThreadId, Variable,
     },
@@ -145,6 +145,9 @@ pub enum CoreNotification {
         dap_id: DapId,
         path: PathBuf,
         breakpoints: Vec<dap_types::Breakpoint>,
+    },
+    OwnStack {
+        message: OwnStackRpc,
     },
 }
 
@@ -401,6 +404,10 @@ impl CoreRpcHandler {
 
     pub fn home_dir(&self, path: PathBuf) {
         self.notification(CoreNotification::HomeDir { path });
+    }
+
+    pub fn ownstack_notification(&self, message: OwnStackRpc) {
+        self.notification(CoreNotification::OwnStack { message });
     }
 }
 

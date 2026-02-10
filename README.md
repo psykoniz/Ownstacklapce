@@ -1,61 +1,144 @@
 <h1 align="center">
-  <a href="https://lapce.dev" target="_blank">
+  <a href="https://github.com/psykoniz/Ownstack" target="_blank">
   <img src="extra/images/logo.png" width=200 height=200/><br>
-  Lapce
+  OwnStack IDE
   </a>
 </h1>
 
-<h4 align="center">Lightning-fast And Powerful Code Editor</h4>
+<h4 align="center">AI-Powered Native Code Editor — Built on Lapce</h4>
 
 <div align="center">
-  <a href="https://github.com/lapce/lapce/actions/workflows/ci.yml" target="_blank">
-    <img src="https://github.com/lapce/lapce/actions/workflows/ci.yml/badge.svg" />
+  <a href="https://github.com/psykoniz/Ownstacklapce/actions/workflows/ci.yml" target="_blank">
+    <img src="https://github.com/psykoniz/Ownstacklapce/actions/workflows/ci.yml/badge.svg" />
   </a>
   <a href="https://discord.gg/n8tGJ6Rn6D" target="_blank">
     <img src="https://img.shields.io/discord/946858761413328946?logo=discord" />
   </a>
-  <a href="https://docs.lapce.dev" target="_blank">
-      <img src="https://img.shields.io/static/v1?label=Docs&message=docs.lapce.dev&color=blue" alt="Lapce Docs">
-  </a>
 </div>
 <br/>
 
-
-Lapce (IPA: /læps/) is written in pure Rust, with a UI in [Floem](https://github.com/lapce/floem). It is designed with [Rope Science](https://xi-editor.io/docs/rope_science_00.html) from the [Xi-Editor](https://github.com/xi-editor/xi-editor), enabling lightning-fast computation, and leverages [wgpu](https://github.com/gfx-rs/wgpu) for rendering. More information about the features of Lapce can be found on the [main website](https://lapce.dev) and user documentation can be found on [GitBook](https://docs.lapce.dev/).
+OwnStack IDE is a **native, GPU-accelerated code editor** with integrated AI agents for secure code assistance. Built as a fork of [Lapce](https://github.com/lapce/lapce), it combines lightning-fast performance with powerful AI capabilities.
 
 ![](https://github.com/lapce/lapce/blob/master/extra/images/screenshot.png?raw=true)
 
-## Features
+## ✨ Key Features
 
-* Built-in LSP ([Language Server Protocol](https://microsoft.github.io/language-server-protocol/)) support to give you intelligent code features such as: completion, diagnostics and code actions
-* Modal editing support as first class citizen (Vim-like, and toggleable)
-* Built-in remote development support inspired by [VSCode Remote Development](https://code.visualstudio.com/docs/remote/remote-overview). Enjoy the benefits of a "local" experience, and seamlessly gain the full power of a remote system. We also have [Lapdev](https://lap.dev/) which can help manage your remote dev environments. 
-* Plugins can be written in programming languages that can compile to the [WASI](https://wasi.dev/) format (C, Rust, [AssemblyScript](https://www.assemblyscript.org/))
-* Built-in terminal, so you can execute commands in your workspace, without leaving Lapce.
+### Inherited from Lapce
+- **Lightning Fast** — Written in pure Rust with [wgpu](https://github.com/gfx-rs/wgpu) GPU rendering
+- **Native UI** — Built with [Floem](https://github.com/lapce/floem), no Electron overhead
+- **Built-in LSP** — Intelligent code completion, diagnostics, and actions
+- **Modal Editing** — First-class Vim-like editing (toggleable)
+- **Remote Development** — VSCode-style remote development support
+- **WASI Plugins** — Extensible via C, Rust, or AssemblyScript plugins
+- **Built-in Terminal** — Integrated terminal for workspace commands
 
-## Installation
+### OwnStack AI Features (Coming Soon)
+- **Secure AI Agents** — Policy-controlled command execution
+- **Sandboxed Operations** — All AI actions run in isolated environments
+- **Full Audit Trail** — Every AI action is logged and traceable
+- **Multi-Provider Support** — OpenRouter, Anthropic, Ollama, and more
 
-You can find pre-built releases for Windows, Linux and macOS [here](https://github.com/lapce/lapce/releases), or [installing with a package manager](docs/installing-with-package-manager.md).
-If you'd like to compile from source, you can find the [guide](docs/building-from-source.md).
+## 🛠 Architecture
 
-## Contributing
+OwnStack IDE follows a strict security-first architecture:
 
-<a href="https://ws.lap.dev/#https://github.com/lapce/lapce" target="_blank">
-      <img src="https://lap.dev/images/open-in-lapdev.svg?version=8" alt="Open in Lapdev">
-</a>
+```
+┌─────────────────────────────────────────────────────────┐
+│                    OwnStack IDE                         │
+├────────────┬────────────┬────────────┬─────────────────┤
+│ lapce-app  │ lapce-core │ lapce-proxy│ lapce-rpc       │
+│ (Floem UI) │ (Xi Rope)  │ (LSP/Files)│ (Protocol)      │
+├────────────┴────────────┴────────────┴─────────────────┤
+│                  OwnStack Engine                        │
+│  PolicyEngine │ PathValidator │ Sandbox │ AuditLogger  │
+├─────────────────────────────────────────────────────────┤
+│                  OwnStack Agent                         │
+│      LLM Providers │ Toolkits │ Multi-Agent            │
+└─────────────────────────────────────────────────────────┘
+```
 
-[Lapdev](https://lap.dev/), developed by the Lapce team, is a cloud dev env service similar to GitHub Codespaces. By clicking the button above, you'll be taken to a fully set up Lapce dev env where you can browse the code and start developing. All dependencies are pre-installed, so you can get straight to code.
+## 📦 Installation
 
-Guidelines for contributing to Lapce can be found in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+### Pre-built Releases
+Coming soon — see [Releases](https://github.com/psykoniz/Ownstacklapce/releases)
 
-## Feedback & Contact
+### Building from Source
 
-The most popular place for Lapce developers and users is on the [Discord server](https://discord.gg/n8tGJ6Rn6D).
+**Prerequisites:**
+- Rust 1.87.0+
+- Platform-specific dependencies (see below)
 
-Or, join the discussion on [Reddit](https://www.reddit.com/r/lapce/) where we are just getting started.
+```bash
+# Clone the repository
+git clone https://github.com/psykoniz/Ownstacklapce.git
+cd Ownstacklapce
 
-There is also a [Matrix Space](https://matrix.to/#/#lapce-editor:matrix.org), which is linked to the content from the Discord server.
+# Build release binary
+cargo build --release
 
-## License
+# Run
+./target/release/ownstack-ide
+```
 
-Lapce is released under the Apache License Version 2, which is an open source license. You may contribute to this project, or use the code as you please as long as you adhere to its conditions. You can find a copy of the license text here: [`LICENSE`](LICENSE).
+**Ubuntu/Debian dependencies:**
+```bash
+sudo apt install libgtk-3-dev libxkbcommon-dev
+```
+
+**macOS:**
+```bash
+xcode-select --install
+```
+
+**Windows:**
+Visual Studio Build Tools with C++ workload
+
+## 📚 Documentation
+
+- **[Architecture Guide](docs/ARCHITECTURE.md)** — System design and components
+- **[Agent Directives](GEMINI.md)** — AI agent behavior rules
+- **[Building Guide](docs/building-from-source.md)** — Detailed build instructions
+
+## 🔒 Security
+
+OwnStack IDE implements multiple security layers:
+
+| Layer | Description |
+|-------|-------------|
+| **PolicyEngine** | Blocks dangerous commands (rm -rf, sudo, etc.) |
+| **PathValidator** | Restricts file access to workspace only |
+| **Sandbox** | Isolated execution with no network access |
+| **AuditLogger** | Complete action history in JSONL format |
+
+See [GEMINI.md](GEMINI.md) for complete security specifications.
+
+## 🤝 Contributing
+
+We welcome contributions! Please read:
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — Contribution guidelines
+- [`GEMINI.md`](GEMINI.md) — Code standards and architecture rules
+
+## 📄 License
+
+OwnStack IDE uses a dual-license structure:
+
+| Component | License |
+|-----------|---------|
+| Lapce core (lapce-*) | Apache 2.0 |
+| OwnStack components (ownstack-*) | MIT |
+
+See [LICENSE](LICENSE) (Apache 2.0) and [LICENSE-OWNSTACK](LICENSE-OWNSTACK) (MIT).
+
+## 🙏 Acknowledgments
+
+OwnStack IDE is built on the excellent work of:
+- **[Lapce](https://lapce.dev)** — The lightning-fast code editor
+- **[Floem](https://github.com/lapce/floem)** — Native Rust UI framework
+- **[Xi-Editor](https://xi-editor.io)** — Rope science for text editing
+- **[wgpu](https://wgpu.rs)** — GPU rendering
+
+---
+
+<div align="center">
+  <sub>Built with ❤️ by the OwnStack team • Based on Lapce</sub>
+</div>

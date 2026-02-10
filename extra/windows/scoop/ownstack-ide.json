@@ -1,0 +1,27 @@
+{
+    "version": "0.1.0",
+    "description": "OwnStack IDE — AI-powered native code editor built on Lapce",
+    "homepage": "https://github.com/psykoniz/Ownstacklapce",
+    "license": "Apache-2.0|MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/psykoniz/Ownstacklapce/releases/download/v0.1.0/OwnStack-windows-portable.zip",
+            "hash": "",
+            "bin": "ownstack-ide.exe"
+        }
+    },
+    "shortcuts": [
+        [
+            "ownstack-ide.exe",
+            "OwnStack IDE"
+        ]
+    ],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/psykoniz/Ownstacklapce/releases/download/v$version/OwnStack-windows-portable.zip"
+            }
+        }
+    }
+}

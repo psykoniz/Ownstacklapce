@@ -1,14 +1,19 @@
+# OwnStack IDE CI Workflow
+# Based on Lapce CI with OwnStack additions
+
 on:
   push:
     branches:
       - master
+      - ownstack/main
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - Cargo.toml
       - Cargo.lock
       - lapce-**
-      - .github/wofklows/ci.yml
+      - ownstack-**
+      - .github/workflows/ci.yml
   workflow_dispatch:
 
 name: CI
@@ -29,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -97,7 +102,7 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
-        
+
       - name: Fetch dependencies
         run: cargo fetch --locked
 

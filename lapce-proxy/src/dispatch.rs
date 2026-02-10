@@ -41,6 +41,7 @@ use lsp_types::{
     notification::{Cancel, Notification},
 };
 use parking_lot::Mutex;
+use ownstack_bridge::PythonBridge;
 
 use crate::{
     buffer::{Buffer, get_mod_time, load_file},
@@ -62,6 +63,7 @@ pub struct Dispatcher {
     file_watcher: FileWatcher,
     window_id: usize,
     tab_id: usize,
+    bridge: Arc<Mutex<Option<PythonBridge>>>,
 }
 
 impl ProxyHandler for Dispatcher {
@@ -397,6 +399,11 @@ impl ProxyHandler for Dispatcher {
                     None,
                     false,
                 );
+            }
+            OwnStack { message } => {
+                // Route message to Python bridge
+                // This is a placeholder for actual bridge logic
+                tracing::info!("OwnStack message received in proxy: {:?}", message);
             }
         }
     }
@@ -1225,6 +1232,7 @@ impl Dispatcher {
             file_watcher,
             window_id: 1,
             tab_id: 1,
+            bridge: Arc::new(Mutex::new(None)),
         }
     }
 

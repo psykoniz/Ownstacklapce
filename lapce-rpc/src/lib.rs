@@ -13,7 +13,9 @@ pub mod source_control;
 pub mod stdio;
 pub mod style;
 pub mod terminal;
+pub mod ownstack;
 
+pub use ownstack::OwnStackRpc;
 pub use parse::{Call, RequestId, RpcObject};
 use serde::{Deserialize, Serialize};
 pub use stdio::stdio_transport;

@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin::VoltID;
 use crate::{
-    RequestId, RpcError, RpcMessage,
+    RequestId, RpcError, RpcMessage, OwnStackRpc,
     buffer::BufferId,
     dap_types::{self, DapId, RunDebugConfig, SourceBreakpoint, ThreadId},
     file::{FileNodeItem, PathObject},
@@ -350,6 +350,9 @@ pub enum ProxyNotification {
         dap_id: DapId,
         path: PathBuf,
         breakpoints: Vec<SourceBreakpoint>,
+    },
+    OwnStack {
+        message: OwnStackRpc,
     },
 }
 

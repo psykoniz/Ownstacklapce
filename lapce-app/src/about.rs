@@ -21,6 +21,7 @@ use crate::{
 struct AboutUri {}
 
 impl AboutUri {
+    const OWNSTACK: &'static str = "https://github.com/psykoniz/Ownstack";
     const LAPCE: &'static str = "https://lapce.dev";
     const GITHUB: &'static str = "https://github.com/lapce/lapce";
     const MATRIX: &'static str = "https://matrix.to/#/#lapce-editor:matrix.org";
@@ -105,24 +106,36 @@ pub fn about_popup(window_tab_data: Rc<WindowTabData>) -> impl View {
                 s.size(logo_size, logo_size)
                     .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
             }),
-            label(|| "Lapce".to_string()).style(move |s| {
+            label(|| "OwnStack IDE".to_string()).style(move |s| {
                 s.font_bold()
                     .margin_top(10.0)
                     .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
+            }),
+            label(|| "Based on Lapce".to_string()).style(move |s| {
+                s.font_size(12.0)
+                    .margin_top(4.0)
+                    .color(config.get().color(LapceColor::EDITOR_DIM))
             }),
             label(|| format!("Version: {}", VERSION)).style(move |s| {
                 s.margin_top(10.0)
                     .color(config.get().color(LapceColor::EDITOR_DIM))
             }),
             web_link(
-                || "Website".to_string(),
-                || AboutUri::LAPCE.to_string(),
+                || "OwnStack Project".to_string(),
+                || AboutUri::OWNSTACK.to_string(),
                 move || config.get().color(LapceColor::EDITOR_LINK),
                 internal_command,
             )
             .style(|s| s.margin_top(20.0)),
             web_link(
-                || "GitHub".to_string(),
+                || "Lapce Website".to_string(),
+                || AboutUri::LAPCE.to_string(),
+                move || config.get().color(LapceColor::EDITOR_LINK),
+                internal_command,
+            )
+            .style(|s| s.margin_top(10.0)),
+            web_link(
+                || "Lapce GitHub".to_string(),
                 || AboutUri::GITHUB.to_string(),
                 move || config.get().color(LapceColor::EDITOR_LINK),
                 internal_command,

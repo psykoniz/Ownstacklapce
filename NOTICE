@@ -1,0 +1,39 @@
+OwnStack Native IDE
+====================
+
+This product includes software developed by The Lapce Authors.
+
+Lapce
+-----
+Copyright (c) 2021-2024 The Lapce Authors
+Licensed under the Apache License, Version 2.0.
+https://github.com/lapce/lapce
+
+OwnStack Components
+-------------------
+Copyright (c) 2026 OwnStack Contributors
+Licensed under the MIT License.
+
+The following OwnStack-specific components are covered by MIT license:
+- ownstack-engine/
+- ownstack-agent/
+- ownstack-bridge/
+- ownstack-python/
+- GEMINI.md
+- AGENTS.md
+- docs/ARCHITECTURE.md
+
+All other components inherit from Lapce and are covered by Apache 2.0.
+
+---
+
+Third-Party Licenses
+--------------------
+
+This product may include code from additional open source projects.
+See individual crate Cargo.toml files for complete dependency information.
+
+Floem - MIT License
+wgpu - MIT/Apache 2.0
+Xi-Editor (Rope) - Apache 2.0
+Tree-sitter - MIT License
