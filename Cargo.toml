@@ -1,18 +1,18 @@
 [package]
-name         = "lapce"
+name         = "ownstack-ide"
 version      = { workspace = true }
 authors      = { workspace = true }
 edition      = { workspace = true }
 license      = { workspace = true }
 rust-version = { workspace = true }
-default-run  = "lapce"
+default-run  = "ownstack-ide"
 
 [dependencies]
 lapce-app   = { path = "./lapce-app" }
 lapce-proxy = { path = "./lapce-proxy" }
 
 [[bin]]
-name = "lapce"
+name = "ownstack-ide"
 path = "lapce-app/src/bin/lapce.rs"
 
 [[bin]]
@@ -20,7 +20,15 @@ name = "lapce-proxy"
 path = "lapce-proxy/src/bin/lapce-proxy.rs"
 
 [workspace]
-members = ["lapce-app", "lapce-proxy", "lapce-rpc", "lapce-core"]
+members = [
+    "lapce-app",
+    "lapce-core",
+    "lapce-proxy",
+    "lapce-rpc",
+    "ownstack-engine",
+    "ownstack-bridge",
+    "ownstack-agent",
+]
 
 [workspace.package]
 version      = "0.4.6"

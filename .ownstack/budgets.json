@@ -1,0 +1,10 @@
+{
+    "max_steps": 50,
+    "max_exec_commands": 30,
+    "max_files_modified": 20,
+    "max_total_diff_lines": 2000,
+    "max_duration_minutes": 30,
+    "max_consecutive_failures": 3,
+    "max_llm_calls": 100,
+    "max_sandbox_spawns": 20
+}

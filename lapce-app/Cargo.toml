@@ -6,6 +6,10 @@ authors      = { workspace = true }
 edition      = { workspace = true }
 rust-version = { workspace = true }
 
+[[bin]]
+name = "ownstack-ide"
+path = "src/bin/lapce.rs"
+
 [dependencies]
 alacritty_terminal = { workspace = true }
 anyhow             = { workspace = true }
