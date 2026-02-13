@@ -1,5 +1,5 @@
-use floem::reactive::{RwSignal, create_rw_signal};
 use floem::prelude::{SignalGet, SignalUpdate};
+use floem::reactive::{RwSignal, create_rw_signal};
 use lapce_rpc::ownstack::OwnStackRpc;
 
 use crate::window_tab::CommonData;
@@ -8,7 +8,7 @@ use crate::window_tab::CommonData;
 pub struct OwnStackPaletteData {
     pub input: RwSignal<String>,
     pub active: RwSignal<bool>,
-    common: CommonData,
+    _common: CommonData,
 }
 
 impl OwnStackPaletteData {
@@ -16,7 +16,7 @@ impl OwnStackPaletteData {
         Self {
             input: create_rw_signal(String::new()),
             active: create_rw_signal(false),
-            common,
+            _common: common,
         }
     }
 
@@ -37,10 +37,10 @@ impl OwnStackPaletteData {
 
         // Send AI prompt via RPC
         let message = OwnStackRpc::AiPrompt { prompt };
-        
+
         // TODO: Send via proxy RPC when bridge is fully integrated
         tracing::info!("OwnStack AI Prompt: {:?}", message);
-        
+
         self.hide();
     }
 }

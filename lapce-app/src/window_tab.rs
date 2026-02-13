@@ -184,6 +184,7 @@ pub struct WindowTabData {
     pub call_hierarchy_data: CallHierarchyData,
     pub about_data: AboutData,
     pub alert_data: AlertBoxData,
+    pub ownstack_chat: crate::ownstack_chat::OwnStackChatData,
     pub layout_rect: RwSignal<Rect>,
     pub title_height: RwSignal<f64>,
     pub status_height: RwSignal<f64>,
@@ -542,6 +543,8 @@ impl WindowTabData {
 
         let about_data = AboutData::new(cx, common.focus);
         let alert_data = AlertBoxData::new(cx, common.clone());
+        let ownstack_chat =
+            crate::ownstack_chat::OwnStackChatData::new((*common).clone());
 
         let window_tab_data = Self {
             scope: cx,
@@ -565,6 +568,7 @@ impl WindowTabData {
             },
             about_data,
             alert_data,
+            ownstack_chat,
             layout_rect: cx.create_rw_signal(Rect::ZERO),
             title_height,
             status_height,
@@ -1248,6 +1252,12 @@ impl WindowTabData {
             }
             TogglePanelBottomVisual => {
                 self.toggle_container_visual(&PanelContainerPosition::Bottom);
+            }
+            OwnStackToggleChatPanel => {
+                self.toggle_panel_visual(PanelKind::OwnStackChat);
+            }
+            OwnStackFocusChatPanel => {
+                self.toggle_panel_focus(PanelKind::OwnStackChat);
             }
             ToggleTerminalFocus => {
                 self.toggle_panel_focus(PanelKind::Terminal);
@@ -2324,6 +2334,9 @@ impl WindowTabData {
             CoreNotification::WorkspaceFileChange => {
                 self.file_explorer.reload();
             }
+            CoreNotification::OwnStack { message } => {
+                self.ownstack_chat.receive_chunk(message.clone());
+            }
             _ => {}
         }
     }
@@ -2641,9 +2654,10 @@ impl WindowTabData {
                 // in those cases.
                 self.panel.is_panel_visible(&kind)
             }
-            PanelKind::Terminal | PanelKind::SourceControl | PanelKind::Search => {
-                self.is_panel_focused(kind)
-            }
+            PanelKind::Terminal
+            | PanelKind::SourceControl
+            | PanelKind::Search
+            | PanelKind::OwnStackChat => self.is_panel_focused(kind),
         };
         if should_hide {
             self.hide_panel(kind);

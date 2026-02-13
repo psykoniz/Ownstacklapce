@@ -442,6 +442,14 @@ pub enum LapceWorkbenchCommand {
     #[strum(serialize = "toggle_panel_bottom_visual")]
     TogglePanelBottomVisual,
 
+    #[strum(message = "OwnStack: Toggle Chat Panel")]
+    #[strum(serialize = "ownstack.toggle_chat_panel")]
+    OwnStackToggleChatPanel,
+
+    #[strum(message = "OwnStack: Focus Chat Panel")]
+    #[strum(serialize = "ownstack.focus_chat_panel")]
+    OwnStackFocusChatPanel,
+
     // Focus toggle commands
     #[strum(message = "Toggle Terminal Focus")]
     #[strum(serialize = "toggle_terminal_focus")]

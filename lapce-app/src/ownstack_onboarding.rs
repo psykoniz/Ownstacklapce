@@ -1,10 +1,22 @@
+use crate::config::color::LapceColor;
 use floem::{
     IntoView, View,
+    event::{Event, EventListener},
+    keyboard::{Key, NamedKey},
     reactive::{RwSignal, SignalGet, SignalUpdate},
     style::{CursorStyle, Display},
-    views::{container, empty, label, stack, Decorators, dyn_stack},
+    views::{Decorators, container, dyn_stack, empty, label, stack},
 };
-use crate::config::color::LapceColor;
+use lapce_core::directory::Directory;
+use serde::{Deserialize, Serialize};
+use std::{fs, path::PathBuf};
+
+const ONBOARDING_STATE_FILE: &str = "ownstack-onboarding.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OnboardingState {
+    completed: bool,
+}
 
 /// Onboarding wizard state for first-launch experience
 #[derive(Clone)]
@@ -23,10 +35,11 @@ pub struct OnboardingData {
 
 impl OnboardingData {
     pub fn new() -> Self {
+        let completed = Self::load_completed_state();
         Self {
-            active: RwSignal::new(true),
+            active: RwSignal::new(false),
             current_step: RwSignal::new(0),
-            completed: RwSignal::new(false),
+            completed: RwSignal::new(completed),
             chosen_provider: RwSignal::new("OpenRouter".to_string()),
             chosen_mode: RwSignal::new("Ask".to_string()),
         }
@@ -48,6 +61,7 @@ impl OnboardingData {
     pub fn finish(&self) {
         self.active.set(false);
         self.completed.set(true);
+        Self::save_completed_state(true);
     }
 
     pub fn current_step_info(&self) -> &'static OnboardingStep {
@@ -59,7 +73,50 @@ impl OnboardingData {
     }
 
     pub fn start(&self) {
-        self.active.set(true);
+        if self.should_show() {
+            self.active.set(true);
+        }
+    }
+
+    fn state_file_path() -> Option<PathBuf> {
+        Some(Directory::config_directory()?.join(ONBOARDING_STATE_FILE))
+    }
+
+    fn load_completed_state() -> bool {
+        let Some(path) = Self::state_file_path() else {
+            return false;
+        };
+        let Ok(content) = fs::read_to_string(path) else {
+            return false;
+        };
+        serde_json::from_str::<OnboardingState>(&content)
+            .map(|state| state.completed)
+            .unwrap_or(false)
+    }
+
+    fn save_completed_state(completed: bool) {
+        let Some(path) = Self::state_file_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            if let Err(err) = fs::create_dir_all(parent) {
+                tracing::error!("Failed to create onboarding state dir: {err}");
+                return;
+            }
+        }
+
+        let state = OnboardingState { completed };
+        let serialized = match serde_json::to_string(&state) {
+            Ok(s) => s,
+            Err(err) => {
+                tracing::error!("Failed to serialize onboarding state: {err}");
+                return;
+            }
+        };
+
+        if let Err(err) = fs::write(path, serialized) {
+            tracing::error!("Failed to persist onboarding state: {err}");
+        }
     }
 }
 
@@ -106,13 +163,16 @@ pub static ONBOARDING_STEPS: &[OnboardingStep] = &[
     },
 ];
 
-pub fn onboarding_view(data: OnboardingData, config: RwSignal<std::sync::Arc<crate::config::LapceConfig>>) -> impl View {
+pub fn onboarding_view(
+    data: OnboardingData,
+    config: RwSignal<std::sync::Arc<crate::config::LapceConfig>>,
+) -> impl View {
     let data_nav = data.clone();
     let data_title = data.clone();
     let data_desc = data.clone();
     let data_stack = data.clone();
     let data_active = data.clone();
-    
+
     container(
         container(
             stack((
@@ -124,7 +184,6 @@ pub fn onboarding_view(data: OnboardingData, config: RwSignal<std::sync::Arc<cra
                             .margin_bottom(20.0)
                             .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
                     }),
-                
                 // Description
                 label(move || data_desc.current_step_info().description.to_string())
                     .style(move |s| {
@@ -132,7 +191,6 @@ pub fn onboarding_view(data: OnboardingData, config: RwSignal<std::sync::Arc<cra
                             .margin_bottom(40.0)
                             .color(config.get().color(LapceColor::EDITOR_DIM))
                     }),
-
                 // Step content
                 dyn_stack(
                     move || std::iter::once(data_stack.current_step.get()),
@@ -141,67 +199,97 @@ pub fn onboarding_view(data: OnboardingData, config: RwSignal<std::sync::Arc<cra
                         let data = data_stack.clone();
                         let config = config;
                         match ONBOARDING_STEPS[step].step_type {
-                            StepType::Welcome => {
-                                container(label(|| "🚀".to_string()).style(|s| s.font_size(60.0)))
-                                    .style(|s| s.items_center().justify_center().width_full())
-                                    .into_any()
-                            }
-                            StepType::ProviderSetup => {
-                                stack((
-                                    provider_button("OpenRouter", data.clone(), config),
-                                    provider_button("Anthropic", data.clone(), config),
-                                    provider_button("Local (Ollama)", data.clone(), config),
-                                ))
-                                .style(|s| s.flex_col().gap(10.0).width_full())
-                                .into_any()
-                            }
-                            StepType::ModeSelection => {
-                                stack((
-                                    mode_button("Ask", "Confirm every action", data.clone(), config),
-                                    mode_button("Auto", "Background execution", data.clone(), config),
-                                    mode_button("Plan", "Review steps first", data.clone(), config),
-                                ))
-                                .style(|s| s.flex_col().gap(10.0).width_full())
-                                .into_any()
-                            }
-                            _ => empty().into_any()
+                            StepType::Welcome => container(
+                                label(|| "🚀".to_string())
+                                    .style(|s| s.font_size(60.0)),
+                            )
+                            .style(|s| {
+                                s.items_center().justify_center().width_full()
+                            })
+                            .into_any(),
+                            StepType::ProviderSetup => stack((
+                                provider_button("OpenRouter", data.clone(), config),
+                                provider_button("Anthropic", data.clone(), config),
+                                provider_button(
+                                    "Local (Ollama)",
+                                    data.clone(),
+                                    config,
+                                ),
+                            ))
+                            .style(|s| s.flex_col().gap(10.0).width_full())
+                            .into_any(),
+                            StepType::ModeSelection => stack((
+                                mode_button(
+                                    "Ask",
+                                    "Confirm every action",
+                                    data.clone(),
+                                    config,
+                                ),
+                                mode_button(
+                                    "Auto",
+                                    "Background execution",
+                                    data.clone(),
+                                    config,
+                                ),
+                                mode_button(
+                                    "Plan",
+                                    "Review steps first",
+                                    data.clone(),
+                                    config,
+                                ),
+                            ))
+                            .style(|s| s.flex_col().gap(10.0).width_full())
+                            .into_any(),
+                            _ => empty().into_any(),
                         }
-                    }
-                ).style(|s| s.flex_grow(1.0).width_full()),
-
+                    },
+                )
+                .style(|s| s.flex_grow(1.0).width_full()),
                 // Navigation
                 stack((
                     {
                         let data = data_nav.clone();
-                        label(|| "Skip").on_click_stop(move |_| {
-                            data.skip();
-                        }).style(move |s| {
-                            let config = config.get();
-                            s.padding_horiz(20.0)
-                                .padding_vert(10.0)
-                                .cursor(CursorStyle::Pointer)
-                                .color(config.color(LapceColor::EDITOR_DIM))
-                        })
+                        label(|| "Skip")
+                            .on_click_stop(move |_| {
+                                data.skip();
+                            })
+                            .style(move |s| {
+                                let config = config.get();
+                                s.padding_horiz(20.0)
+                                    .padding_vert(10.0)
+                                    .cursor(CursorStyle::Pointer)
+                                    .color(config.color(LapceColor::EDITOR_DIM))
+                            })
                     },
                     empty().style(|s| s.flex_grow(1.0)),
                     {
                         let data = data_nav.clone();
-                        label(|| "Next").on_click_stop(move |_| {
-                            data.next();
-                        }).style(move |s| {
-                            let config = config.get();
-                            s.padding_horiz(30.0)
-                                .padding_vert(10.0)
-                                .background(config.color(LapceColor::PANEL_BACKGROUND))
-                                .border(1.0)
-                                .border_color(config.color(LapceColor::LAPCE_BORDER))
-                                .border_radius(4.0)
-                                .cursor(CursorStyle::Pointer)
-                                .color(config.color(LapceColor::EDITOR_FOREGROUND))
-                        })
+                        label(|| "Next")
+                            .on_click_stop(move |_| {
+                                data.next();
+                            })
+                            .style(move |s| {
+                                let config = config.get();
+                                s.padding_horiz(30.0)
+                                    .padding_vert(10.0)
+                                    .background(
+                                        config.color(LapceColor::PANEL_BACKGROUND),
+                                    )
+                                    .border(1.0)
+                                    .border_color(
+                                        config.color(LapceColor::LAPCE_BORDER),
+                                    )
+                                    .border_radius(4.0)
+                                    .cursor(CursorStyle::Pointer)
+                                    .color(
+                                        config.color(LapceColor::EDITOR_FOREGROUND),
+                                    )
+                            })
                     },
                 ))
-                .style(|s| s.flex_row().items_center().width_full().margin_top(40.0)),
+                .style(|s| {
+                    s.flex_row().items_center().width_full().margin_top(40.0)
+                }),
             ))
             .style(move |s| {
                 let config = config.get();
@@ -213,23 +301,46 @@ pub fn onboarding_view(data: OnboardingData, config: RwSignal<std::sync::Arc<cra
                     .border(1.0)
                     .border_color(config.color(LapceColor::LAPCE_BORDER))
                     .border_radius(8.0)
-            })
+            }),
         )
+        .keyboard_navigable()
+        .on_event_stop(EventListener::KeyDown, {
+            let data = data_active.clone();
+            move |event| {
+                if let Event::KeyDown(key_event) = event {
+                    if key_event.key.logical_key == Key::Named(NamedKey::Escape) {
+                        data.skip();
+                    }
+                }
+            }
+        })
         .style(move |s| {
             let config = config.get();
             s.absolute()
                 .size_full()
                 .items_center()
                 .justify_center()
-                .background(config.color(LapceColor::LAPCE_DROPDOWN_SHADOW).multiply_alpha(0.8))
-                .display(if data_active.active.get() { Display::Flex } else { Display::None })
-        })
+                .background(
+                    config
+                        .color(LapceColor::LAPCE_DROPDOWN_SHADOW)
+                        .multiply_alpha(0.8),
+                )
+                .display(if data_active.active.get() {
+                    Display::Flex
+                } else {
+                    Display::None
+                })
+        }),
     )
 }
 
-fn provider_button(name: &'static str, data: OnboardingData, config: RwSignal<std::sync::Arc<crate::config::LapceConfig>>) -> impl View {
+fn provider_button(
+    name: &'static str,
+    data: OnboardingData,
+    config: RwSignal<std::sync::Arc<crate::config::LapceConfig>>,
+) -> impl View {
     let is_selected = move || data.chosen_provider.get() == name;
-    
+
     label(move || name.to_string())
         .on_click_stop(move |_| {
             data.chosen_provider.set(name.to_string());
@@ -251,14 +362,20 @@ fn provider_button(name: &'static str, data: OnboardingData, config: RwSignal<st
         })
 }
 
-fn mode_button(name: &'static str, desc: &'static str, data: OnboardingData, config: RwSignal<std::sync::Arc<crate::config::LapceConfig>>) -> impl View {
+fn mode_button(
+    name: &'static str,
+    desc: &'static str,
+    data: OnboardingData,
+    config: RwSignal<std::sync::Arc<crate::config::LapceConfig>>,
+) -> impl View {
     let is_selected = move || data.chosen_mode.get() == name;
-    
+
     stack((
         label(move || name.to_string()).style(|s| s.font_bold()),
         label(move || desc.to_string()).style(move |s| {
             let config = config.get();
-            s.font_size(12.0).color(config.color(LapceColor::EDITOR_DIM))
+            s.font_size(12.0)
+                .color(config.color(LapceColor::EDITOR_DIM))
         }),
     ))
     .on_click_stop(move |_| {

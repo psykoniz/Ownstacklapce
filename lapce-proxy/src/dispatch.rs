@@ -1,7 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
     fs, io,
+    io::BufRead,
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -40,8 +42,9 @@ use lsp_types::{
     TextDocumentItem, Url,
     notification::{Cancel, Notification},
 };
-use parking_lot::Mutex;
 use ownstack_bridge::PythonBridge;
+use parking_lot::Mutex;
+use tokio::io::AsyncBufReadExt;
 
 use crate::{
     buffer::{Buffer, get_mod_time, load_file},
@@ -64,6 +67,76 @@ pub struct Dispatcher {
     window_id: usize,
     tab_id: usize,
     bridge: Arc<Mutex<Option<PythonBridge>>>,
+    agent: Arc<Mutex<Option<NativeAgent>>>,
+}
+
+pub struct NativeAgent {
+    pub child: Child,
+}
+
+impl NativeAgent {
+    pub fn spawn(
+        workspace: Option<PathBuf>,
+        core_rpc: CoreRpcHandler,
+    ) -> Option<Self> {
+        let agent_path = std::env::current_exe()
+            .ok()?
+            .parent()?
+            .join("ownstack-agent.exe");
+        if !agent_path.exists() {
+            tracing::error!("ownstack-agent.exe not found at {:?}", agent_path);
+            return None;
+        }
+
+        let mut cmd = Command::new(agent_path);
+        if let Some(workspace) = workspace {
+            cmd.current_dir(workspace);
+        }
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+
+        match cmd.spawn() {
+            Ok(mut child) => {
+                let stdout = child.stdout.take().unwrap();
+                let core_rpc = core_rpc.clone();
+                thread::spawn(move || {
+                    let mut reader = std::io::BufReader::new(stdout);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).is_ok() && !line.is_empty() {
+                            if let Ok(rpc) = serde_json::from_str::<
+                                lapce_rpc::ownstack::OwnStackRpc,
+                            >(&line)
+                            {
+                                core_rpc.notification(CoreNotification::OwnStack {
+                                    message: rpc,
+                                });
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                });
+                Some(Self { child })
+            }
+            Err(e) => {
+                tracing::error!("Failed to spawn ownstack-agent: {}", e);
+                None
+            }
+        }
+    }
+
+    pub fn send_rpc(
+        &mut self,
+        rpc: &lapce_rpc::ownstack::OwnStackRpc,
+    ) -> Result<()> {
+        if let Some(mut stdin) = self.child.stdin.as_ref() {
+            use std::io::Write;
+            let msg = serde_json::to_string(rpc)? + "\n";
+            stdin.write_all(msg.as_bytes())?;
+            stdin.flush()?;
+        }
+        Ok(())
+    }
 }
 
 impl ProxyHandler for Dispatcher {
@@ -165,6 +238,7 @@ impl ProxyHandler for Dispatcher {
                 for (_, sender) in self.terminals.iter() {
                     sender.send(Msg::Shutdown);
                 }
+                self.kill_native_agent();
                 self.proxy_rpc.shutdown();
             }
             Update { path, delta, rev } => {
@@ -401,9 +475,37 @@ impl ProxyHandler for Dispatcher {
                 );
             }
             OwnStack { message } => {
-                // Route message to Python bridge
-                // This is a placeholder for actual bridge logic
-                tracing::info!("OwnStack message received in proxy: {:?}", message);
+                let mut agent_guard = self.agent.lock();
+                if let Some(agent) = agent_guard.as_mut() {
+                    if let Err(e) = agent.send_rpc(&message) {
+                        tracing::error!(
+                            "Failed to send RPC to ownstack-agent: {}",
+                            e
+                        );
+                    }
+                    return;
+                }
+
+                let mut bridge_guard = self.bridge.lock();
+                if bridge_guard.as_mut().is_some() {
+                    // Note: PythonBridge is async, so we need to handle it or spawn a task
+                    // For now, let's assume we want to send it.
+                    // Actually, PythonBridge::send_request is async.
+                    // This might require a bridge wrapper that handles the threading.
+                    // But for now, we'll just focus on starting it.
+                    tracing::info!(
+                        "Python bridge is active but not yet fully wired for async sends in dispatcher"
+                    );
+                    return;
+                }
+
+                // If neither is started, prefer agent (default for Phase 2+)
+                drop(agent_guard);
+                drop(bridge_guard);
+                self.start_native_agent();
+                if let Some(agent) = self.agent.lock().as_mut() {
+                    let _ = agent.send_rpc(&message);
+                }
             }
         }
     }
@@ -1233,7 +1335,90 @@ impl Dispatcher {
             window_id: 1,
             tab_id: 1,
             bridge: Arc::new(Mutex::new(None)),
+            agent: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn start_native_agent(&self) {
+        let agent =
+            NativeAgent::spawn(self.workspace.clone(), self.core_rpc.clone());
+        *self.agent.lock() = agent;
+    }
+
+    pub fn start_bridge(&self) {
+        use ownstack_bridge::{BridgeLaunchConfig, BridgeRuntimeMode};
+
+        let workspace = self.workspace.clone().unwrap_or_default();
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|p| p.to_path_buf()));
+
+        let bundled_path = exe_dir.map(|d| d.join("ownstack_backend.exe"));
+
+        let config = BridgeLaunchConfig {
+            mode: BridgeRuntimeMode::Auto,
+            workspace: workspace.clone(),
+            python_root: Some(workspace.join("ownstack-python")),
+            bundled_path,
+        };
+
+        let core_rpc = self.core_rpc.clone();
+        let bridge_mutex = self.bridge.clone();
+
+        // PythonBridge::start is async, so spawn a task
+        tokio::spawn(async move {
+            match PythonBridge::start(config).await {
+                Ok(mut bridge) => {
+                    // Start reading from bridge
+                    let mut reader = match bridge.take_stdout() {
+                        Ok(reader) => reader,
+                        Err(e) => {
+                            tracing::error!("Failed to take bridge stdout: {}", e);
+                            *bridge_mutex.lock() = Some(bridge);
+                            return;
+                        }
+                    };
+                    let core_rpc_inner = core_rpc.clone();
+                    tokio::spawn(async move {
+                        let mut line = String::new();
+                        while let Ok(n) = reader.read_line(&mut line).await {
+                            if n == 0 {
+                                break;
+                            }
+                            if let Ok(rpc) = serde_json::from_str::<
+                                lapce_rpc::ownstack::OwnStackRpc,
+                            >(&line)
+                            {
+                                core_rpc_inner.notification(
+                                    CoreNotification::OwnStack { message: rpc },
+                                );
+                            }
+                            line.clear();
+                        }
+                    });
+                    *bridge_mutex.lock() = Some(bridge);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to start Python bridge: {}", e);
+                }
+            }
+        });
+    }
+
+    pub fn kill_bridge(&self) {
+        if self.bridge.lock().take().is_some() {
+            // PythonBridge child is tokio process; dropping the handle terminates ownership.
+        }
+    }
+
+    pub fn kill_native_agent(&self) {
+        if let Some(mut agent) = self.agent.lock().take() {
+            let _ = agent.child.kill();
+        }
+    }
+
+    pub fn get_agent_status(&self) -> bool {
+        self.agent.lock().is_some()
     }
 
     fn respond_rpc(&self, id: RequestId, result: Result<ProxyResponse, RpcError>) {
@@ -1244,6 +1429,23 @@ impl Dispatcher {
         self.buffers
             .entry(path.clone())
             .or_insert(Buffer::new(BufferId::next(), path))
+    }
+}
+
+#[cfg(test)]
+mod native_agent_tests {
+    use super::*;
+    use lapce_rpc::proxy::ProxyRpcHandler;
+
+    #[test]
+    fn test_native_agent_state_transitions() {
+        let core_rpc = CoreRpcHandler::new();
+        let proxy_rpc = ProxyRpcHandler::new();
+        let dispatcher = Dispatcher::new(core_rpc, proxy_rpc);
+
+        assert!(!dispatcher.get_agent_status());
+        dispatcher.kill_native_agent();
+        assert!(!dispatcher.get_agent_status());
     }
 }
 
