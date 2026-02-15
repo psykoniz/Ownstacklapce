@@ -307,6 +307,9 @@ jobs:
           retention-days: 3
 
   publish:
+    # Publishing should never run for pull requests: TAG_NAME is not set for PRs
+    # and we also want to avoid accidental release attempts from PR contexts.
+    if: github.event_name != 'pull_request'
     needs:
       - linux
       - lapce-proxy
