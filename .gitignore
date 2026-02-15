@@ -27,3 +27,35 @@ temp_ownstack/
 *.pem
 .ownstack/secrets/
 .ownstack/audit.jsonl
+
+# Python / PyInstaller
+__pycache__/
+*.pyc
+ownstack-python/build/
+ownstack-python/dist/
+# Note: Keeping ownstack_backend.spec as it defines the build config
+
+# Temporary Logs & Artifacts
+artifacts/
+*.log
+runtime_log_new.txt
+build_output*.txt
+build_error*.txt
+check_output*.txt
+check_errors*.txt
+debug_*.txt
+full_runtime_log*.txt
+implementation_plan_phase4.md
+bigfile.txt
+target_phase*/
+ownstack-engine/%SystemDrive%/
+
+# Local stress/diagnostic dumps (do not commit)
+ownstack-agent/test_*.txt
+ownstack-agent/stress_*.txt
+ownstack-engine/test_*.txt
+
+# Ephemeral Test Scripts (Ignore these)
+scripts/test_*.ps1
+scripts/scan_event_logs.ps1
+scripts/troubleshoot_crash.ps1
