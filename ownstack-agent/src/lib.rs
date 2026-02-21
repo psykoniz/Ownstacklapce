@@ -9,6 +9,7 @@
 //! - Project memory (.ownstack/rules.md)
 
 pub mod context;
+pub mod index;
 pub mod lsp;
 pub mod mcp_server;
 pub mod orchestrator;
@@ -18,6 +19,7 @@ pub mod project_memory;
 pub mod provider;
 pub mod providers;
 pub mod resilience;
+pub mod secret_store;
 pub mod toolkits;
 
 pub use context::ContextManager;

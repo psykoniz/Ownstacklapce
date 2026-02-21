@@ -116,7 +116,15 @@ def main() -> int:
 
     repo_root = Path(args.repo_root).resolve()
     workspace = Path(args.workspace).resolve()
-    agent_bin = Path(args.agent_bin).resolve() if args.agent_bin else None
+    
+    agent_bin = None
+    if args.agent_bin:
+        agent_bin = Path(args.agent_bin).resolve()
+    else:
+        is_windows = os.name == "nt"
+        candidate = repo_root / ("target/debug/ownstack-agent.exe" if is_windows else "target/debug/ownstack-agent")
+        if candidate.exists():
+            agent_bin = candidate
 
     proc = start_agent(repo_root=repo_root, workspace=workspace, agent_bin=agent_bin)
     out_queue: "queue.Queue[str]" = queue.Queue()

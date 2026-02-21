@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut first_token_ms: Option<u128> = None;
     let mut final_reason: Option<FinishReason> = None;
 
-    let mut stream = provider.stream(messages, None).await?;
+    let mut stream = provider.stream(messages, None, None).await?;
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
         if let Some(delta) = chunk.delta_content {
@@ -53,9 +53,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("finish_reason=Stop");
             Ok(())
         }
-        Some(reason) => Err(
-            format!("unexpected finish reason from stream: {reason:?}").into(),
-        ),
+        Some(reason) => {
+            Err(format!("unexpected finish reason from stream: {reason:?}").into())
+        }
         None => Err("stream ended without finish reason".into()),
     }
 }

@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         LlmMessage::user(prompt),
     ];
 
-    let response = match provider.complete(messages, None).await {
+    let response = match provider.complete(messages, None, None).await {
         Ok(r) => r,
         Err(err) => {
             eprintln!("error_class={}", classify_error(&err));

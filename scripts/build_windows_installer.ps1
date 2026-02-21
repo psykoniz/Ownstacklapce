@@ -1,7 +1,12 @@
 param(
     [switch]$InstallMissingTools,
     [switch]$SkipPythonBuild,
-    [switch]$SkipRustBuild
+    [switch]$SkipRustBuild,
+    [switch]$SignArtifacts,
+    [string]$CodeSignCertPath = "",
+    [string]$CodeSignCertPassword = "",
+    [string]$SignToolPath = "",
+    [string]$TimestampUrl = "http://timestamp.digicert.com"
 )
 
 Set-StrictMode -Version Latest
@@ -38,6 +43,66 @@ function Resolve-Executable {
     }
 
     return $null
+}
+
+function Resolve-SignToolPath {
+    param([string]$CandidatePath)
+
+    if ($CandidatePath -and (Test-Path $CandidatePath)) {
+        return $CandidatePath
+    }
+
+    $cmd = Get-Command signtool -ErrorAction SilentlyContinue
+    if ($null -ne $cmd) {
+        return $cmd.Source
+    }
+
+    $kitRoots = @(
+        "C:\Program Files (x86)\Windows Kits\10\bin",
+        "C:\Program Files\Windows Kits\10\bin"
+    )
+    foreach ($root in $kitRoots) {
+        if (-not (Test-Path $root)) {
+            continue
+        }
+        $candidate = Get-ChildItem -Path $root -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+        if ($null -ne $candidate) {
+            return $candidate.FullName
+        }
+    }
+
+    return $null
+}
+
+function Invoke-SignFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$SignToolExe,
+        [Parameter(Mandatory = $true)][string]$CertPath,
+        [Parameter(Mandatory = $true)][string]$CertPassword,
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string]$TimestampServer
+    )
+
+    if (-not (Test-Path $FilePath)) {
+        Fail "Cannot sign missing file: $FilePath"
+    }
+
+    Invoke-Checked -Exe $SignToolExe -Arguments @(
+        "sign",
+        "/fd", "SHA256",
+        "/td", "SHA256",
+        "/tr", $TimestampServer,
+        "/f", $CertPath,
+        "/p", $CertPassword,
+        $FilePath
+    )
+
+    $signature = Get-AuthenticodeSignature -FilePath $FilePath
+    if ($signature.Status -ne "Valid") {
+        Fail "Signature verification failed for $FilePath : $($signature.Status)"
+    }
 }
 
 function Invoke-Checked {
@@ -111,6 +176,33 @@ if (-not $cargoExe) {
 
 Write-Ok "Using python: $pythonExe"
 Write-Ok "Using cargo: $cargoExe"
+
+$signToolExe = $null
+$effectiveCertPath = $CodeSignCertPath
+$effectiveCertPassword = $CodeSignCertPassword
+if ($SignArtifacts) {
+    if (-not $effectiveCertPath) {
+        $effectiveCertPath = $env:WINDOWS_CERT_PATH
+    }
+    if (-not $effectiveCertPassword) {
+        $effectiveCertPassword = $env:WINDOWS_CERT_PASSWORD
+    }
+    if (-not $effectiveCertPath) {
+        Fail "SignArtifacts requested but certificate path is missing. Set -CodeSignCertPath or WINDOWS_CERT_PATH."
+    }
+    if (-not (Test-Path $effectiveCertPath)) {
+        Fail "Code signing certificate not found: $effectiveCertPath"
+    }
+    if (-not $effectiveCertPassword) {
+        Fail "SignArtifacts requested but certificate password is missing. Set -CodeSignCertPassword or WINDOWS_CERT_PASSWORD."
+    }
+
+    $signToolExe = Resolve-SignToolPath -CandidatePath $SignToolPath
+    if (-not $signToolExe) {
+        Fail "SignArtifacts requested but signtool.exe was not found."
+    }
+    Write-Ok "Using signtool: $signToolExe"
+}
 
 Write-Step "Checking cargo-wix availability"
 $hasCargoWix = $true
@@ -209,6 +301,14 @@ New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 Copy-Item -Force $pythonDistExe $releaseBackendExe
 Write-Ok "Backend copied to: $releaseBackendExe"
 
+if ($SignArtifacts) {
+    Write-Step "Signing release binaries"
+    Invoke-SignFile -SignToolExe $signToolExe -CertPath $effectiveCertPath -CertPassword $effectiveCertPassword -FilePath $releaseIdeExe -TimestampServer $TimestampUrl
+    Invoke-SignFile -SignToolExe $signToolExe -CertPath $effectiveCertPath -CertPassword $effectiveCertPassword -FilePath $releaseAgentExe -TimestampServer $TimestampUrl
+    Invoke-SignFile -SignToolExe $signToolExe -CertPath $effectiveCertPath -CertPassword $effectiveCertPassword -FilePath $releaseBackendExe -TimestampServer $TimestampUrl
+    Write-Ok "Release binaries signed"
+}
+
 Write-Step "Building MSI with cargo-wix"
 Invoke-Checked -Exe $cargoExe -Arguments @("wix", "--package", "lapce-app", "--no-build", "--nocapture") -WorkingDirectory $repoRoot
 
@@ -222,6 +322,12 @@ Select-Object -First 1
 
 if ($null -eq $msi) {
     Fail "No MSI found in $wixTargetDir after cargo-wix run."
+}
+
+if ($SignArtifacts) {
+    Write-Step "Signing MSI"
+    Invoke-SignFile -SignToolExe $signToolExe -CertPath $effectiveCertPath -CertPassword $effectiveCertPassword -FilePath $msi.FullName -TimestampServer $TimestampUrl
+    Write-Ok "MSI signed"
 }
 
 Write-Ok "MSI created: $($msi.FullName)"

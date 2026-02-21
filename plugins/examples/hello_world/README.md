@@ -10,11 +10,11 @@ This plugin implements the minimal OwnStack WASI JSON ABI:
 ## Build
 
 ```bash
-cargo build --release --target wasm32-wasi
+cargo build --release --target wasm32-wasip1
 ```
 
 The resulting artifact is:
 
 ```text
-target/wasm32-wasi/release/hello_world.wasm
+target/wasm32-wasip1/release/hello_world.wasm
 ```

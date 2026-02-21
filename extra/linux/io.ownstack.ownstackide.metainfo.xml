@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.ownstack.ownstackide</id>
+  <name>OwnStack IDE</name>
+  <developer_name>OwnStack Contributors</developer_name>
+  <summary>Rust-native IDE with embedded AI agents</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <url type="homepage">https://github.com/psykoniz/Ownstack</url>
+  <url type="bugtracker">https://github.com/psykoniz/Ownstack/issues</url>
+  <categories>
+    <category>IDE</category>
+    <category>Development</category>
+  </categories>
+  <description>
+    <p>
+      OwnStack IDE is a Rust-native code editor based on Lapce with secure,
+      integrated AI agent workflows.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.ownstack.ownstackide.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+</component>

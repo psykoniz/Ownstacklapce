@@ -1,7 +1,7 @@
 use lapce_rpc::ownstack::OwnStackRpc;
 use std::sync::Arc;
-use tokio::sync::{Mutex, oneshot};
-use tokio::time::{Duration, timeout};
+use tokio::sync::{oneshot, Mutex};
+use tokio::time::{timeout, Duration};
 use tracing::warn;
 
 pub type RpcSink = Arc<dyn Fn(OwnStackRpc) + Send + Sync>;
@@ -110,4 +110,3 @@ mod tests {
         mgr.resolve(false).await;
     }
 }
-

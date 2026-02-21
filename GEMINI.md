@@ -239,6 +239,14 @@ AVANT DE CODER, VÉRIFIE LA PHASE ACTUELLE :
   Phase 2 (Semaines 11-18) : Agents IA natifs Rust
   Phase 3 (Semaines 19-26) : MCP + plugins
   Phase 4 (Semaines 27-32) : Distribution
+  Phase 5 (Semaines 33-36) : Enterprise Security (Keyring & Vault)
+  Phase 6 (Semaines 37-40) : Advanced Sandboxing (OS Native)
+  Phase 7 (Semaines 41-44) : Advanced Flow (Policy E2E & RPC)
+  Phase 8 (Semaines 45-48) : Production Polish & Real E2E
+  Phase 9 (Semaines 49-52) : Technical Milestones & Recovery
+  Phase 10 (Semaines 53-56): Final Polish & Launch Prep
+  Phase 11 (Semaines 57-60): Enterprise Intelligence (Semantic RAG)
+  Phase 12 (Semaines 61-64): Team Orchestration (Multi-Agent)
 
 RÈGLE : Ne JAMAIS implémenter du code d'une phase future.
   - En Phase 0 → PAS de code IA, PAS de bridge Python
@@ -450,6 +458,80 @@ checklist:
   - onboarding: "Wizard premier lancement"
   - python_bundling: "Inclure Python runtime pour ownstack-python"
   - release: "v0.1.0"
+```
+
+### 3.6 Phase 5 — Enterprise Security
+
+```yaml
+checklist:
+  - secure_keyring: "Intégration avec Secret Service (Linux), Keychain (macOS), DPAPI (Windows)"
+  - vault_encryption: "Chiffrement AES des secrets locaux"
+  - onboarding_flow: "Processus d'enregistrement des clés API sécurisé"
+```
+
+### 3.7 Phase 6 — Advanced Sandboxing
+
+```yaml
+checklist:
+  - windows_job_objects: "Isolation native Windows via Job Objects"
+  - linux_namespaces: "Isolation native Linux via unshare/namespaces"
+  - macos_sandbox_exec: "Profils sandbox-exec durcis"
+```
+
+### 3.8 Phase 7 — Advanced Flow
+
+```yaml
+checklist:
+  - rpc_handshake: "Négociation de capabilities entre app et proxy"
+  - policy_ui_modal: "Modales de confirmation UI pour les actions 'Ask'"
+  - async_policy_eval: "Évaluation non-bloquante des politiques"
+```
+
+### 3.9 Phase 8 — Production Polish
+
+```yaml
+checklist:
+  - build_optimization: "Réduction taille binaire, LTO"
+  - real_e2e_tests: "Tests flow complet du prompt à l'audit log"
+  - error_telemetry: "Journalisation des erreurs critiques pour debug"
+```
+
+### 3.10 Phase 9 — Reliability & Observability
+
+```yaml
+checklist:
+  - telemetry_pipeline: "Instrumentation tracing + métriques de performance"
+  - release_health_dashboards: "KPI de stabilité (crash rate, startup, latency)"
+  - incident_playbooks: "Runbooks opérationnels (rollback, hotfix, postmortem)"
+```
+
+### 3.11 Phase 10 — Release Operations & Compliance
+
+```yaml
+checklist:
+  - release_governance: "Checklist de release versionnée et sign-off"
+  - signing_notarization_ci: "Validation CI réelle des signatures/notarization"
+  - sbom_attestation: "SBOM, checksums, provenance d'artefacts"
+```
+
+### 3.12 Phase 11 — Enterprise Intelligence
+
+```yaml
+checklist:
+  - semantic_rag: "Indexation vectorielle locale du workspace"
+  - contextual_retrieval: "Extraction de snippets pertinents par similarité"
+  - vision_toolkit: "Analyse d'images et de captures UI via GPT-4V/Claude"
+  - semantic_persistence: "Sauvegarde/Chargement de l'index HNSW"
+```
+
+### 3.13 Phase 12 — Team Orchestration
+
+```yaml
+checklist:
+  - multi_agent_planner: "Planner capable de paralléliser les outils"
+  - dynamic_model_routing: "Sélection automatique du modèle selon la complexité"
+  - signed_toolkits: "Vérification de signature pour les plugins WASI"
+  - self_healing_loop: "Auto-correction de l'agent sur erreur de tool"
 ```
 
 ---

@@ -157,10 +157,8 @@ impl CoreToolkit {
         let file_path = std::path::Path::new(path);
 
         // Path validation
-        let validated_path = self
-            .path_validator
-            .validate(file_path)
-            .map_err(|e| {
+        let validated_path =
+            self.path_validator.validate(file_path).map_err(|e| {
                 self.audit(
                     "read",
                     path,
@@ -205,10 +203,8 @@ impl CoreToolkit {
         let file_path = std::path::Path::new(path);
 
         // Path validation
-        let validated_path = self
-            .path_validator
-            .validate(file_path)
-            .map_err(|e| {
+        let validated_path =
+            self.path_validator.validate(file_path).map_err(|e| {
                 self.audit(
                     "write",
                     path,
@@ -275,10 +271,9 @@ impl CoreToolkit {
         let pattern_for_audit = pattern.to_string();
 
         // File walking + reading is blocking; keep it off the async runtime.
-        let join_res = tokio::task::spawn_blocking(move || {
-            search_workspace(workspace, regex)
-        })
-        .await;
+        let join_res =
+            tokio::task::spawn_blocking(move || search_workspace(workspace, regex))
+                .await;
 
         let (tool_result, paths_accessed) = match join_res {
             Ok(Ok((stdout, paths))) => (ToolResult::success(stdout), paths),
@@ -341,9 +336,8 @@ fn search_workspace(
         out: &mut Vec<String>,
         audit_paths: &mut Vec<String>,
     ) -> Result<(), std::io::Error> {
-        let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)?
-            .filter_map(Result::ok)
-            .collect();
+        let mut entries: Vec<std::fs::DirEntry> =
+            std::fs::read_dir(dir)?.filter_map(Result::ok).collect();
         entries.sort_by_key(|e| e.file_name());
 
         for entry in entries {
@@ -428,8 +422,14 @@ fn search_workspace(
     let mut results: Vec<String> = Vec::new();
     let mut audit_paths: Vec<String> = Vec::new();
 
-    search_dir(&workspace, &workspace, &regex, &mut results, &mut audit_paths)
-        .map_err(|e| format!("Search failed: {e}"))?;
+    search_dir(
+        &workspace,
+        &workspace,
+        &regex,
+        &mut results,
+        &mut audit_paths,
+    )
+    .map_err(|e| format!("Search failed: {e}"))?;
 
     if results.is_empty() {
         Ok(("No matches found.".to_string(), audit_paths))
@@ -569,7 +569,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_creation() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
         assert_eq!(tk.name(), "core");
         assert_eq!(tk.tools().len(), 4);
     }
@@ -577,7 +578,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_tools_list() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
         let tools = tk.tools();
         let names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         assert!(names.contains(&"exec".to_string()));
@@ -589,7 +591,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_write_read() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
 
         // Write
         let write_args = serde_json::json!({
@@ -609,7 +612,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_invalid_path() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
 
         let args = serde_json::json!({"path": "../outside.txt"});
         let res = tk.execute("read", args).await;
@@ -619,7 +623,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_exec_blocked() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
 
         let args = serde_json::json!({"command": "rm -rf /"});
         let res = tk.execute("exec", args).await;
@@ -629,7 +634,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_unknown_tool() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
 
         let res = tk.execute("nonexistent", serde_json::json!({})).await;
         assert!(matches!(res, Err(ToolkitError::ToolNotFound(_))));
@@ -638,7 +644,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_invalid_args() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
 
         let res = tk
             .execute("write", serde_json::json!({"wrong": "key"}))
@@ -649,7 +656,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_exec_ask_requires_ui() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
 
         // Likely classified as Ask by policy (network / push operations).
         let args = serde_json::json!({"command": "git push origin main"});
@@ -660,7 +668,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_search_finds_match() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
 
         std::fs::write(
             dir.path().join("needle_ownstack_test.rs"),
@@ -672,8 +681,7 @@ mod tests {
         let res = tk.execute("search", args).await.unwrap();
         assert!(res.success);
         assert!(
-            res.stdout
-                .contains("needle_ownstack_test.rs:1:hello world"),
+            res.stdout.contains("needle_ownstack_test.rs:1:hello world"),
             "stdout was: {}",
             res.stdout
         );
@@ -682,7 +690,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_search_rejects_invalid_regex() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
 
         let args = serde_json::json!({"pattern": "["});
         let res = tk.execute("search", args).await;

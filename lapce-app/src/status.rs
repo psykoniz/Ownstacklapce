@@ -40,6 +40,7 @@ pub fn status(
     let editor = window_tab_data.main_split.active_editor;
     let panel = window_tab_data.panel.clone();
     let palette = window_tab_data.palette.clone();
+    let ownstack_status = window_tab_data.ownstack_status.clone();
     let diagnostic_count = create_memo(move |_| {
         let mut errors = 0;
         let mut warnings = 0;
@@ -226,6 +227,62 @@ pub fn status(
                 })
             },
             progress_view(config, progresses),
+            {
+                let panel = panel.clone();
+                let ownstack_style = ownstack_status.clone();
+                label(move || ownstack_status.display_label())
+                    .on_click_stop(move |_| {
+                        panel.show_panel(&PanelKind::OwnStackChat);
+                    })
+                    .style(move |s| {
+                        let config = config.get();
+                        let (text_color, border_color, background_color) =
+                            match ownstack_style.run_state() {
+                                crate::ownstack_status::OwnStackRunState::Running => (
+                                    config.color(LapceColor::STATUS_FOREGROUND),
+                                    config.color(
+                                        LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE,
+                                    ),
+                                    config
+                                        .color(LapceColor::PANEL_HOVERED_BACKGROUND)
+                                        .multiply_alpha(0.9),
+                                ),
+                                crate::ownstack_status::OwnStackRunState::Disconnected => (
+                                    config.color(LapceColor::LAPCE_ERROR),
+                                    config.color(LapceColor::LAPCE_ERROR),
+                                    config
+                                        .color(LapceColor::PANEL_HOVERED_BACKGROUND)
+                                        .multiply_alpha(0.7),
+                                ),
+                                crate::ownstack_status::OwnStackRunState::Idle => (
+                                    config.color(LapceColor::STATUS_FOREGROUND),
+                                    config.color(LapceColor::LAPCE_BORDER),
+                                    config
+                                        .color(LapceColor::STATUS_BACKGROUND)
+                                        .multiply_alpha(0.65),
+                                ),
+                            };
+
+                        s.height_pct(100.0)
+                            .padding_horiz(10.0)
+                            .padding_vert(2.0)
+                            .margin_horiz(6.0)
+                            .border(1.0)
+                            .border_radius(6.0)
+                            .border_color(border_color)
+                            .background(background_color)
+                            .items_center()
+                            .color(text_color)
+                            .hover(|s| {
+                                s.cursor(CursorStyle::Pointer).background(
+                                    config
+                                        .color(LapceColor::PANEL_HOVERED_BACKGROUND)
+                                        .multiply_alpha(0.95),
+                                )
+                            })
+                            .selectable(false)
+                    })
+            },
         ))
         .style(|s| {
             s.height_pct(100.0)

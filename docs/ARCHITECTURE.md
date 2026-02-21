@@ -2,7 +2,7 @@
 
 > **Version**: 1.1  
 > **Dernière mise à jour**: 9 février 2026  
-> **Statut**: Phase 4 — Distribution (Installers & Bundling)
+> **Statut**: Phase 12 — Team Orchestration & Ecosystem
 
 ---
 
@@ -17,7 +17,7 @@ OwnStack Native IDE est un fork de [Lapce](https://github.com/lapce/lapce), un �
 | **Rust-first** | Tout le code critique est en Rust, pas de runtime JS/Electron |
 | **GPU natif** | Rendu via wgpu, interface via Floem |
 | **Sécurité par défaut** | Policy Engine, Path Validation, Sandbox obligatoires |
-| **Phases séquentielles** | Développement structuré en 5 phases |
+| **Phases séquentielles** | Développement structuré en 13 phases (0 → 12) |
 
 ### 1.2 Ce que nous héritons de Lapce
 
@@ -271,12 +271,63 @@ ownstack-python (sidecar)
 - Plugin system WASI étendu
 - Multi-agent (Planner + Critic + Worker)
 
-### Phase 4 — Distribution (Semaines 27-32)
+### Phase 4 — Distribution (Semaines 27-32) ✅
 
 - Installers (deb, rpm, dmg, msi)
 - Auto-updater
 - Onboarding wizard
 - Release v0.1.0
+
+### Phase 5 — Enterprise Security
+
+- Intégration Keyring (Secret Service, Keychain, DPAPI)
+- Coffre-fort AES local pour secrets
+- Onboarding flow sécurisé
+
+### Phase 6 — Advanced Sandboxing
+
+- Windows Job Objects
+- Linux Namespaces (unshare)
+- Profils sandbox-exec durcis (macOS)
+
+### Phase 7 — Advanced Flow
+
+- Négociation capabilities RPC
+- Modales de confirmation UI (Ask)
+- Évaluation asynchrone des politiques
+
+### Phase 8 — Production Polish
+
+- Optimisations binaire (LTO)
+- E2E complet (Prompt -> Audit)
+- Télémétrie d'erreurs (Debug)
+
+### Phase 9 — Reliability & Observability
+
+- Dashboards de stabilité (crash/startup/latence)
+- Runbooks incident (rollback, hotfix, postmortem)
+- SLO/SLA et suivi continu en CI
+
+### Phase 10 — Release Operations & Compliance
+
+- Validation release CI réelle (signing/notarization)
+- Manifestes SHA256 et SBOM
+- Checklist Go/No-Go versionnée
+
+### Phase 11 — Enterprise Intelligence
+
+- Semantic RAG (HNSW Index)
+- Contextual Snippet Retrieval
+- Multi-Modal Toolkit (Vision/UI)
+- Persistence de l'index sémantique
+
+### Phase 12 — Team Orchestration
+
+- Planner multi-agent parallèle
+- Modèle routing dynamique
+- Marketplace WASI signé (Marketplace)
+- Loop d'auto-correction (Self-Healing)
+
 
 ---
 

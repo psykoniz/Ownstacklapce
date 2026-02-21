@@ -15,6 +15,9 @@ path = "src/main.rs"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 async-trait = "0.1"
+base64-simd = "0.8"
+ed25519-dalek = "2.1"
+# RAG / ML
 
 # HTTP client for LLM APIs
 reqwest = { version = "0.12", features = ["json", "stream"] }
@@ -27,12 +30,12 @@ tracing-subscriber = "0.3"
 regex = { workspace = true }
 
 # Error handling
-# Error handling
 thiserror = "1"
 anyhow = "1"
 
 # Logging
 tracing = "0.1"
+keyring = "2.3.3"
 
 # Security integration
 ownstack-engine = { path = "../ownstack-engine" }
@@ -50,11 +53,15 @@ wasmtime = "14.0.0"
 wasmtime-wasi = "14.0.0"
 wasi-common = "14.0.0"
 
+# ML and Indexing (Phase 11)
+candle-core = "0.3"
+candle-nn = "0.3"
+candle-transformers = "0.3"
+hnsw_rs = "0.3"
+tokenizers = "0.15"
+
 # CLI (Phase 3)
 clap = { version = "4.4", features = ["derive"] }
-
-
-
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-test = "0.4"

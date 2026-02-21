@@ -9,6 +9,10 @@ on:
         description: "Tag name for release"
         required: false
         default: nightly
+      validate_only:
+        description: "Build and validate artifacts without publishing a GitHub release"
+        required: false
+        default: "true"
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   pull_request:
@@ -70,7 +74,25 @@ jobs:
       - name: Build
         run: cargo build --frozen --profile release-lto
 
-      - name: Crate msi installer
+      - name: Import Windows signing certificate (optional)
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PWD != '' }}
+        shell: pwsh
+        run: |
+          $certPath = Join-Path $env:RUNNER_TEMP "ownstack_codesign.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE }}"))
+          $securePwd = ConvertTo-SecureString -String "${{ secrets.WINDOWS_CERTIFICATE_PWD }}" -AsPlainText -Force
+          Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePwd | Out-Null
+          "OWNSTACK_CODESIGN_CERT=$certPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Sign Windows executable (optional)
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PWD != '' }}
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found" }
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f "$env:OWNSTACK_CODESIGN_CERT" /p "${{ secrets.WINDOWS_CERTIFICATE_PWD }}" ".\\target\\release-lto\\ownstack-ide.exe"
+
+      - name: Create msi installer
         run: |
           candle.exe -arch "x64" -ext WixUIExtension -ext WixUtilExtension \
             -out "./ownstack-ide.wixobj" "extra/windows/wix/lapce.wxs"
@@ -79,11 +101,28 @@ jobs:
             -out "./OwnStack-windows.msi" -sice:ICE61 -sice:ICE91 \
             "./ownstack-ide.wixobj"
 
+      - name: Sign MSI installer (optional)
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PWD != '' }}
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found" }
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f "$env:OWNSTACK_CODESIGN_CERT" /p "${{ secrets.WINDOWS_CERTIFICATE_PWD }}" ".\\OwnStack-windows.msi"
+
       - name: Create portable
         shell: pwsh
         run: |
           cargo build --profile release-lto --features lapce-app/portable
           Compress-Archive ./target/release-lto/ownstack-ide.exe ./OwnStack-windows-portable.zip
+
+      - name: Verify signatures (optional)
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PWD != '' }}
+        shell: pwsh
+        run: |
+          $msiSig = Get-AuthenticodeSignature .\OwnStack-windows.msi
+          $exeSig = Get-AuthenticodeSignature .\target\release-lto\ownstack-ide.exe
+          if ($msiSig.Status -ne "Valid") { throw "MSI signature invalid: $($msiSig.Status)" }
+          if ($exeSig.Status -ne "Valid") { throw "EXE signature invalid: $($exeSig.Status)" }
 
       - name: Create lapce-proxy archive
         shell: pwsh
@@ -143,6 +182,72 @@ jobs:
           path: |
             ./ownstack-linux-*.tar.gz
             ./vendor.tar.gz
+          retention-days: 1
+
+  appimage:
+    runs-on: ubuntu-latest
+    needs:
+      - tagname
+      - linux
+    env:
+      RELEASE_TAG_NAME: ${{ needs.tagname.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ownstack-linux
+          path: ./_artifacts/ownstack-linux
+
+      - name: Install AppImage tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl libfuse2
+
+      - name: Build AppImage
+        run: |
+          tar -xzf ./_artifacts/ownstack-linux/ownstack-linux-amd64.tar.gz
+          export OWNSTACK_BINARY_PATH="$(pwd)/OwnStack/ownstack-ide"
+          bash ./scripts/build_appimage.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ownstack-appimage
+          path: |
+            ./OwnStack-linux-x86_64.AppImage
+          retention-days: 1
+
+  flatpak:
+    runs-on: ubuntu-latest
+    needs:
+      - tagname
+      - linux
+    env:
+      RELEASE_TAG_NAME: ${{ needs.tagname.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ownstack-linux
+          path: ./_artifacts/ownstack-linux
+
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+
+      - name: Build Flatpak bundle
+        run: |
+          tar -xzf ./_artifacts/ownstack-linux/ownstack-linux-amd64.tar.gz
+          export OWNSTACK_BINARY_PATH="$(pwd)/OwnStack/ownstack-ide"
+          bash ./scripts/build_flatpak_bundle.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ownstack-flatpak
+          path: |
+            ./OwnStack-linux-x86_64.flatpak
           retention-days: 1
 
   deb:
@@ -298,6 +403,12 @@ jobs:
         with:
           product-path: "./target/release-lto/macos/OwnStack-macos.dmg"
 
+      - name: Verify macOS signature and notarization
+        run: |
+          codesign --verify --deep --strict --verbose=2 ./target/release-lto/macos/Lapce.app
+          xcrun stapler validate ./target/release-lto/macos/OwnStack-macos.dmg
+          spctl --assess --type open --context context:primary-signature --verbose=4 ./target/release-lto/macos/OwnStack-macos.dmg
+
       - uses: actions/upload-artifact@v4
         with:
           name: ownstack-macos
@@ -306,17 +417,64 @@ jobs:
             ./target/release-lto/macos/OwnStack-macos.dmg
           retention-days: 3
 
-  publish:
-    # Publishing should never run for pull requests: TAG_NAME is not set for PRs
-    # and we also want to avoid accidental release attempts from PR contexts.
-    if: github.event_name != 'pull_request'
+  validate-artifacts:
+    runs-on: ubuntu-latest
     needs:
       - linux
+      - appimage
+      - flatpak
       - lapce-proxy
       - deb
       - rpm
       - windows
       - macos
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Validate core artifacts
+        run: |
+          test -f ownstack-linux/ownstack-linux-amd64.tar.gz
+          test -f ownstack-linux/ownstack-linux-arm64.tar.gz
+          test -f ownstack-appimage/OwnStack-linux-x86_64.AppImage
+          test -f ownstack-flatpak/OwnStack-linux-x86_64.flatpak
+          test -f ownstack-windows/OwnStack-windows.msi
+          test -f ownstack-windows/OwnStack-windows-portable.zip
+          test -f ownstack-macos/OwnStack-macos.dmg
+
+      - name: Validate distro package outputs
+        run: |
+          find ownstack-debian* -name '*.deb' -print -quit | grep -q .
+          find ownstack-ubuntu* -name '*.deb' -print -quit | grep -q .
+          find ownstack-fedora* -name '*.rpm' -print -quit | grep -q .
+
+      - name: Generate artifact checksums
+        run: |
+          find . -type f \
+            ! -path "*/.git/*" \
+            ! -name ".DS_Store" \
+            -print0 | sort -z | xargs -0 sha256sum > release-artifacts.sha256
+
+      - name: Upload checksum manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownstack-release-manifest
+          path: release-artifacts.sha256
+          retention-days: 7
+
+  publish:
+    # Publishing should never run for pull requests: TAG_NAME is not set for PRs
+    # and we also want to avoid accidental release attempts from PR contexts.
+    if: github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.validate_only == 'true')
+    needs:
+      - linux
+      - appimage
+      - flatpak
+      - lapce-proxy
+      - deb
+      - rpm
+      - windows
+      - macos
+      - validate-artifacts
     runs-on: ubuntu-latest
     env:
       GH_REPO: ${{ github.repository }}
@@ -369,6 +527,8 @@ jobs:
           gh release create $TAG_NAME $PRERELEASE --title "$TAG_NAME" --target $GITHUB_SHA \
             ownstack-macos/* \
             ownstack-linux/* \
+            ownstack-appimage/* \
+            ownstack-flatpak/* \
             ownstack-debian*/*/* \
             ownstack-ubuntu*/*/* \
             ownstack-fedora*/* \

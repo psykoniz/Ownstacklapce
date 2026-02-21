@@ -14,6 +14,7 @@ mod windows_job {
     use std::ptr;
     use windows_sys::Win32::Foundation::*;
     use windows_sys::Win32::System::JobObjects::*;
+    use windows_sys::Win32::System::Threading::*;
 
     pub struct WindowsJob {
         handle: HANDLE,
@@ -76,34 +77,77 @@ mod windows_job {
                     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
                         | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
                         | JOB_OBJECT_LIMIT_PROCESS_MEMORY
-                        | JOB_OBJECT_LIMIT_JOB_MEMORY;
+                        | JOB_OBJECT_LIMIT_JOB_MEMORY
+                        | JOB_OBJECT_LIMIT_PRIORITY_CLASS;
+                info.BasicLimitInformation.PriorityClass =
+                    BELOW_NORMAL_PRIORITY_CLASS;
+
+                let cpu_rate: u32;
 
                 match level {
                     crate::sandbox::SandboxLevel::Light => {
                         info.BasicLimitInformation.ActiveProcessLimit = 10;
                         info.ProcessMemoryLimit = 512 * 1024 * 1024; // 512MB
                         info.JobMemoryLimit = 512 * 1024 * 1024; // 512MB
+                        cpu_rate = 5000; // 50%
                     }
                     crate::sandbox::SandboxLevel::Standard => {
                         info.BasicLimitInformation.ActiveProcessLimit = 5;
                         info.ProcessMemoryLimit = 256 * 1024 * 1024; // 256MB
                         info.JobMemoryLimit = 256 * 1024 * 1024; // 256MB
+                        cpu_rate = 3000; // 30%
                     }
                     crate::sandbox::SandboxLevel::Strict => {
                         info.BasicLimitInformation.ActiveProcessLimit = 2;
                         info.ProcessMemoryLimit = 128 * 1024 * 1024; // 128MB
                         info.JobMemoryLimit = 128 * 1024 * 1024; // 128MB
+                        cpu_rate = 1500; // 15%
                     }
                 }
 
-                let res = SetInformationJobObject(
+                let res_ext = SetInformationJobObject(
                     self.handle,
                     JobObjectExtendedLimitInformation,
                     &info as *const _ as *const _,
                     mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
                 );
 
-                if res == 0 {
+                if res_ext == 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                // Apply a hard CPU cap.
+                let mut cpu: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = mem::zeroed();
+                cpu.ControlFlags = JOB_OBJECT_CPU_RATE_CONTROL_ENABLE
+                    | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
+                cpu.Anonymous.CpuRate = cpu_rate;
+                let res_cpu = SetInformationJobObject(
+                    self.handle,
+                    JobObjectCpuRateControlInformation,
+                    &cpu as *const _ as *const _,
+                    mem::size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
+                );
+                if res_cpu == 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                // Restrict UI/system interaction privileges for sandboxed processes.
+                let mut ui: JOBOBJECT_BASIC_UI_RESTRICTIONS = mem::zeroed();
+                ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_DESKTOP
+                    | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
+                    | JOB_OBJECT_UILIMIT_EXITWINDOWS
+                    | JOB_OBJECT_UILIMIT_GLOBALATOMS
+                    | JOB_OBJECT_UILIMIT_HANDLES
+                    | JOB_OBJECT_UILIMIT_READCLIPBOARD
+                    | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
+                    | JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
+                let res_ui = SetInformationJobObject(
+                    self.handle,
+                    JobObjectBasicUIRestrictions,
+                    &ui as *const _ as *const _,
+                    mem::size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+                );
+                if res_ui == 0 {
                     return Err(std::io::Error::last_os_error());
                 }
             }
@@ -227,12 +271,8 @@ impl Sandbox for ProcessSandbox {
 
         #[cfg(target_os = "linux")]
         {
-            let resolved = super::linux::resolve_command(
-                &cmd_name,
-                &args,
-                command_str,
-                level,
-            );
+            let resolved =
+                super::linux::resolve_command(&cmd_name, &args, command_str, level);
             cmd_name = resolved.0;
             args = resolved.1;
         }
@@ -262,10 +302,8 @@ impl Sandbox for ProcessSandbox {
         #[cfg(windows)]
         {
             let mut path = "C:\\Windows\\System32;C:\\Windows".to_string();
-            path = format!(
-                "{};C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
-                path
-            );
+            path =
+                format!("{};C:\\Windows\\System32\\WindowsPowerShell\\v1.0", path);
             // Add common Git locations on Windows
             path = format!(
                 "{};C:\\Program Files\\Git\\cmd;C:\\Program Files\\Git\\bin",
@@ -326,7 +364,7 @@ impl Sandbox for ProcessSandbox {
                 return ToolResult::failure(
                     format!("Failed to create Windows Job Object: {}", e),
                     None,
-                )
+                );
             }
         };
 

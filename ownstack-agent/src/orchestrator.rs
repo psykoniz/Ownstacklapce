@@ -125,6 +125,7 @@ pub struct AgentOrchestrator {
     #[allow(dead_code)]
     workspace: PathBuf,
     memory: crate::project_memory::ProjectMemory,
+    index: crate::index::SemanticIndex,
     current_mission: Option<Mission>,
     started_at: Option<Instant>,
 }
@@ -136,6 +137,7 @@ impl AgentOrchestrator {
         max_context_tokens: usize,
     ) -> Self {
         let memory = crate::project_memory::ProjectMemory::new(workspace.clone());
+        let index = crate::index::SemanticIndex::new(workspace.clone());
         Self {
             provider,
             toolkits: Vec::new(),
@@ -144,6 +146,7 @@ impl AgentOrchestrator {
             counters: BudgetCounters::default(),
             workspace,
             memory,
+            index,
             current_mission: None,
             started_at: None,
         }
@@ -177,17 +180,15 @@ impl AgentOrchestrator {
             .collect()
     }
 
-    pub async fn execute_tool(
-        &mut self,
+    pub async fn execute_tool_shared(
+        toolkits: &[Arc<dyn Toolkit>],
         name: &str,
         args: serde_json::Value,
     ) -> ToolResult {
-        self.counters.tool_calls += 1;
-        for toolkit in &self.toolkits {
+        for toolkit in toolkits {
             match toolkit.execute(name, args.clone()).await {
                 Ok(result) => return result,
                 Err(e) => {
-                    // Only continue if the tool was not found in this toolkit
                     match e {
                         ToolkitError::ToolNotFound(_) => continue,
                         _ => return ToolResult::failure(format!("{}", e), None),
@@ -196,6 +197,27 @@ impl AgentOrchestrator {
             }
         }
         ToolResult::failure(format!("Tool not found: {}", name), None)
+    }
+
+    pub async fn execute_tool(
+        &mut self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> ToolResult {
+        self.counters.tool_calls += 1;
+        Self::execute_tool_shared(&self.toolkits, name, args).await
+    }
+
+    fn route_model(&self, task_type: &str) -> Option<String> {
+        let provider_name = self.provider.name();
+        match (provider_name, task_type) {
+            ("anthropic", "planning") => Some("claude-3-5-sonnet-20241022".to_string()),
+            ("anthropic", "critique") => Some("claude-3-5-sonnet-20241022".to_string()),
+            ("anthropic", "fast") => Some("claude-3-haiku-20240307".to_string()),
+            ("openrouter", "planning") => Some("openai/gpt-4o".to_string()),
+            ("openrouter", "fast") => Some("openai/gpt-4o-mini".to_string()),
+            _ => None, // use default from config
+        }
     }
 
     fn check_budget(&self) -> Option<String> {
@@ -224,7 +246,10 @@ impl AgentOrchestrator {
         } else if let Some(started_at) = self.started_at {
             let max_secs = (self.budget.max_duration_minutes as u64) * 60;
             if started_at.elapsed().as_secs() >= max_secs {
-                Some(format!("max_duration_minutes ({}m)", self.budget.max_duration_minutes))
+                Some(format!(
+                    "max_duration_minutes ({}m)",
+                    self.budget.max_duration_minutes
+                ))
             } else {
                 None
             }
@@ -245,9 +270,10 @@ impl AgentOrchestrator {
             LlmMessage::user(user_goal),
         ];
 
+        let model = self.route_model("planning");
         let response = self
             .provider
-            .complete(messages, None)
+            .complete(messages, None, model)
             .await
             .map_err(|e| format!("Planner error: {}", e))?;
 
@@ -292,9 +318,10 @@ impl AgentOrchestrator {
         let messages =
             vec![LlmMessage::system(CRITIC_PROMPT), LlmMessage::user(prompt)];
 
+        let model = self.route_model("critique");
         let response = self
             .provider
-            .complete(messages, None)
+            .complete(messages, None, model)
             .await
             .map_err(|e| format!("Critic error: {}", e))?;
 
@@ -327,16 +354,36 @@ impl AgentOrchestrator {
 
         self.started_at = Some(Instant::now());
 
-        // Augment system prompt with project memory
+        // Ensure index is initialized
+        if let Err(e) = self.index.init().await {
+            debug!("SemanticIndex init failed (likely missing files): {}", e);
+        }
+
+        // Augment system prompt with project memory and semantic index
         let project_rules = self.memory.to_system_prompt();
-        if !project_rules.is_empty() {
+        
+        // Phase 11: Semantic Retrieval
+        let mut rag_context = String::new();
+        if let Ok(snippets) = self.index.search(user_prompt, 5).await {
+            if !snippets.is_empty() {
+                rag_context = "\n## Relevant Code Context\n".to_string();
+                for snip in snippets {
+                    rag_context.push_str(&format!(
+                        "\nFile: {} (Lines {}-{})\n```\n{}\n```\n",
+                        snip.path, snip.start_line, snip.end_line, snip.content
+                    ));
+                }
+            }
+        }
+
+        if !project_rules.is_empty() || !rag_context.is_empty() {
             let base_prompt = self
                 .context
                 .get_messages()
                 .get(0)
                 .map(|m| m.content.clone())
                 .unwrap_or_default();
-            let augmented = format!("{}\n\n{}", base_prompt, project_rules);
+            let augmented = format!("{}\n\n{}\n\n{}", base_prompt, project_rules, rag_context);
             self.context.set_system_prompt(augmented);
         }
 
@@ -372,9 +419,10 @@ impl AgentOrchestrator {
             let mut final_finish_reason = None;
             let mut _final_usage = None;
 
+            let model = self.route_model("worker");
             let mut stream = self
                 .provider
-                .stream(messages.clone(), tools)
+                .stream(messages.clone(), tools, model)
                 .await
                 .map_err(|e| format!("LLM Stream error: {}", e))?;
 
@@ -453,33 +501,51 @@ impl AgentOrchestrator {
                     assistant_msg.tool_calls = Some(tool_calls.clone());
                     self.context.add_message(assistant_msg);
 
-                    for tool_call in tool_calls {
-                        debug!(
-                            "Executing: {} ({})",
-                            tool_call.name, tool_call.arguments
-                        );
-                        let result = self
-                            .execute_tool(&tool_call.name, tool_call.arguments)
-                            .await;
+                    let toolkits = self.toolkits.clone();
+                    let futures = tool_calls.into_iter().map(|tool_call| {
+                        let tks = toolkits.clone();
+                        async move {
+                            debug!("Executing (parallel): {} ({})", tool_call.name, tool_call.arguments);
+                            let result = Self::execute_tool_shared(&tks, &tool_call.name, tool_call.arguments.clone()).await;
+                            (tool_call, result)
+                        }
+                    });
 
+                    let results = futures::future::join_all(futures).await;
+                    
+                    for (tool_call, result) in results {
+                        self.counters.tool_calls += 1;
                         if !result.success {
                             self.counters.consecutive_failures += 1;
                         } else {
                             self.counters.consecutive_failures = 0;
                         }
 
-                        let result_json = serde_json::to_string(&result)
-                            .unwrap_or_else(|_| {
-                                if result.success {
-                                    result.stdout.clone()
-                                } else {
-                                    result.stderr.clone()
-                                }
-                            });
-                        self.context.add_message(LlmMessage::tool_result(
-                            &tool_call.id,
-                            result_json,
-                        ));
+                        let result_msg = if let Some(image_data) = result.metadata.get("image_data") {
+                            let media_type = result.metadata.get("media_type")
+                                .cloned()
+                                .unwrap_or_else(|| "image/png".to_string());
+                            
+                            LlmMessage {
+                                role: crate::provider::Role::Tool,
+                                content: crate::provider::MessageContent::Parts(vec![
+                                    crate::provider::ContentPart::Text { text: serde_json::to_string(&result).unwrap_or_default() },
+                                    crate::provider::ContentPart::Image {
+                                        source: crate::provider::ImageSource {
+                                            type_: "base64".to_string(),
+                                            media_type,
+                                            data: image_data.clone(),
+                                        }
+                                    }
+                                ]),
+                                tool_call_id: Some(tool_call.id.clone()),
+                                tool_calls: None,
+                            }
+                        } else {
+                            let result_json = serde_json::to_string(&result).unwrap_or_default();
+                            LlmMessage::tool_result(&tool_call.id, result_json)
+                        };
+                        self.context.add_message(result_msg);
                     }
                     // Loop back for next interaction after tool results
                 }
@@ -516,9 +582,10 @@ impl AgentOrchestrator {
                 self.counters.steps, self.counters.llm_calls
             );
 
+            let model = self.route_model("worker");
             let response = self
                 .provider
-                .complete(messages, tools)
+                .complete(messages, tools, model)
                 .await
                 .map_err(|e| format!("LLM error: {}", e))?;
 
@@ -555,18 +622,31 @@ impl AgentOrchestrator {
                             self.counters.consecutive_failures = 0;
                         }
 
-                        let result_json = serde_json::to_string(&result)
-                            .unwrap_or_else(|_| {
-                                if result.success {
-                                    result.stdout.clone()
-                                } else {
-                                    result.stderr.clone()
-                                }
-                            });
-                        self.context.add_message(LlmMessage::tool_result(
-                            &tool_call.id,
-                            result_json,
-                        ));
+                        let result_msg = if let Some(image_data) = result.metadata.get("image_data") {
+                            let media_type = result.metadata.get("media_type")
+                                .cloned()
+                                .unwrap_or_else(|| "image/png".to_string());
+                            
+                            LlmMessage {
+                                role: crate::provider::Role::Tool,
+                                content: crate::provider::MessageContent::Parts(vec![
+                                    crate::provider::ContentPart::Text { text: serde_json::to_string(&result).unwrap_or_default() },
+                                    crate::provider::ContentPart::Image {
+                                        source: crate::provider::ImageSource {
+                                            type_: "base64".to_string(),
+                                            media_type,
+                                            data: image_data.clone(),
+                                        }
+                                    }
+                                ]),
+                                tool_call_id: Some(tool_call.id.clone()),
+                                tool_calls: None,
+                            }
+                        } else {
+                            let result_json = serde_json::to_string(&result).unwrap_or_default();
+                            LlmMessage::tool_result(&tool_call.id, result_json)
+                        };
+                        self.context.add_message(result_msg);
                     }
                 }
                 FinishReason::Length => {
@@ -599,32 +679,46 @@ impl AgentOrchestrator {
                 step.description
             );
 
-            // Update mission status
             if let Some(ref mut m) = self.current_mission {
                 if i < m.steps.len() {
                     m.steps[i].status = StepStatus::InProgress;
                 }
             }
 
-            // Worker executes the step
-            let output = match self.process(&step.description).await {
-                Ok(output) => output,
-                Err(e) => {
-                    if let Some(ref mut m) = self.current_mission {
-                        if i < m.steps.len() {
-                            m.steps[i].status = StepStatus::Failed(e.clone());
+            let mut retry_count = 0;
+            let max_retries = 2;
+            let mut current_prompt = step.description.clone();
+            let step_output = loop {
+                let output = match self.process(&current_prompt).await {
+                    Ok(output) => output,
+                    Err(e) => {
+                        if let Some(ref mut m) = self.current_mission {
+                            if i < m.steps.len() {
+                                m.steps[i].status = StepStatus::Failed(e.clone());
+                            }
                         }
+                        return Err(format!("Mission failed at step {}: {}", i + 1, e));
                     }
-                    return Err(format!("Mission failed at step {}: {}", i + 1, e));
-                }
-            };
+                };
 
-            // Critic reviews
-            let critique = self.critique(&step.description, &output).await?;
-            if !critique.approved {
-                warn!("Critic rejected step {}: {}", i + 1, critique.feedback);
-                // Could retry here, for now we continue with a warning
-            }
+                let critique = self.critique(&step.description, &output).await?;
+                if critique.approved {
+                    break output;
+                }
+
+                if retry_count >= max_retries {
+                    warn!("Critic rejected step {} after {} retries. Continuing.", i + 1, retry_count);
+                    break output;
+                }
+
+                retry_count += 1;
+                info!("Self-Healing: Retrying step {} (attempt {}) with feedback.", i + 1, retry_count + 1);
+                current_prompt = format!(
+                    "Your previous response for the task '{}' was REJECTED by the critic.\nFeedback: {}\n\nPlease try again, addressing the feedback above.",
+                    step.description, critique.feedback
+                );
+                self.context.clear(); // Fresh start for retry
+            };
 
             if let Some(ref mut m) = self.current_mission {
                 if i < m.steps.len() {
@@ -636,10 +730,9 @@ impl AgentOrchestrator {
                 "Step {}: {}\n{}",
                 i + 1,
                 step.description,
-                output
+                step_output
             ));
 
-            // Reset context between steps to avoid overflow
             self.context.clear();
         }
 

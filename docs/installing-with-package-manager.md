@@ -1,20 +1,18 @@
 ## Installation With Package Manager
 
-Lapce is available in below software repositories:
+OwnStack IDE is available in software repositories and release artifacts.
 
 [![Packaging status](https://repology.org/badge/vertical-allrepos/lapce.svg)](https://repology.org/project/lapce/versions)
 
-Lapce is also additionally available via:
+OwnStack is also distributed via:
 
-- [Flatpak](https://flathub.org/apps/details/dev.lapce.lapce)
-- [Scoop](https://scoop.sh/#/apps?q=lapce)
+- Flatpak bundle artifact: `OwnStack-linux-x86_64.flatpak`
+- AppImage artifact: `OwnStack-linux-x86_64.AppImage`
+- [Scoop](https://scoop.sh/#/apps?q=ownstack-ide)
 
 
-For Fedora Linux, Lapce is (unofficially) available via dnf RPM package manager, using nightly as of 2024.01:
-
-- [copr](https://copr.fedorainfracloud.org/coprs/titaniumtown/lapce/)
+For Fedora Linux, you can install the generated `.rpm` package directly or from your package repository:
 
 ```bash
-sudo dnf copr enable titaniumtown/lapce 
-sudo dnf install lapce
+sudo dnf install ./ownstack-ide.<distro>.x86_64.rpm
 ```

@@ -186,6 +186,7 @@ pub struct WindowTabData {
     pub about_data: AboutData,
     pub alert_data: AlertBoxData,
     pub ownstack_chat: crate::ownstack_chat::OwnStackChatData,
+    pub ownstack_status: crate::ownstack_status::OwnStackStatusData,
     pub policy_prompt_seq: RwSignal<u64>,
     pub layout_rect: RwSignal<Rect>,
     pub title_height: RwSignal<f64>,
@@ -547,6 +548,15 @@ impl WindowTabData {
         let alert_data = AlertBoxData::new(cx, common.clone());
         let ownstack_chat =
             crate::ownstack_chat::OwnStackChatData::new((*common).clone());
+        if let Some(mode_pref) =
+            crate::ownstack_onboarding::load_saved_mode_preference()
+        {
+            ownstack_chat
+                .agent_mode
+                .set(crate::ownstack_chat::AgentMode::from_preference(&mode_pref));
+        }
+        let ownstack_status =
+            crate::ownstack_status::OwnStackStatusData::new((*common).clone());
 
         let window_tab_data = Self {
             scope: cx,
@@ -571,6 +581,7 @@ impl WindowTabData {
             about_data,
             alert_data,
             ownstack_chat,
+            ownstack_status,
             policy_prompt_seq: cx.create_rw_signal(0),
             layout_rect: cx.create_rw_signal(Rect::ZERO),
             title_height,
@@ -596,6 +607,41 @@ impl WindowTabData {
                 if focus != Focus::Rename && rename_active.get_untracked() {
                     rename_active.set(false);
                 }
+            });
+        }
+
+        {
+            let status = window_tab_data.ownstack_status.clone();
+            let chat_mode = window_tab_data.ownstack_chat.agent_mode;
+            cx.create_effect(move |_| {
+                status.set_mode(chat_mode.get());
+            });
+        }
+
+        {
+            let status = window_tab_data.ownstack_status.clone();
+            let chat_loading = window_tab_data.ownstack_chat.is_loading;
+            cx.create_effect(move |_| {
+                let loading = chat_loading.get();
+                status.set_active(loading);
+                let current = status.status_text.get_untracked();
+                if loading {
+                    if current == "idle" || current == "disconnected" {
+                        status.set_status("running");
+                    }
+                } else if current == "running" {
+                    status.set_status("idle");
+                }
+            });
+        }
+
+        {
+            let status = window_tab_data.ownstack_status.clone();
+            let proxy_status = window_tab_data.common.proxy_status;
+            cx.create_effect(move |_| {
+                let connected =
+                    matches!(proxy_status.get(), Some(ProxyStatus::Connected));
+                status.set_bridge_connected(connected);
             });
         }
 
@@ -2338,22 +2384,46 @@ impl WindowTabData {
                 self.file_explorer.reload();
             }
             CoreNotification::OwnStack { message } => {
+                self.ownstack_status.set_bridge_connected(true);
                 match message.clone() {
                     m @ OwnStackRpc::AiStreamChunk { .. } => {
+                        self.ownstack_status.set_active(true);
+                        self.ownstack_status.set_status("streaming");
+                        let finished = matches!(
+                            &m,
+                            OwnStackRpc::AiStreamChunk {
+                                finish_reason: Some(_),
+                                ..
+                            }
+                        );
                         self.ownstack_chat.receive_chunk(m);
+                        if finished {
+                            self.ownstack_status.set_active(false);
+                            self.ownstack_status.set_status("idle");
+                        }
                     }
                     OwnStackRpc::MissionUpdate { goal, steps } => {
+                        self.ownstack_status.set_active(true);
+                        self.ownstack_status.set_status("mission");
                         self.ownstack_chat.receive_mission(goal, steps);
                     }
                     OwnStackRpc::ToolResultMsg { json_result } => {
-                        self.ownstack_chat
-                            .add_system_message(format!("ToolResult: {}", json_result));
+                        self.ownstack_status.set_status("tool result");
+                        self.ownstack_chat.add_system_message(format!(
+                            "ToolResult: {}",
+                            json_result
+                        ));
                     }
                     OwnStackRpc::AuditEvent { json_entry } => {
-                        self.ownstack_chat
-                            .add_system_message(format!("AuditEvent: {}", json_entry));
+                        self.ownstack_status.set_status("audit");
+                        self.ownstack_chat.add_system_message(format!(
+                            "AuditEvent: {}",
+                            json_entry
+                        ));
                     }
                     OwnStackRpc::PolicyPrompt { command, reason } => {
+                        self.ownstack_status.set_active(true);
+                        self.ownstack_status.set_status("awaiting approval");
                         self.ownstack_chat.add_system_message(format!(
                             "Approval required (Ask mode):\n{}\nReason: {}",
                             command, reason
@@ -2369,30 +2439,41 @@ impl WindowTabData {
                         let active_deny = self.alert_data.active;
                         let active_timeout = self.alert_data.active;
                         let policy_prompt_seq = self.policy_prompt_seq;
+                        let status_approve = self.ownstack_status.clone();
+                        let status_deny = self.ownstack_status.clone();
+                        let status_timeout = self.ownstack_status.clone();
 
                         self.alert_data
                             .title
                             .set("OwnStack approval required".to_string());
-                        self.alert_data.msg.set(format!(
-                            "{command}\n\nReason: {reason}"
-                        ));
+                        self.alert_data
+                            .msg
+                            .set(format!("{command}\n\nReason: {reason}"));
 
                         self.alert_data.buttons.set(vec![
                             AlertButton {
                                 text: "Approve".to_string(),
                                 action: Rc::new(move || {
-                                    proxy_approve.ownstack(OwnStackRpc::PolicyResponse {
-                                        approved: true,
-                                    });
+                                    proxy_approve.ownstack(
+                                        OwnStackRpc::PolicyResponse {
+                                            approved: true,
+                                        },
+                                    );
+                                    status_approve.set_active(false);
+                                    status_approve.set_status("idle");
                                     active_approve.set(false);
                                 }),
                             },
                             AlertButton {
                                 text: "Deny".to_string(),
                                 action: Rc::new(move || {
-                                    proxy_deny.ownstack(OwnStackRpc::PolicyResponse {
-                                        approved: false,
-                                    });
+                                    proxy_deny.ownstack(
+                                        OwnStackRpc::PolicyResponse {
+                                            approved: false,
+                                        },
+                                    );
+                                    status_deny.set_active(false);
+                                    status_deny.set_status("idle");
                                     active_deny.set(false);
                                 }),
                             },
@@ -2405,9 +2486,11 @@ impl WindowTabData {
                             if active_timeout.get_untracked()
                                 && policy_prompt_seq.get_untracked() == seq
                             {
-                                proxy_timeout.ownstack(OwnStackRpc::PolicyResponse {
-                                    approved: false,
-                                });
+                                proxy_timeout.ownstack(
+                                    OwnStackRpc::PolicyResponse { approved: false },
+                                );
+                                status_timeout.set_active(false);
+                                status_timeout.set_status("idle");
                                 active_timeout.set(false);
                             }
                         });

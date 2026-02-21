@@ -34,7 +34,6 @@ impl ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     // ─── Constructor Tests ───────────────────────────────────────
     #[test]

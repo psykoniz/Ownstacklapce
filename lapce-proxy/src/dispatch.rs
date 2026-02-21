@@ -22,6 +22,7 @@ use grep_matcher::Matcher;
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{SearcherBuilder, sinks::UTF8};
 use indexmap::IndexMap;
+use lapce_core::directory::Directory;
 use lapce_rpc::{
     RequestId, RpcError,
     buffer::BufferId,
@@ -44,6 +45,7 @@ use lsp_types::{
 };
 use ownstack_bridge::PythonBridge;
 use parking_lot::Mutex;
+use serde::Deserialize;
 use tokio::io::AsyncBufReadExt;
 
 use crate::{
@@ -55,6 +57,80 @@ use crate::{
 
 const OPEN_FILE_EVENT_TOKEN: WatchToken = WatchToken(1);
 const WORKSPACE_EVENT_TOKEN: WatchToken = WatchToken(2);
+const OWNSTACK_ONBOARDING_STATE_FILE: &str = "ownstack-onboarding.json";
+const OWNSTACK_KEYRING_SERVICE: &str = "OwnStack IDE";
+const OPENROUTER_KEY_ENTRY: &str = "openrouter_api_key";
+const ANTHROPIC_KEY_ENTRY: &str = "anthropic_api_key";
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OnboardingState {
+    completed: bool,
+    chosen_provider: Option<String>,
+    chosen_mode: Option<String>,
+    ollama_host: Option<String>,
+}
+
+fn onboarding_state_path() -> Option<PathBuf> {
+    Some(Directory::config_directory()?.join(OWNSTACK_ONBOARDING_STATE_FILE))
+}
+
+fn load_onboarding_state() -> Option<OnboardingState> {
+    let path = onboarding_state_path()?;
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<OnboardingState>(&content).ok()
+}
+
+fn read_secret(entry_name: &str) -> Option<String> {
+    let entry = keyring::Entry::new(OWNSTACK_KEYRING_SERVICE, entry_name).ok()?;
+    let value = entry.get_password().ok()?;
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn normalize_provider_name(provider: &str) -> Option<&'static str> {
+    match provider.to_ascii_lowercase().as_str() {
+        "openrouter" => Some("openrouter"),
+        "anthropic" => Some("anthropic"),
+        "local (ollama)" | "ollama" | "local" => Some("local"),
+        _ => None,
+    }
+}
+
+fn apply_ownstack_runtime_env(cmd: &mut Command) {
+    if let Some(openrouter_key) = read_secret(OPENROUTER_KEY_ENTRY) {
+        cmd.env("OPENROUTER_API_KEY", openrouter_key);
+    }
+    if let Some(anthropic_key) = read_secret(ANTHROPIC_KEY_ENTRY) {
+        cmd.env("ANTHROPIC_API_KEY", anthropic_key);
+    }
+
+    if let Some(state) = load_onboarding_state() {
+        if !state.completed {
+            return;
+        }
+
+        if let Some(provider) = state.chosen_provider.as_deref() {
+            if let Some(normalized) = normalize_provider_name(provider) {
+                cmd.env("OWNSTACK_PROVIDER", normalized);
+            }
+        }
+
+        if let Some(mode) = state.chosen_mode {
+            if !mode.trim().is_empty() {
+                cmd.env("OWNSTACK_AGENT_MODE", mode);
+            }
+        }
+
+        if let Some(host) = state.ollama_host {
+            if !host.trim().is_empty() {
+                cmd.env("OLLAMA_HOST", host);
+            }
+        }
+    }
+}
 
 pub struct Dispatcher {
     workspace: Option<PathBuf>,
@@ -93,6 +169,7 @@ impl NativeAgent {
             cmd.current_dir(workspace);
         }
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+        apply_ownstack_runtime_env(&mut cmd);
 
         match cmd.spawn() {
             Ok(mut child) => {
@@ -475,10 +552,7 @@ impl ProxyHandler for Dispatcher {
                 );
             }
             OwnStack { message } => {
-                if matches!(
-                    message,
-                    lapce_rpc::ownstack::OwnStackRpc::KillSwitch
-                ) {
+                if matches!(message, lapce_rpc::ownstack::OwnStackRpc::KillSwitch) {
                     // Kill-Switch: stop agent + bridge immediately, and do not auto-restart.
                     {
                         let mut agent_guard = self.agent.lock();

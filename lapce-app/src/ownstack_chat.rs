@@ -8,8 +8,8 @@ use floem::{
     peniko::Color,
     style::CursorStyle,
     views::{
-        Decorators, container, dyn_stack, h_stack, label, scroll, stack,
-        text, text_input, v_stack,
+        Decorators, container, dyn_stack, h_stack, label, scroll, stack, text,
+        text_input, v_stack,
     },
 };
 use lapce_rpc::ownstack::OwnStackRpc;
@@ -26,6 +26,12 @@ pub struct ChatMessage {
     pub timestamp: String,
     // Optional diff content for preview
     pub diff_content: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct PatchSuggestion {
+    path: String,
+    new_content: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,6 +81,16 @@ impl std::fmt::Display for AgentMode {
             AgentMode::Ask => write!(f, "Ask"),
             AgentMode::Auto => write!(f, "Auto"),
             AgentMode::Plan => write!(f, "Plan"),
+        }
+    }
+}
+
+impl AgentMode {
+    pub fn from_preference(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "plan" => Self::Plan,
+            _ => Self::Ask,
         }
     }
 }
@@ -170,13 +186,37 @@ impl OwnStackChatData {
             if let Some(_reason) = finish_reason {
                 let content = self.streaming_content.get_untracked();
                 if !content.is_empty() {
-                    // Rudimentary diff detection (looking for markdown code blocks)
-                    // In a real usage we might restrict this only to ```diff blocks
-                    let diff = extract_code_block(&content);
+                    let diff = self.derive_diff_preview(&content);
                     self.receive_response(content, diff);
                 }
             }
         }
+    }
+
+    fn derive_diff_preview(&self, content: &str) -> Option<String> {
+        if let Some(patch) = extract_structured_patch(content) {
+            return self.compute_workspace_diff(&patch);
+        }
+        extract_code_block(content)
+    }
+
+    fn compute_workspace_diff(&self, patch: &PatchSuggestion) -> Option<String> {
+        let workspace_root = self.common.workspace.path.as_ref()?;
+        let path = std::path::Path::new(&patch.path);
+        if !is_safe_workspace_relative_path(path) {
+            return Some(format!(
+                "Rejected patch path outside workspace: {}",
+                patch.path
+            ));
+        }
+
+        let full_path = workspace_root.join(path);
+        let old_content = std::fs::read_to_string(&full_path).unwrap_or_default();
+        Some(render_unified_diff(
+            &patch.path,
+            &old_content,
+            &patch.new_content,
+        ))
     }
 
     /// Receive a mission update
@@ -510,7 +550,7 @@ fn message_view(
                         diff_view(diff, config),
                         // Decision Buttons
                         h_stack((
-                            label(|| "Accept")
+                            label(|| "Apply")
                                 .style(|s| {
                                     s.padding_horiz(10.0)
                                         .padding_vert(6.0)
@@ -646,11 +686,10 @@ fn chrono_now() -> String {
 }
 
 fn extract_code_block(content: &str) -> Option<String> {
-    let mut lines = content.lines();
     let mut in_block = false;
     let mut block_content = String::new();
 
-    while let Some(line) = lines.next() {
+    for line in content.lines() {
         if line.trim().starts_with("```") {
             if in_block {
                 return Some(block_content);
@@ -669,5 +708,197 @@ fn extract_code_block(content: &str) -> Option<String> {
         Some(block_content)
     } else {
         None
+    }
+}
+
+fn extract_structured_patch(content: &str) -> Option<PatchSuggestion> {
+    let mut in_patch_block = false;
+    let mut pending_path: Option<String> = None;
+    let mut body = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if !in_patch_block {
+            if let Some(rest) = trimmed.strip_prefix("```ownstack_patch") {
+                in_patch_block = true;
+                let inline_path = rest
+                    .trim()
+                    .strip_prefix("path=")
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty());
+                pending_path = inline_path;
+            }
+            continue;
+        }
+
+        if trimmed.starts_with("```") {
+            break;
+        }
+
+        if pending_path.is_none() {
+            if let Some(path) = trimmed.strip_prefix("path:") {
+                let path = path.trim();
+                if !path.is_empty() {
+                    pending_path = Some(path.to_string());
+                    continue;
+                }
+            }
+        }
+
+        body.push_str(line);
+        body.push('\n');
+    }
+
+    let path = pending_path?;
+    if body.trim().is_empty() {
+        return None;
+    }
+
+    Some(PatchSuggestion {
+        path,
+        new_content: body,
+    })
+}
+
+fn is_safe_workspace_relative_path(path: &std::path::Path) -> bool {
+    if path.is_absolute() {
+        return false;
+    }
+    !path.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    })
+}
+
+fn render_unified_diff(path: &str, old_content: &str, new_content: &str) -> String {
+    let old_lines: Vec<String> =
+        old_content.lines().map(|l| l.to_string()).collect();
+    let new_lines: Vec<String> =
+        new_content.lines().map(|l| l.to_string()).collect();
+    let ops = compute_line_diff_ops(&old_lines, &new_lines);
+
+    let mut out = Vec::with_capacity(ops.len() + 3);
+    out.push(format!("--- a/{}", path));
+    out.push(format!("+++ b/{}", path));
+    out.push(format!(
+        "@@ -1,{} +1,{} @@",
+        old_lines.len(),
+        new_lines.len()
+    ));
+
+    for op in ops {
+        match op {
+            DiffOp::Keep(line) => out.push(format!(" {}", line)),
+            DiffOp::Add(line) => out.push(format!("+{}", line)),
+            DiffOp::Remove(line) => out.push(format!("-{}", line)),
+        }
+    }
+
+    out.join("\n")
+}
+
+#[derive(Clone, Debug)]
+enum DiffOp {
+    Keep(String),
+    Add(String),
+    Remove(String),
+}
+
+fn compute_line_diff_ops(old_lines: &[String], new_lines: &[String]) -> Vec<DiffOp> {
+    // Keep memory bounded for very large edits.
+    let matrix_budget = old_lines.len().saturating_mul(new_lines.len());
+    if matrix_budget > 250_000 {
+        let mut ops = Vec::new();
+        for line in old_lines {
+            ops.push(DiffOp::Remove(line.clone()));
+        }
+        for line in new_lines {
+            ops.push(DiffOp::Add(line.clone()));
+        }
+        return ops;
+    }
+
+    let n = old_lines.len();
+    let m = new_lines.len();
+    let mut lcs = vec![vec![0usize; m + 1]; n + 1];
+
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            if old_lines[i] == new_lines[j] {
+                lcs[i][j] = lcs[i + 1][j + 1] + 1;
+            } else {
+                lcs[i][j] = lcs[i + 1][j].max(lcs[i][j + 1]);
+            }
+        }
+    }
+
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut ops = Vec::new();
+    while i < n && j < m {
+        if old_lines[i] == new_lines[j] {
+            ops.push(DiffOp::Keep(old_lines[i].clone()));
+            i += 1;
+            j += 1;
+        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+            ops.push(DiffOp::Remove(old_lines[i].clone()));
+            i += 1;
+        } else {
+            ops.push(DiffOp::Add(new_lines[j].clone()));
+            j += 1;
+        }
+    }
+
+    while i < n {
+        ops.push(DiffOp::Remove(old_lines[i].clone()));
+        i += 1;
+    }
+    while j < m {
+        ops.push(DiffOp::Add(new_lines[j].clone()));
+        j += 1;
+    }
+
+    ops
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_structured_patch_extracts_path_and_body() {
+        let content = r#"
+Some intro text
+```ownstack_patch path=src/lib.rs
+fn main() {}
+```
+"#;
+        let patch = extract_structured_patch(content).expect("patch");
+        assert_eq!(patch.path, "src/lib.rs");
+        assert!(patch.new_content.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn render_unified_diff_contains_headers_and_changes() {
+        let diff = render_unified_diff("src/lib.rs", "a\nb\n", "a\nc\n");
+        assert!(diff.contains("--- a/src/lib.rs"));
+        assert!(diff.contains("+++ b/src/lib.rs"));
+        assert!(diff.contains("-b"));
+        assert!(diff.contains("+c"));
+    }
+
+    #[test]
+    fn workspace_path_guard_rejects_parent_escape() {
+        assert!(!is_safe_workspace_relative_path(std::path::Path::new(
+            "../secret.txt"
+        )));
+        assert!(is_safe_workspace_relative_path(std::path::Path::new(
+            "src/main.rs"
+        )));
     }
 }

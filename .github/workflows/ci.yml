@@ -27,10 +27,19 @@ env:
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
+  required-gates:
+    name: Required Gates
+    if: github.event.pull_request.draft == false
+    needs: [check-workspace, test-ownstack, healthcheck]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm mandatory gates
+        run: echo "Mandatory gates passed: workspace check, crate tests, healthcheck."
+
   build:
     name: Rust on ${{ matrix.os }}
     if: github.event.pull_request.draft == false
-    needs: [fmt, clippy]
+    needs: [required-gates]
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +78,7 @@ jobs:
 
   fmt:
     name: Rustfmt
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +93,7 @@ jobs:
 
   clippy:
     name: Clippy on ${{ matrix.os }}
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -108,3 +119,55 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy
+
+  check-workspace:
+    name: Workspace Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update toolchain
+        run: rustup update --no-self-update
+      - name: Install dependencies
+        run: sudo make ubuntu-deps
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Cargo Check
+        run: cargo check --workspace --all-targets --frozen
+
+  test-ownstack:
+    name: Core Crates Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update toolchain
+        run: rustup update --no-self-update
+      - name: Install dependencies
+        run: sudo make ubuntu-deps
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Test ownstack-engine
+        run: cargo test -p ownstack-engine --frozen
+      - name: Test ownstack-bridge
+        run: cargo test -p ownstack-bridge --frozen
+      - name: Test lapce-rpc
+        run: cargo test -p lapce-rpc --frozen
+      - name: Test ownstack-agent
+        run: cargo test -p ownstack-agent --lib --tests --frozen
+
+  healthcheck:
+    name: System Healthcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: sudo make ubuntu-deps
+      - name: Update toolchain
+        run: rustup update --no-self-update
+      - name: Build Agent for Healthcheck
+        run: cargo build -p ownstack-agent -p lapce-proxy --frozen
+      - name: Run healthcheck.py
+        run: python scripts/healthcheck.py

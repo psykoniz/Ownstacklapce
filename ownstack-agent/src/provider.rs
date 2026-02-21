@@ -33,19 +33,137 @@ pub enum Role {
     Tool,
 }
 
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::System => write!(f, "system"),
+            Self::User => write!(f, "user"),
+            Self::Assistant => write!(f, "assistant"),
+            Self::Tool => write!(f, "tool"),
+        }
+    }
+}
+
 /// A message in the conversation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LlmMessage {
     pub role: Role,
-    pub content: String,
+    pub content: MessageContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+impl Default for MessageContent {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
+impl std::fmt::Display for MessageContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text(t) => write!(f, "{}", t),
+            Self::Parts(parts) => {
+                for part in parts {
+                    match part {
+                        ContentPart::Text { text } => write!(f, "{}", text)?,
+                        ContentPart::Image { .. } => write!(f, "[Image]")?,
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl MessageContent {
+    pub fn get_text(&self) -> String {
+        match self {
+            MessageContent::Text(s) => s.clone(),
+            MessageContent::Parts(parts) => {
+                parts.iter().filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.clone()),
+                    _ => None,
+                }).collect::<Vec<_>>().join(" ")
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.get_text().len()
+    }
+
+    pub fn contains(&self, needle: &str) -> bool {
+        self.get_text().contains(needle)
+    }
+}
+
+impl PartialEq<&str> for MessageContent {
+    fn eq(&self, other: &&str) -> bool {
+        self.get_text() == *other
+    }
+}
+
+impl PartialEq<MessageContent> for &str {
+    fn eq(&self, other: &MessageContent) -> bool {
+        *self == other.get_text()
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(s: String) -> Self {
+        MessageContent::Text(s)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(s: &str) -> Self {
+        MessageContent::Text(s.to_string())
+    }
+}
+
+impl From<&String> for MessageContent {
+    fn from(s: &String) -> Self {
+        MessageContent::Text(s.clone())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { 
+        text: String 
+    },
+    Image { 
+        source: ImageSource 
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImageSource {
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub media_type: String,
+    pub data: String,
+}
+
+impl std::fmt::Display for LlmMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]: {}", self.role, self.content)
+    }
+}
+
 impl LlmMessage {
-    pub fn system(content: impl Into<String>) -> Self {
+    pub fn system(content: impl Into<MessageContent>) -> Self {
         Self {
             role: Role::System,
             content: content.into(),
@@ -54,7 +172,7 @@ impl LlmMessage {
         }
     }
 
-    pub fn user(content: impl Into<String>) -> Self {
+    pub fn user(content: impl Into<MessageContent>) -> Self {
         Self {
             role: Role::User,
             content: content.into(),
@@ -63,7 +181,7 @@ impl LlmMessage {
         }
     }
 
-    pub fn assistant(content: impl Into<String>) -> Self {
+    pub fn assistant(content: impl Into<MessageContent>) -> Self {
         Self {
             role: Role::Assistant,
             content: content.into(),
@@ -74,7 +192,7 @@ impl LlmMessage {
 
     pub fn tool_result(
         tool_call_id: impl Into<String>,
-        content: impl Into<String>,
+        content: impl Into<MessageContent>,
     ) -> Self {
         Self {
             role: Role::Tool,
@@ -83,10 +201,14 @@ impl LlmMessage {
             tool_calls: None,
         }
     }
+    
+    pub fn get_text(&self) -> String {
+        self.content.get_text()
+    }
 }
 
 /// A tool call requested by the LLM
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -161,7 +283,7 @@ impl StreamChunk {
         let delta_tool_calls = response
             .tool_calls
             .into_iter()
-            .enumerate()
+            .enumerate() // Add enumerate to get the index
             .map(|(i, tc)| ToolCallDelta {
                 index: i,
                 id: Some(tc.id),
@@ -216,19 +338,16 @@ pub trait LlmProvider: Send + Sync {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<String>,
     ) -> Result<LlmResponse, ProviderError>;
 
-    /// Stream a conversation with the LLM
-    ///
-    /// Default implementation falls back to `complete()` and wraps
-    /// the result as a single StreamChunk. Providers that support
-    /// native streaming should override this method.
     async fn stream(
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<String>,
     ) -> Result<StreamResult, ProviderError> {
-        let response = self.complete(messages, tools).await?;
+        let response = self.complete(messages, tools, model_override).await?;
         let chunk = StreamChunk::from_response(response);
         Ok(Box::pin(futures::stream::once(async move { Ok(chunk) })))
     }
@@ -351,6 +470,83 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         assert!(json.contains("call_1"));
         assert!(json.contains("exec"));
+    }
+
+    // ─── LlmMessage get_text ─────────────────────────────────────
+    #[test]
+    fn test_llm_message_get_text_text_content() {
+        let m = LlmMessage::user("Hello, world!");
+        assert_eq!(m.get_text(), "Hello, world!");
+    }
+
+    #[test]
+    fn test_llm_message_get_text_parts_content_only_text() {
+        let m = LlmMessage::user(MessageContent::Parts(vec![
+            ContentPart::Text { text: "Part 1".to_string() },
+            ContentPart::Text { text: "Part 2".to_string() },
+        ]));
+        assert_eq!(m.get_text(), "Part 1 Part 2");
+    }
+
+    #[test]
+    fn test_llm_message_get_text_parts_content_with_image() {
+        let m = LlmMessage::user(MessageContent::Parts(vec![
+            ContentPart::Text { text: "Description:".to_string() },
+            ContentPart::Image {
+                source: ImageSource {
+                    type_: "base64".to_string(),
+                    media_type: "image/png".to_string(),
+                    data: "base64_data".to_string(),
+                },
+            },
+            ContentPart::Text { text: "End.".to_string() },
+        ]));
+        // get_text should only return text parts, ignoring images
+        assert_eq!(m.get_text(), "Description: End.");
+    }
+
+    #[test]
+    fn test_llm_message_get_text_empty_content() {
+        let m = LlmMessage::user("");
+        assert_eq!(m.get_text(), "");
+    }
+
+    // ─── MessageContent get_text ─────────────────────────────────
+    #[test]
+    fn test_message_content_get_text_text_content() {
+        let mc = MessageContent::Text("Hello, world!".to_string());
+        assert_eq!(mc.get_text(), "Hello, world!");
+    }
+
+    #[test]
+    fn test_message_content_get_text_parts_content_only_text() {
+        let mc = MessageContent::Parts(vec![
+            ContentPart::Text { text: "Part 1".to_string() },
+            ContentPart::Text { text: "Part 2".to_string() },
+        ]);
+        assert_eq!(mc.get_text(), "Part 1 Part 2");
+    }
+
+    #[test]
+    fn test_message_content_get_text_parts_content_with_image() {
+        let mc = MessageContent::Parts(vec![
+            ContentPart::Text { text: "Description:".to_string() },
+            ContentPart::Image {
+                source: ImageSource {
+                    type_: "base64".to_string(),
+                    media_type: "image/png".to_string(),
+                    data: "base64_data".to_string(),
+                },
+            },
+            ContentPart::Text { text: "End.".to_string() },
+        ]);
+        assert_eq!(mc.get_text(), "Description: End.");
+    }
+
+    #[test]
+    fn test_message_content_get_text_empty_content() {
+        let mc = MessageContent::Text("".to_string());
+        assert_eq!(mc.get_text(), "");
     }
 
     // ─── ToolCall ────────────────────────────────────────────────

@@ -44,7 +44,13 @@ pub extern "C" fn run() -> i32 {
         }
     };
 
-    if std::io::stdout().write_all(serialized.as_bytes()).is_err() {
+    let mut stdout = std::io::stdout();
+    if stdout.write_all(serialized.as_bytes()).is_err() {
+        return 1;
+    }
+    // `run` is called directly by the host (without `_start`), so we must
+    // flush explicitly or buffered output can remain invisible to the host.
+    if stdout.flush().is_err() {
         return 1;
     }
     0

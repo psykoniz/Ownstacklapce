@@ -12,6 +12,7 @@ use crate::provider::{
     ProviderError, Role, TokenUsage, ToolCall, ToolDefinition,
 };
 use crate::resilience::ResilientClient;
+use crate::secret_store;
 
 const OPENROUTER_API_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -28,9 +29,12 @@ impl OpenRouterProvider {
     }
 
     pub fn from_env() -> Result<Self, ProviderError> {
-        let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {
-            ProviderError::ConfigError("OPENROUTER_API_KEY not set".to_string())
-        })?;
+        let api_key =
+            secret_store::get_secret("OPENROUTER_API_KEY").ok_or_else(|| {
+                ProviderError::ConfigError(
+                    "OPENROUTER_API_KEY not set (env/keyring)".to_string(),
+                )
+            })?;
 
         let model = std::env::var("OPENROUTER_MODEL")
             .unwrap_or_else(|_| "anthropic/claude-3.5-sonnet".to_string());
@@ -58,7 +62,7 @@ struct OpenRouterRequest {
 struct OpenRouterMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,11 +161,31 @@ fn to_openrouter_messages(messages: Vec<LlmMessage>) -> Vec<OpenRouterMessage> {
                     .collect()
             });
 
-            // OpenAI-compatible APIs expect assistant tool-call messages to omit content.
             let content = if tool_calls.is_some() {
                 None
             } else {
-                Some(m.content)
+                match m.content {
+                    crate::provider::MessageContent::Text(s) => Some(serde_json::Value::String(s)),
+                    crate::provider::MessageContent::Parts(parts) => {
+                        let parts_val = parts.into_iter().map(|p| match p {
+                            crate::provider::ContentPart::Text { text } => {
+                                serde_json::json!({
+                                    "type": "text",
+                                    "text": text
+                                })
+                            }
+                            crate::provider::ContentPart::Image { source } => {
+                                serde_json::json!({
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": format!("data:{};base64,{}", source.media_type, source.data)
+                                    }
+                                })
+                            }
+                        }).collect::<Vec<_>>();
+                        Some(serde_json::Value::Array(parts_val))
+                    }
+                }
             };
 
             OpenRouterMessage {
@@ -180,9 +204,9 @@ impl LlmProvider for OpenRouterProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<String>,
     ) -> Result<LlmResponse, ProviderError> {
-        let api_messages: Vec<OpenRouterMessage> =
-            to_openrouter_messages(messages);
+        let api_messages: Vec<OpenRouterMessage> = to_openrouter_messages(messages);
 
         let api_tools = tools.map(|t| {
             t.into_iter()
@@ -198,7 +222,7 @@ impl LlmProvider for OpenRouterProvider {
         });
 
         let request = OpenRouterRequest {
-            model: self.config.model.clone(),
+            model: model_override.unwrap_or_else(|| self.config.model.clone()),
             messages: api_messages,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
@@ -282,9 +306,9 @@ impl LlmProvider for OpenRouterProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<String>,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
-        let api_messages: Vec<OpenRouterMessage> =
-            to_openrouter_messages(messages);
+        let api_messages: Vec<OpenRouterMessage> = to_openrouter_messages(messages);
 
         let api_tools = tools.map(|t| {
             t.into_iter()
@@ -301,7 +325,7 @@ impl LlmProvider for OpenRouterProvider {
 
         // Build request body with stream: true
         let mut body = serde_json::to_value(&OpenRouterRequest {
-            model: self.config.model.clone(),
+            model: model_override.unwrap_or_else(|| self.config.model.clone()),
             messages: api_messages,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
@@ -496,13 +520,12 @@ mod tests {
     fn test_request_serialization() {
         let messages = vec![LlmMessage {
             role: Role::User,
-            content: "hello".to_string(),
+            content: "hello".into(),
             tool_call_id: None,
             tool_calls: None,
         }];
 
-        let api_messages: Vec<OpenRouterMessage> =
-            to_openrouter_messages(messages);
+        let api_messages: Vec<OpenRouterMessage> = to_openrouter_messages(messages);
 
         let request = OpenRouterRequest {
             model: "gpt-4".to_string(),

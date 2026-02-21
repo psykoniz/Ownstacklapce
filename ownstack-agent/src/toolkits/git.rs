@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,12 +13,6 @@ use ownstack_engine::{
     AuditEntry, AuditLogger, PolicyDecision, PolicyEngine, Sandbox, SandboxLevel,
     ToolResult,
 };
-
-#[derive(Deserialize)]
-struct GitArgs {
-    command: String,
-    args: Option<Vec<String>>,
-}
 
 pub struct GitToolkit {
     workspace: PathBuf,
@@ -254,7 +247,7 @@ impl GitToolkit {
 
         let messages = vec![LlmMessage::user(prompt)];
 
-        match self.provider.complete(messages, None).await {
+        match self.provider.complete(messages, None, None).await {
             Ok(response) => {
                 info!("LLM response received");
                 if let Some(content) = response.content {
@@ -450,10 +443,11 @@ mod tests {
             &self,
             m: Vec<LlmMessage>,
             _t: Option<Vec<crate::provider::ToolDefinition>>,
+            _model_override: Option<String>,
         ) -> Result<LlmResponse, ProviderError> {
             if let Some(msg) = m.first() {
                 let mut last = self.last_message.lock().unwrap();
-                *last = msg.content.clone();
+                *last = msg.content.get_text();
             }
             Ok(LlmResponse {
                 content: Some("suggested commit".to_string()),

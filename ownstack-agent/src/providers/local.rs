@@ -132,12 +132,14 @@ impl LlmProvider for LocalProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<String>,
     ) -> Result<LlmResponse, ProviderError> {
+        let model = model_override.unwrap_or_else(|| self.config.model.clone());
         let api_messages: Vec<OllamaMessage> = messages
             .into_iter()
             .map(|m| OllamaMessage {
                 role: role_to_ollama(&m.role).to_string(),
-                content: m.content,
+                content: m.content.to_string(),
             })
             .collect();
 
@@ -155,7 +157,7 @@ impl LlmProvider for LocalProvider {
         });
 
         let request = OllamaRequest {
-            model: self.config.model.clone(),
+            model: model.clone(),
             messages: api_messages,
             stream: false,
             tools: api_tools,
@@ -166,7 +168,7 @@ impl LlmProvider for LocalProvider {
         };
 
         let url = format!("{}/api/chat", self.base_url);
-        debug!("Sending request to Ollama: model={}", self.config.model);
+        debug!("Sending request to Ollama: model={}", model);
 
         let response = self
             .client
@@ -226,14 +228,16 @@ impl LlmProvider for LocalProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<String>,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
+        let model = model_override.unwrap_or_else(|| self.config.model.clone());
         use crate::provider::{FinishReason, StreamChunk};
 
         let api_messages: Vec<OllamaMessage> = messages
             .into_iter()
             .map(|m| OllamaMessage {
                 role: role_to_ollama(&m.role).to_string(),
-                content: m.content,
+                content: m.content.to_string(),
             })
             .collect();
 
@@ -251,7 +255,7 @@ impl LlmProvider for LocalProvider {
         });
 
         let request = OllamaRequest {
-            model: self.config.model.clone(),
+            model: model.clone(),
             messages: api_messages,
             stream: true, // Enable streaming
             tools: api_tools,
@@ -262,7 +266,7 @@ impl LlmProvider for LocalProvider {
         };
 
         let url = format!("{}/api/chat", self.base_url);
-        debug!("Streaming request to Ollama: model={}", self.config.model);
+        debug!("Streaming request to Ollama: model={}", model);
 
         let response = self
             .client

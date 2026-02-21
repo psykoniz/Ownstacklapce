@@ -8,12 +8,58 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use wasi_common::pipe::{ReadPipe, WritePipe};
 use wasmtime::*;
 use wasmtime_wasi::WasiCtxBuilder;
 
 use crate::toolkits::{ToolDef, ToolResult, Toolkit, ToolkitError};
+
+const TRUSTED_PLUGIN_PUBKEY_HEX_ENV: &str =
+    "OWNSTACK_PLUGIN_TRUSTED_PUBLIC_KEY_HEX";
+
+fn decode_hex(input: &str) -> Result<Vec<u8>, ToolkitError> {
+    let trimmed = input.trim();
+    if trimmed.len() % 2 != 0 {
+        return Err(ToolkitError::SecurityViolation(
+            "trusted public key hex length must be even".to_string(),
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(trimmed.len() / 2);
+    let chars: Vec<char> = trimmed.chars().collect();
+    for i in (0..chars.len()).step_by(2) {
+        let hi = chars[i].to_digit(16).ok_or_else(|| {
+            ToolkitError::SecurityViolation(format!(
+                "invalid hex character '{}' in trusted public key",
+                chars[i]
+            ))
+        })?;
+        let lo = chars[i + 1].to_digit(16).ok_or_else(|| {
+            ToolkitError::SecurityViolation(format!(
+                "invalid hex character '{}' in trusted public key",
+                chars[i + 1]
+            ))
+        })?;
+        bytes.push(((hi << 4) | lo) as u8);
+    }
+    Ok(bytes)
+}
+
+fn trusted_public_key_bytes() -> Result<[u8; 32], ToolkitError> {
+    match std::env::var(TRUSTED_PLUGIN_PUBKEY_HEX_ENV) {
+        Ok(hex) => {
+            let decoded = decode_hex(&hex)?;
+            decoded.try_into().map_err(|_| {
+                ToolkitError::SecurityViolation(format!(
+                    "{} must decode to exactly 32 bytes",
+                    TRUSTED_PLUGIN_PUBKEY_HEX_ENV
+                ))
+            })
+        }
+        Err(_) => Ok([0u8; 32]),
+    }
+}
 
 /// Host environment for a WASI plugin
 pub struct WasiPluginHost {
@@ -72,17 +118,47 @@ impl WasiPluginHost {
             ToolkitError::ExecutionFailed(format!("Failed to read WASM: {}", e))
         })?;
 
+        // ─── Phase 12: Secure Marketplace Signature Verification ───
+        let sig_path = path.with_extension("wasm.sig");
+        if !sig_path.exists() {
+            return Err(ToolkitError::SecurityViolation(format!(
+                "Missing signature for plugin: {:?}",
+                path
+            )));
+        }
+
+        let signature = fs::read(&sig_path).await.map_err(|e| {
+            ToolkitError::SecurityViolation(format!("Failed to read signature: {}", e))
+        })?;
+
+        // In production this should come from a trusted store.
+        // For tests, allow injecting a trusted key through env.
+        let trusted_public_key = trusted_public_key_bytes()?;
+
         let module = Module::new(&self.engine, &wasm_bytes).map_err(|e| {
             ToolkitError::ExecutionFailed(format!("Failed to compile WASM: {}", e))
         })?;
 
-        let toolkit = WasiToolkit::new(
+        let toolkit = Arc::new(WasiToolkit::new(
             name,
             module,
             self.engine.clone(),
             self.workspace.clone(),
-        );
-        Ok(Arc::new(toolkit))
+        ));
+
+        // Use SignedToolkit wrapper to perform verification
+        let signed = crate::toolkits::SignedToolkit {
+            toolkit: toolkit.clone(),
+            signature,
+            public_key: trusted_public_key.to_vec(),
+        };
+
+        signed.verify().map_err(|e| {
+            error!("Signature verification failed for plugin {:?}: {}", path, e);
+            e
+        })?;
+
+        Ok(toolkit)
     }
 }
 
@@ -155,7 +231,9 @@ impl Toolkit for WasiToolkit {
             description: format!("Plugin toolkit: {}", self.name),
             parameters: serde_json::json!({
                 "type": "object",
-                "description": "Arbitrary JSON arguments forwarded to the plugin."
+                "description": "Arbitrary JSON arguments forwarded to the plugin.",
+                "properties": {},
+                "additionalProperties": true
             }),
         }]
     }
@@ -230,8 +308,7 @@ impl Toolkit for WasiToolkit {
         // Prefer `run` (our contract), then fall back to `_start` for legacy WASI commands.
         let mut executed = false;
 
-        if let Ok(run_i32) = instance.get_typed_func::<(), i32>(&mut store, "run")
-        {
+        if let Ok(run_i32) = instance.get_typed_func::<(), i32>(&mut store, "run") {
             let code = run_i32.call(&mut store, ()).map_err(|e| {
                 ToolkitError::ExecutionFailed(format!(
                     "WASM execution failed (run -> i32): {}",
@@ -262,7 +339,8 @@ impl Toolkit for WasiToolkit {
         }
 
         if !executed {
-            if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start")
+            if let Ok(start) =
+                instance.get_typed_func::<(), ()>(&mut store, "_start")
             {
                 start.call(&mut store, ()).map_err(|e| {
                     ToolkitError::ExecutionFailed(format!(

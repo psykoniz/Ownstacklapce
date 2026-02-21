@@ -62,7 +62,6 @@ impl PathValidator {
 mod tests {
     use super::*;
     use std::env;
-    use std::fs;
 
     fn workspace() -> PathBuf {
         env::current_dir().unwrap()
@@ -226,7 +225,6 @@ mod tests {
 
     #[test]
     fn stress_test_concurrent_validations() {
-        use std::sync::Arc;
         use std::thread;
 
         let ws = workspace();

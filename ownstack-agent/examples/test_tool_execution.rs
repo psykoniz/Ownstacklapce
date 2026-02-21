@@ -1,7 +1,5 @@
 use ownstack_agent::orchestrator::AgentOrchestrator;
-use ownstack_agent::provider::{
-    LlmMessage, LlmProvider, ToolCall, ToolDefinition,
-};
+use ownstack_agent::provider::{LlmMessage, LlmProvider, ToolCall, ToolDefinition};
 use ownstack_agent::providers::openrouter::OpenRouterProvider;
 use ownstack_agent::toolkits::{CoreToolkit, Toolkit};
 use std::sync::Arc;
@@ -18,7 +16,10 @@ fn to_tool_definitions(toolkit: &dyn Toolkit) -> Vec<ToolDefinition> {
         .collect()
 }
 
-fn add_assistant_tool_calls(messages: &mut Vec<LlmMessage>, tool_calls: Vec<ToolCall>) {
+fn add_assistant_tool_calls(
+    messages: &mut Vec<LlmMessage>,
+    tool_calls: Vec<ToolCall>,
+) {
     let mut assistant = LlmMessage::assistant("");
     assistant.tool_calls = Some(tool_calls);
     messages.push(assistant);
@@ -59,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for round in 1..=4 {
         println!("round={round}");
         let response = provider
-            .complete(messages.clone(), Some(tool_defs.clone()))
+            .complete(messages.clone(), Some(tool_defs.clone()), None)
             .await?;
 
         if response.tool_calls.is_empty() {

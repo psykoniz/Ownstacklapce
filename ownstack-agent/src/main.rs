@@ -5,8 +5,11 @@ use ownstack_agent::provider::LlmProvider;
 use ownstack_agent::providers::anthropic::AnthropicProvider;
 use ownstack_agent::providers::local::LocalProvider;
 use ownstack_agent::providers::openrouter::OpenRouterProvider;
+use ownstack_agent::secret_store;
+use ownstack_agent::toolkits::mcp::{McpServerConfig, McpToolkit};
 use ownstack_engine::{PolicyEngine, ProcessSandbox};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -41,11 +44,67 @@ struct BudgetFile {
     max_llm_calls: Option<u32>,
 }
 
+fn default_mcp_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+struct McpServersFile {
+    #[serde(default)]
+    servers: Vec<McpServerFileEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpServerFileEntry {
+    name: String,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    #[serde(default = "default_mcp_enabled")]
+    enabled: bool,
+}
+
+fn load_mcp_server_configs(workspace: &std::path::Path) -> Vec<McpServerConfig> {
+    let path = workspace.join(".ownstack").join("mcp_servers.json");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) => {
+            debug!("No MCP server config at {:?}: {}", path, err);
+            return Vec::new();
+        }
+    };
+
+    let parsed: McpServersFile = match serde_json::from_str(&content) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            warn!("Failed to parse MCP server config {:?}: {}", path, err);
+            return Vec::new();
+        }
+    };
+
+    parsed
+        .servers
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .map(|entry| McpServerConfig {
+            name: entry.name,
+            command: entry.command,
+            args: entry.args,
+            env: entry.env,
+        })
+        .collect()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
+
+    // Synchronize provider secrets between env and OS keyring.
+    secret_store::sync_env_and_keyring();
 
     let args = Args::parse();
     let workspace = args.workspace.unwrap_or_else(|| {
@@ -61,18 +120,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("OwnStack Agent starting in {:?}", workspace);
     info!("Session: {}", session_id);
 
-    // Initialize provider based on env
-    let provider: Arc<dyn LlmProvider> =
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-            info!("LLM Provider: Anthropic");
+    // Initialize provider based on env.
+    let provider_preference = std::env::var("OWNSTACK_PROVIDER")
+        .ok()
+        .map(|v| v.to_ascii_lowercase());
+    let has_anthropic = secret_store::has_secret("ANTHROPIC_API_KEY");
+    let has_openrouter = secret_store::has_secret("OPENROUTER_API_KEY");
+    let provider: Arc<dyn LlmProvider> = match provider_preference.as_deref() {
+        Some("anthropic") if has_anthropic => {
+            info!("LLM Provider: Anthropic (preferred)");
             Arc::new(AnthropicProvider::from_env()?)
-        } else if std::env::var("OPENROUTER_API_KEY").is_ok() {
-            info!("LLM Provider: OpenRouter");
+        }
+        Some("openrouter") if has_openrouter => {
+            info!("LLM Provider: OpenRouter (preferred)");
             Arc::new(OpenRouterProvider::from_env()?)
-        } else {
-            info!("LLM Provider: Local");
+        }
+        Some("local") | Some("ollama") => {
+            info!("LLM Provider: Local (preferred)");
             Arc::new(LocalProvider::from_env()?)
-        };
+        }
+        Some(pref) => {
+            warn!(
+                "Preferred provider '{}' is unavailable; falling back to auto selection",
+                pref
+            );
+            if has_anthropic {
+                info!("LLM Provider: Anthropic");
+                Arc::new(AnthropicProvider::from_env()?)
+            } else if has_openrouter {
+                info!("LLM Provider: OpenRouter");
+                Arc::new(OpenRouterProvider::from_env()?)
+            } else {
+                info!("LLM Provider: Local");
+                Arc::new(LocalProvider::from_env()?)
+            }
+        }
+        None => {
+            if has_anthropic {
+                info!("LLM Provider: Anthropic");
+                Arc::new(AnthropicProvider::from_env()?)
+            } else if has_openrouter {
+                info!("LLM Provider: OpenRouter");
+                Arc::new(OpenRouterProvider::from_env()?)
+            } else {
+                info!("LLM Provider: Local");
+                Arc::new(LocalProvider::from_env()?)
+            }
+        }
+    };
 
     let mut orchestrator =
         AgentOrchestrator::new(provider.clone(), workspace.clone(), 128000);
@@ -109,7 +204,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        info!("No budgets file found at {:?} (using defaults)", budgets_path);
+        info!(
+            "No budgets file found at {:?} (using defaults)",
+            budgets_path
+        );
     }
 
     let rpc_sink: RpcSink = Arc::new(send_rpc_notification);
@@ -147,6 +245,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(ownstack_agent::toolkits::multivers::MultiversToolkit::new(
             workspace.clone(),
         ));
+    let vision_toolkit = Arc::new(ownstack_agent::toolkits::vision::VisionToolkit::new(
+        workspace.clone(),
+        session_id.clone(),
+    ));
 
     // Register default toolkits
     orchestrator.register_toolkit(core_toolkit.clone());
@@ -154,6 +256,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     orchestrator.register_toolkit(lsp_toolkit.clone());
     orchestrator.register_toolkit(healer_toolkit.clone());
     orchestrator.register_toolkit(multivers_toolkit.clone());
+    orchestrator.register_toolkit(vision_toolkit.clone());
+
+    // Connect configured MCP servers and expose their tools as part of the toolkit set.
+    let mut mcp_toolkit = McpToolkit::new();
+    let mut connected_mcp_servers = 0usize;
+    for server in load_mcp_server_configs(&workspace) {
+        let server_name = server.name.clone();
+        match mcp_toolkit.add_server(server).await {
+            Ok(()) => {
+                connected_mcp_servers += 1;
+                info!("Connected MCP server '{}'", server_name);
+            }
+            Err(err) => {
+                warn!("Failed to connect MCP server '{}': {}", server_name, err);
+            }
+        }
+    }
+    if connected_mcp_servers > 0 {
+        orchestrator.register_toolkit(Arc::new(mcp_toolkit));
+        info!(
+            "Registered MCP toolkit with {} connected server(s)",
+            connected_mcp_servers
+        );
+    }
 
     // Load WASI Plugins
     let plugin_host =
@@ -205,7 +331,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                                 OwnStackRpc::AiPrompt { .. }
-                                | OwnStackRpc::ToolExec { .. } => {
+                                | OwnStackRpc::ToolExec { .. }
+                                | OwnStackRpc::SuggestionDecision { .. } => {
                                     let _ = work_tx_reader.send(rpc);
                                 }
                                 _ => {
@@ -257,10 +384,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     goal: mission.goal,
                                     steps: mission
                                         .steps
-                                        .into_iter()
+                                        .iter()
                                         .map(|s| {
                                             (
-                                                s.description,
+                                                s.description.clone(),
                                                 format!("{:?}", s.status),
                                             )
                                         })
@@ -291,7 +418,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let json_result =
                         serde_json::to_string(&result).unwrap_or_default();
 
-                    send_rpc_notification(OwnStackRpc::ToolResultMsg { json_result });
+                    send_rpc_notification(OwnStackRpc::ToolResultMsg {
+                        json_result,
+                    });
+                }
+                OwnStackRpc::SuggestionDecision {
+                    decision,
+                    message_id,
+                } => {
+                    info!(
+                        "Suggestion decision received: {} ({})",
+                        decision, message_id
+                    );
                 }
                 _ => {
                     debug!("Unhandled RPC (work queue): {:?}", rpc);

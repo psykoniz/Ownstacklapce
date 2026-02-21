@@ -98,6 +98,7 @@ Visual Studio Build Tools with C++ workload
 - **[Architecture Guide](docs/ARCHITECTURE.md)** — System design and components
 - **[Agent Directives](GEMINI.md)** — AI agent behavior rules
 - **[Building Guide](docs/building-from-source.md)** — Detailed build instructions
+- **[Operations Runbook](docs/OPERATIONS.md)** — Security flow, onboarding secrets, release checks
 
 ## 🔒 Security
 

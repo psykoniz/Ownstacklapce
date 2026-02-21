@@ -100,16 +100,16 @@ RUN \
 #!/usr/bin/env bash
 set -euxo pipefail
 
-LAPCE_VERSION=$(cargo pkgid | cut -d'#' -f2 | cut -d'@' -f2 | cut -d':' -f2)
+OWNSTACK_VERSION=$(cargo pkgid | cut -d'#' -f2 | cut -d'@' -f2 | cut -d':' -f2)
 
 case "${RELEASE_TAG_NAME}" in
   nightly-*)
     commit=$(echo "${RELEASE_TAG_NAME}" | cut -d'-' -f2)
-    RELEASE_TAG_NAME="${LAPCE_VERSION}+${commit}"
+    RELEASE_TAG_NAME="${OWNSTACK_VERSION}+${commit}"
   ;;
   debug|nightly)
     date=$(date +%Y%m%d%H%M)
-    RELEASE_TAG_NAME="${LAPCE_VERSION}+${date}"
+    RELEASE_TAG_NAME="${OWNSTACK_VERSION}+${date}"
   ;;
   *)
     RELEASE_TAG_NAME="${RELEASE_TAG_NAME//v/}"
@@ -124,14 +124,13 @@ cat > lapce.spec <<EOL
 Name:     ${PACKAGE_NAME}
 Version:  ${RELEASE_TAG_NAME}
 Release:  1.${DISTRO_ID}${DISTRO_VERSION}
-Summary:  Lightning-fast and Powerful Code Editor written in Rust
+Summary:  Rust-native IDE with embedded AI agents
 License:  Apache-2.0
-URL:      https://github.com/lapce/lapce
+URL:      https://github.com/psykoniz/Ownstack
 Packager: Jakub Panek
 
 %description
-Lapce is written in pure Rust with a UI in Floem (which is also written in Rust).
-It is designed with Rope Science from the Xi-Editor which makes for lightning-fast computation, and leverages OpenGL for rendering.
+OwnStack IDE is written in Rust with a native UI in Floem and secure AI agent integration.
 
 %build
 xx-clang --setup-target-triple
@@ -140,22 +139,24 @@ export RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=/usr/bin/ld.lld"
 export PKG_CONFIG="$(xx-clang --print-prog-name=pkg-config)"
 rustup target add "$(xx-cargo --print-target-triple)"
 export RELEASE_TAG_NAME="${RELEASE_TAG_NAME}"
-xx-cargo build --profile release-lto --bin lapce --frozen
-xx-verify "${CARGO_TARGET_DIR}"/"$(xx-cargo --print-target-triple)"/release-lto/lapce
+xx-cargo build --profile release-lto --bin ownstack-ide --frozen
+xx-verify "${CARGO_TARGET_DIR}"/"$(xx-cargo --print-target-triple)"/release-lto/ownstack-ide
+mkdir -p /output
+cp -v "${CARGO_TARGET_DIR}"/"$(xx-cargo --print-target-triple)"/release-lto/ownstack-ide /output/ownstack-ide
 
 %install
-install -Dm755 "${CARGO_TARGET_DIR}"/"$(xx-cargo --print-target-triple)"/release-lto/lapce %{buildroot}%{_bindir}/lapce
-install -Dm644 extra/linux/dev.lapce.lapce.desktop %{buildroot}/usr/share/applications/dev.lapce.lapce.desktop
-install -Dm644 extra/linux/dev.lapce.lapce.metainfo.xml %{buildroot}/usr/share/metainfo/dev.lapce.lapce.metainfo.xml
-install -Dm644 extra/images/logo.png %{buildroot}/usr/share/pixmaps/dev.lapce.lapce.png
+install -Dm755 "${CARGO_TARGET_DIR}"/"$(xx-cargo --print-target-triple)"/release-lto/ownstack-ide %{buildroot}%{_bindir}/ownstack-ide
+install -Dm644 extra/linux/io.ownstack.ownstackide.desktop %{buildroot}/usr/share/applications/io.ownstack.ownstackide.desktop
+install -Dm644 extra/linux/io.ownstack.ownstackide.metainfo.xml %{buildroot}/usr/share/metainfo/io.ownstack.ownstackide.metainfo.xml
+install -Dm644 extra/images/logo.png %{buildroot}/usr/share/pixmaps/io.ownstack.ownstackide.png
 
 %files
 %license LICENSE*
 %doc *.md
-%{_bindir}/lapce
-/usr/share/applications/dev.lapce.lapce.desktop
-/usr/share/metainfo/dev.lapce.lapce.metainfo.xml
-/usr/share/pixmaps/dev.lapce.lapce.png
+%{_bindir}/ownstack-ide
+/usr/share/applications/io.ownstack.ownstackide.desktop
+/usr/share/metainfo/io.ownstack.ownstackide.metainfo.xml
+/usr/share/pixmaps/io.ownstack.ownstackide.png
 
 %changelog
 * Thu Apr 25 2024 Jakub Panek
@@ -178,10 +179,10 @@ FROM build-base AS dev
 COPY . ./dev
 
 FROM scratch AS binary
-COPY --from=build /output/lapce .
+COPY --from=build /output/ownstack-ide .
 
 FROM scratch AS cross-binary
-COPY --from=build /output/lapce .
+COPY --from=build /output/ownstack-ide .
 
 FROM scratch AS package
 COPY --from=build /output/*.rpm .

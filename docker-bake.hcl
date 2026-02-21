@@ -7,7 +7,7 @@ variable "XX_VERSION" {
 }
 
 variable "PACKAGE_NAME" {
-  default = RELEASE_TAG_NAME == "nightly" ? "lapce-nightly" : "lapce"
+  default = RELEASE_TAG_NAME == "nightly" ? "ownstack-ide-nightly" : "ownstack-ide"
 }
 
 variable "RELEASE_TAG_NAME" {}

@@ -4,6 +4,7 @@ import json
 import time
 import os
 import sys
+from pathlib import Path
 
 def send_rpc(proc, method, params):
     msg = {
@@ -28,14 +29,16 @@ def main():
     time.sleep(1)
 
     # 2. Spawn lapce-proxy
-    proxy_path = r"target\debug\lapce-proxy.exe"
-    if not os.path.exists(proxy_path):
-        print(f"Error: {proxy_path} not found")
+    is_windows = os.name == "nt"
+    proxy_path = Path("target/debug/lapce-proxy.exe") if is_windows else Path("target/debug/lapce-proxy")
+    
+    if not proxy_path.exists():
+        print(f"Error: {proxy_path} not found. Please run 'cargo build -p lapce-proxy' first.")
         sys.exit(1)
         
     print(f"Spawning {proxy_path}...")
     proc = subprocess.Popen(
-        [proxy_path, "--proxy"],
+        [str(proxy_path), "--proxy"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

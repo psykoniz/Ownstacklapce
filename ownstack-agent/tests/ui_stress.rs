@@ -18,6 +18,7 @@ impl LlmProvider for MockFloodProvider {
         &self,
         _messages: Vec<LlmMessage>,
         _tools: Option<Vec<ToolDefinition>>,
+        _model_override: Option<String>,
     ) -> Result<LlmResponse, ProviderError> {
         Ok(LlmResponse {
             content: Some("done".to_string()),
@@ -31,6 +32,7 @@ impl LlmProvider for MockFloodProvider {
         &self,
         _messages: Vec<LlmMessage>,
         _tools: Option<Vec<ToolDefinition>>,
+        _model_override: Option<String>,
     ) -> Result<StreamResult, ProviderError> {
         let count = self.chunk_count;
         let delay = self.delay_ms;

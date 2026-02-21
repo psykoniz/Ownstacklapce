@@ -5,6 +5,7 @@ import time
 import os
 import sys
 import threading
+from pathlib import Path
 
 def send_rpc(proc, method, params):
     msg = {
@@ -56,9 +57,15 @@ def main():
     kill_process_by_name("ownstack-agent.exe")
     time.sleep(1)
 
-    proxy_path = r"target\debug\lapce-proxy.exe"
+    is_windows = os.name == "nt"
+    proxy_path = Path("target/debug/lapce-proxy.exe") if is_windows else Path("target/debug/lapce-proxy")
+    
+    if not proxy_path.exists():
+        print(f"Error: {proxy_path} not found")
+        sys.exit(1)
+
     proc = subprocess.Popen(
-        [proxy_path, "--proxy"],
+        [str(proxy_path), "--proxy"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

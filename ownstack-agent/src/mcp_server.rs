@@ -14,6 +14,7 @@ use crate::toolkits::{ToolDef, Toolkit};
 
 #[derive(Debug, Deserialize)]
 struct IncomingRequest {
+    #[allow(dead_code)]
     jsonrpc: String,
     id: Option<u64>,
     method: String,

@@ -79,7 +79,6 @@ fn test_sandbox_timeout_under_load() {
     assert!(
         result.success,
         "Expected sleep command to succeed. Out: {}, Err: {}",
-        result.stdout,
-        result.stderr
+        result.stdout, result.stderr
     );
 }

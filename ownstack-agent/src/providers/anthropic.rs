@@ -11,6 +11,7 @@ use crate::provider::{
     ProviderError, Role, TokenUsage, ToolCall, ToolDefinition,
 };
 use crate::resilience::ResilientClient;
+use crate::secret_store;
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -28,9 +29,12 @@ impl AnthropicProvider {
     }
 
     pub fn from_env() -> Result<Self, ProviderError> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-            ProviderError::ConfigError("ANTHROPIC_API_KEY not set".to_string())
-        })?;
+        let api_key =
+            secret_store::get_secret("ANTHROPIC_API_KEY").ok_or_else(|| {
+                ProviderError::ConfigError(
+                    "ANTHROPIC_API_KEY not set (env/keyring)".to_string(),
+                )
+            })?;
 
         let model = std::env::var("ANTHROPIC_MODEL")
             .unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string());
@@ -85,6 +89,18 @@ enum AnthropicContentBlock {
         tool_use_id: String,
         content: String,
     },
+    #[serde(rename = "image")]
+    Image {
+        source: AnthropicImageSource,
+    },
+}
+
+#[derive(Serialize)]
+pub struct AnthropicImageSource {
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub media_type: String,
+    pub data: String,
 }
 
 #[derive(Serialize)]
@@ -126,12 +142,13 @@ impl LlmProvider for AnthropicProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<String>,
     ) -> Result<LlmResponse, ProviderError> {
         // Extract system message
         let system_msg = messages
             .iter()
             .find(|m| m.role == Role::System)
-            .map(|m| m.content.clone());
+            .map(|m| m.get_text());
 
         // Convert messages (excluding system)
         let api_messages: Vec<AnthropicMessage> = messages
@@ -144,15 +161,34 @@ impl LlmProvider for AnthropicProvider {
                     Role::System => unreachable!(),
                 };
 
-                let content = if m.role == Role::Tool {
-                    AnthropicContent::Blocks(vec![
-                        AnthropicContentBlock::ToolResult {
-                            tool_use_id: m.tool_call_id.unwrap_or_default(),
-                            content: m.content,
-                        },
-                    ])
-                } else {
-                    AnthropicContent::Text(m.content)
+                let content = match m.role {
+                    Role::Tool => {
+                        AnthropicContent::Blocks(vec![
+                            AnthropicContentBlock::ToolResult {
+                                tool_use_id: m.tool_call_id.clone().unwrap_or_default(),
+                                content: m.get_text(),
+                            },
+                        ])
+                    }
+                    _ => match m.content {
+                        crate::provider::MessageContent::Text(s) => AnthropicContent::Text(s),
+                        crate::provider::MessageContent::Parts(parts) => {
+                            AnthropicContent::Blocks(parts.into_iter().map(|p| match p {
+                                crate::provider::ContentPart::Text { text } => {
+                                    AnthropicContentBlock::Text { text }
+                                }
+                                crate::provider::ContentPart::Image { source } => {
+                                    AnthropicContentBlock::Image {
+                                        source: AnthropicImageSource {
+                                            type_: source.type_,
+                                            media_type: source.media_type,
+                                            data: source.data,
+                                        },
+                                    }
+                                }
+                            }).collect())
+                        }
+                    },
                 };
 
                 AnthropicMessage {
@@ -173,7 +209,7 @@ impl LlmProvider for AnthropicProvider {
         });
 
         let request = AnthropicRequest {
-            model: self.config.model.clone(),
+            model: model_override.unwrap_or_else(|| self.config.model.clone()),
             max_tokens: self.config.max_tokens,
             messages: api_messages,
             system: system_msg,
@@ -256,6 +292,7 @@ impl LlmProvider for AnthropicProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<String>,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
         use crate::provider::{FinishReason, StreamChunk, ToolCallDelta};
 
@@ -263,7 +300,7 @@ impl LlmProvider for AnthropicProvider {
         let system_msg = messages
             .iter()
             .find(|m| m.role == Role::System)
-            .map(|m| m.content.clone());
+            .map(|m| m.get_text());
 
         let api_messages: Vec<AnthropicMessage> = messages
             .into_iter()
@@ -277,12 +314,12 @@ impl LlmProvider for AnthropicProvider {
                 let content = if m.role == Role::Tool {
                     AnthropicContent::Blocks(vec![
                         AnthropicContentBlock::ToolResult {
-                            tool_use_id: m.tool_call_id.unwrap_or_default(),
-                            content: m.content,
+                            tool_use_id: m.tool_call_id.clone().unwrap_or_default(),
+                            content: m.get_text(),
                         },
                     ])
                 } else {
-                    AnthropicContent::Text(m.content)
+                    AnthropicContent::Text(m.get_text())
                 };
                 AnthropicMessage {
                     role: role.to_string(),
@@ -302,7 +339,7 @@ impl LlmProvider for AnthropicProvider {
         });
 
         let mut body = serde_json::to_value(&AnthropicRequest {
-            model: self.config.model.clone(),
+            model: model_override.unwrap_or_else(|| self.config.model.clone()),
             max_tokens: self.config.max_tokens,
             messages: api_messages,
             system: system_msg,
@@ -490,14 +527,14 @@ mod tests {
     fn test_anthropic_message_conversion() {
         let msg = LlmMessage {
             role: Role::User,
-            content: "hello".to_string(),
+            content: "hello".into(),
             tool_call_id: None,
             tool_calls: None,
         };
 
         let api_msg = AnthropicMessage {
             role: "user".to_string(),
-            content: AnthropicContent::Text(msg.content),
+            content: AnthropicContent::Text(msg.get_text()),
         };
 
         let json = serde_json::to_string(&api_msg).unwrap();
@@ -508,7 +545,7 @@ mod tests {
     fn test_anthropic_tool_result_conversion() {
         let msg = LlmMessage {
             role: Role::Tool,
-            content: "result".to_string(),
+            content: "result".into(),
             tool_call_id: Some("call_123".to_string()),
             tool_calls: None,
         };
@@ -517,8 +554,8 @@ mod tests {
             role: "user".to_string(),
             content: AnthropicContent::Blocks(vec![
                 AnthropicContentBlock::ToolResult {
-                    tool_use_id: msg.tool_call_id.unwrap(),
-                    content: msg.content,
+                    tool_use_id: msg.tool_call_id.clone().unwrap(),
+                    content: msg.get_text(),
                 },
             ]),
         };
