@@ -3,10 +3,13 @@
 //! Loads and executes .wasm toolkits in a restricted environment.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
 use tracing::{debug, info};
+use wasi_common::pipe::{ReadPipe, WritePipe};
 use wasmtime::*;
 use wasmtime_wasi::WasiCtxBuilder;
 
@@ -107,6 +110,38 @@ impl WasiToolkit {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct PluginInput {
+    tool_name: String,
+    args: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginOutput {
+    success: bool,
+    output: String,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+fn capture_pipe_output(
+    pipe: WritePipe<Cursor<Vec<u8>>>,
+    stream_name: &str,
+) -> Result<String, ToolkitError> {
+    let cursor = pipe.try_into_inner().map_err(|_| {
+        ToolkitError::ExecutionFailed(format!(
+            "Failed to capture plugin {} (pipe still borrowed)",
+            stream_name
+        ))
+    })?;
+    String::from_utf8(cursor.into_inner()).map_err(|e| {
+        ToolkitError::ExecutionFailed(format!(
+            "Plugin {} is not valid UTF-8: {}",
+            stream_name, e
+        ))
+    })
+}
+
 #[async_trait]
 impl Toolkit for WasiToolkit {
     fn name(&self) -> &str {
@@ -120,9 +155,7 @@ impl Toolkit for WasiToolkit {
             description: format!("Plugin toolkit: {}", self.name),
             parameters: serde_json::json!({
                 "type": "object",
-                "properties": {
-                    "input": { "type": "string" }
-                }
+                "description": "Arbitrary JSON arguments forwarded to the plugin."
             }),
         }]
     }
@@ -134,11 +167,33 @@ impl Toolkit for WasiToolkit {
     ) -> Result<ToolResult, ToolkitError> {
         debug!("Executing WASI tool: {} with args: {:?}", tool_name, args);
 
-        // 1. Setup WASI context
-        // In Wasmtime 14, we use WasiCtxBuilder
+        if tool_name != self.name {
+            return Err(ToolkitError::ToolNotFound(format!(
+                "{} (toolkit {})",
+                tool_name, self.name
+            )));
+        }
+
+        let input = PluginInput {
+            tool_name: tool_name.to_string(),
+            args,
+        };
+        let input_json = serde_json::to_vec(&input).map_err(|e| {
+            ToolkitError::InvalidArguments(format!(
+                "Failed to serialize plugin input: {}",
+                e
+            ))
+        })?;
+
+        let stdin_pipe = ReadPipe::from(input_json);
+        let stdout_pipe = WritePipe::new_in_memory();
+        let stderr_pipe = WritePipe::new_in_memory();
+
+        // 1. Setup WASI context with JSON stdin/stdout ABI.
         let wasi = WasiCtxBuilder::new()
-            .inherit_stdout()
-            .inherit_stderr()
+            .stdin(Box::new(stdin_pipe))
+            .stdout(Box::new(stdout_pipe.clone()))
+            .stderr(Box::new(stderr_pipe.clone()))
             .preopened_dir(
                 wasmtime_wasi::Dir::open_ambient_dir(
                     &self.workspace,
@@ -171,27 +226,92 @@ impl Toolkit for WasiToolkit {
                 ToolkitError::ExecutionFailed(format!("Instantiation error: {}", e))
             })?;
 
-        // 4. Call entry point
-        // Look for "run" function
-        let func = instance
-            .get_typed_func::<(), ()>(&mut store, "run")
-            .map_err(|_| {
-                ToolkitError::ToolNotFound(format!(
-                    "Plugin {} does not export 'run'",
-                    self.name
+        // 4. Call entry point.
+        // Prefer `run` (our contract), then fall back to `_start` for legacy WASI commands.
+        let mut executed = false;
+
+        if let Ok(run_i32) = instance.get_typed_func::<(), i32>(&mut store, "run")
+        {
+            let code = run_i32.call(&mut store, ()).map_err(|e| {
+                ToolkitError::ExecutionFailed(format!(
+                    "WASM execution failed (run -> i32): {}",
+                    e
                 ))
             })?;
+            if code != 0 {
+                return Err(ToolkitError::ExecutionFailed(format!(
+                    "Plugin {} returned non-zero exit code: {}",
+                    self.name, code
+                )));
+            }
+            executed = true;
+        }
 
-        // Standard ABI: We'll eventually pass JSON via shared memory.
-        // For Phase 3 prototype, we just trigger the execution.
-        func.call(&mut store, ()).map_err(|e| {
-            ToolkitError::ExecutionFailed(format!("WASM execution failed: {}", e))
+        if !executed {
+            if let Ok(run_unit) =
+                instance.get_typed_func::<(), ()>(&mut store, "run")
+            {
+                run_unit.call(&mut store, ()).map_err(|e| {
+                    ToolkitError::ExecutionFailed(format!(
+                        "WASM execution failed (run -> ()): {}",
+                        e
+                    ))
+                })?;
+                executed = true;
+            }
+        }
+
+        if !executed {
+            if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start")
+            {
+                start.call(&mut store, ()).map_err(|e| {
+                    ToolkitError::ExecutionFailed(format!(
+                        "WASM execution failed (_start): {}",
+                        e
+                    ))
+                })?;
+                executed = true;
+            }
+        }
+
+        if !executed {
+            return Err(ToolkitError::ToolNotFound(format!(
+                "Plugin {} exports neither 'run' nor '_start'",
+                self.name
+            )));
+        }
+
+        // Drop runtime state before collecting pipe buffers.
+        drop(linker);
+        drop(store);
+
+        let stdout = capture_pipe_output(stdout_pipe, "stdout")?;
+        let stderr = capture_pipe_output(stderr_pipe, "stderr")?;
+
+        let output = stdout.trim();
+        if output.is_empty() {
+            return Err(ToolkitError::ExecutionFailed(format!(
+                "Plugin {} returned empty stdout. stderr={}",
+                self.name, stderr
+            )));
+        }
+
+        let parsed: PluginOutput = serde_json::from_str(output).map_err(|e| {
+            ToolkitError::ExecutionFailed(format!(
+                "Plugin {} returned invalid JSON output: {}. stdout={}",
+                self.name, e, output
+            ))
         })?;
 
-        Ok(ToolResult::success(format!(
-            "WASI plugin {} executed successfully",
-            self.name
-        )))
+        if parsed.success {
+            Ok(ToolResult::success(parsed.output))
+        } else {
+            let mut message = parsed.error.unwrap_or(parsed.output);
+            if message.trim().is_empty() && !stderr.trim().is_empty() {
+                message = stderr;
+            }
+            Ok(ToolResult::failure(message, None))
+        }
     }
 }
 
