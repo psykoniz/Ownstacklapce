@@ -1,6 +1,6 @@
 //! Core Toolkit
 //!
-//! Essential tools: exec, read, write, search
+//! Essential tools: exec, read, write, edit, search
 //! All operations go through ownstack-engine for security.
 
 use async_trait::async_trait;
@@ -245,6 +245,114 @@ impl CoreToolkit {
         res
     }
 
+    async fn edit_file(
+        &self,
+        path: &str,
+        old_text: &str,
+        new_text: &str,
+    ) -> Result<ToolResult, ToolkitError> {
+        let start = Instant::now();
+        let file_path = std::path::Path::new(path);
+
+        // Path validation
+        let validated_path =
+            self.path_validator.validate(file_path).map_err(|e| {
+                self.audit(
+                    "edit",
+                    path,
+                    PolicyDecision::Blocked,
+                    "core.edit",
+                    false,
+                    start.elapsed().as_millis() as u64,
+                    vec![path.to_string()],
+                );
+                ToolkitError::SecurityViolation(e.to_string())
+            })?;
+
+        // Read existing content
+        let content = match tokio::fs::read_to_string(&validated_path).await {
+            Ok(c) => c,
+            Err(e) => {
+                self.audit(
+                    "edit",
+                    path,
+                    PolicyDecision::Auto,
+                    "core.edit",
+                    false,
+                    start.elapsed().as_millis() as u64,
+                    vec![validated_path.to_string_lossy().to_string()],
+                );
+                return Ok(ToolResult::failure(
+                    format!("Failed to read file for editing: {}", e),
+                    None,
+                ));
+            }
+        };
+
+        // Find and replace
+        let occurrences = content.matches(old_text).count();
+        if occurrences == 0 {
+            self.audit(
+                "edit",
+                path,
+                PolicyDecision::Auto,
+                "core.edit",
+                false,
+                start.elapsed().as_millis() as u64,
+                vec![validated_path.to_string_lossy().to_string()],
+            );
+            return Ok(ToolResult::failure(
+                "old_text not found in file".to_string(),
+                None,
+            ));
+        }
+
+        if occurrences > 1 {
+            self.audit(
+                "edit",
+                path,
+                PolicyDecision::Auto,
+                "core.edit",
+                false,
+                start.elapsed().as_millis() as u64,
+                vec![validated_path.to_string_lossy().to_string()],
+            );
+            return Ok(ToolResult::failure(
+                format!(
+                    "old_text found {} times — must be unique. Provide more context.",
+                    occurrences
+                ),
+                None,
+            ));
+        }
+
+        let new_content = content.replacen(old_text, new_text, 1);
+        let res = match tokio::fs::write(&validated_path, &new_content).await {
+            Ok(()) => Ok(ToolResult::success(format!(
+                "File edited: {} (1 replacement)",
+                path
+            ))),
+            Err(e) => Ok(ToolResult::failure(
+                format!("Failed to write edited file: {}", e),
+                None,
+            )),
+        };
+
+        if let Ok(result) = &res {
+            self.audit(
+                "edit",
+                path,
+                PolicyDecision::Auto,
+                "core.edit",
+                result.success,
+                start.elapsed().as_millis() as u64,
+                vec![validated_path.to_string_lossy().to_string()],
+            );
+        }
+
+        res
+    }
+
     async fn search_files(&self, pattern: &str) -> Result<ToolResult, ToolkitError> {
         let start = Instant::now();
         let pattern = pattern.trim();
@@ -302,15 +410,43 @@ fn search_workspace(
     workspace: PathBuf,
     regex: Regex,
 ) -> Result<(String, Vec<String>), String> {
-    const MAX_MATCHES: usize = 50;
+    const MAX_MATCHES: usize = 200;
     const MAX_FILE_BYTES: u64 = 1_000_000; // avoid huge files
     const MAX_AUDIT_PATHS: usize = 20;
 
     fn is_allowed_ext(path: &std::path::Path) -> bool {
         let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-            return false;
+            // Allow well-known extensionless config files
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                return false;
+            };
+            return matches!(
+                name,
+                "Makefile" | "Dockerfile" | "Jenkinsfile" | "Procfile"
+                    | ".gitignore" | ".env.example"
+            );
         };
-        matches!(ext, "rs" | "py" | "ts" | "js" | "toml" | "md")
+        matches!(
+            ext,
+            // Systems programming
+            "rs" | "go" | "c" | "h" | "cpp" | "hpp" | "cc"
+            // Web / scripting
+            | "py" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs"
+            // JVM
+            | "java" | "kt" | "scala" | "groovy"
+            // Config / data
+            | "toml" | "yaml" | "yml" | "json" | "xml" | "ini" | "cfg"
+            // Shell / DevOps
+            | "sh" | "bash" | "zsh" | "fish" | "ps1"
+            // Web markup / style
+            | "html" | "htm" | "css" | "scss" | "less" | "svelte" | "vue"
+            // Documentation
+            | "md" | "rst" | "txt"
+            // Other
+            | "sql" | "graphql" | "proto" | "tf" | "hcl"
+            | "rb" | "php" | "swift" | "zig" | "nim" | "lua"
+            | "ex" | "exs" | "erl" | "hs" | "ml" | "clj"
+        )
     }
 
     fn should_skip_dir(name: &std::ffi::OsStr) -> bool {
@@ -459,6 +595,13 @@ struct SearchArgs {
     pattern: String,
 }
 
+#[derive(Deserialize)]
+struct EditArgs {
+    path: String,
+    old_text: String,
+    new_text: String,
+}
+
 #[async_trait]
 impl Toolkit for CoreToolkit {
     fn name(&self) -> &str {
@@ -514,6 +657,28 @@ impl Toolkit for CoreToolkit {
                 }),
             },
             ToolDef {
+                name: "edit".to_string(),
+                description: "Edit a file by replacing exact text. old_text must appear exactly once.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Relative path to the file"
+                        },
+                        "old_text": {
+                            "type": "string",
+                            "description": "Exact text to find (must be unique in file)"
+                        },
+                        "new_text": {
+                            "type": "string",
+                            "description": "Replacement text"
+                        }
+                    },
+                    "required": ["path", "old_text", "new_text"]
+                }),
+            },
+            ToolDef {
                 name: "search".to_string(),
                 description: "Search for a pattern in files".to_string(),
                 parameters: serde_json::json!({
@@ -551,6 +716,12 @@ impl Toolkit for CoreToolkit {
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
                 self.write_file(&parsed.path, &parsed.content).await
             }
+            "edit" => {
+                let parsed: EditArgs = serde_json::from_value(args)
+                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
+                self.edit_file(&parsed.path, &parsed.old_text, &parsed.new_text)
+                    .await
+            }
             "search" => {
                 let parsed: SearchArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
@@ -572,7 +743,7 @@ mod tests {
         let tk =
             CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
         assert_eq!(tk.name(), "core");
-        assert_eq!(tk.tools().len(), 4);
+        assert_eq!(tk.tools().len(), 5);
     }
 
     #[tokio::test]
@@ -585,6 +756,7 @@ mod tests {
         assert!(names.contains(&"exec".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"write".to_string()));
+        assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"search".to_string()));
     }
 
@@ -696,5 +868,85 @@ mod tests {
         let args = serde_json::json!({"pattern": "["});
         let res = tk.execute("search", args).await;
         assert!(matches!(res, Err(ToolkitError::InvalidArguments(_))));
+    }
+
+    #[tokio::test]
+    async fn test_core_toolkit_edit_success() {
+        let dir = tempdir().unwrap();
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
+        // Create file
+        std::fs::write(dir.path().join("edit_test.txt"), "hello world\nfoo bar\n")
+            .unwrap();
+
+        // Edit
+        let args = serde_json::json!({
+            "path": "edit_test.txt",
+            "old_text": "foo bar",
+            "new_text": "baz qux"
+        });
+        let res = tk.execute("edit", args).await.unwrap();
+        assert!(res.success, "edit failed: {}", res.stderr);
+
+        // Verify
+        let content =
+            std::fs::read_to_string(dir.path().join("edit_test.txt")).unwrap();
+        assert_eq!(content, "hello world\nbaz qux\n");
+    }
+
+    #[tokio::test]
+    async fn test_core_toolkit_edit_not_found() {
+        let dir = tempdir().unwrap();
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
+        std::fs::write(dir.path().join("edit_nf.txt"), "hello world").unwrap();
+
+        let args = serde_json::json!({
+            "path": "edit_nf.txt",
+            "old_text": "does not exist",
+            "new_text": "replacement"
+        });
+        let res = tk.execute("edit", args).await.unwrap();
+        assert!(!res.success);
+        assert!(res.stderr.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_core_toolkit_edit_ambiguous() {
+        let dir = tempdir().unwrap();
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
+        std::fs::write(
+            dir.path().join("edit_dup.txt"),
+            "foo\nfoo\nbar\n",
+        )
+        .unwrap();
+
+        let args = serde_json::json!({
+            "path": "edit_dup.txt",
+            "old_text": "foo",
+            "new_text": "baz"
+        });
+        let res = tk.execute("edit", args).await.unwrap();
+        assert!(!res.success);
+        assert!(res.stderr.contains("2 times"));
+    }
+
+    #[tokio::test]
+    async fn test_core_toolkit_edit_invalid_path() {
+        let dir = tempdir().unwrap();
+        let tk =
+            CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
+        let args = serde_json::json!({
+            "path": "../outside.txt",
+            "old_text": "a",
+            "new_text": "b"
+        });
+        let res = tk.execute("edit", args).await;
+        assert!(res.is_err()); // SecurityViolation
     }
 }

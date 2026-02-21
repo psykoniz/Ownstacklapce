@@ -87,7 +87,7 @@ impl FailureAnalyzer {
 
         let mut failures = Vec::new();
 
-        // Import errors
+        // ─── Python Import Errors ────────────────────────────────
         for pattern in &[
             "ModuleNotFoundError: No module named",
             "ImportError: cannot import name",
@@ -105,7 +105,7 @@ impl FailureAnalyzer {
             }
         }
 
-        // Syntax errors
+        // ─── Python Syntax Errors ────────────────────────────────
         if output.contains("SyntaxError:") || output.contains("IndentationError:") {
             failures.push(Failure {
                 failure_type: FailureType::SyntaxError,
@@ -122,7 +122,7 @@ impl FailureAnalyzer {
             });
         }
 
-        // Type errors
+        // ─── Python Type Errors ──────────────────────────────────
         if output.contains("TypeError:") || output.contains("AttributeError:") {
             failures.push(Failure {
                 failure_type: FailureType::TypeError,
@@ -137,8 +137,123 @@ impl FailureAnalyzer {
             });
         }
 
-        // Test failures
-        if output.contains("FAILED") || output.contains("failed") {
+        // ─── Rust Compiler Errors ────────────────────────────────
+        if output.contains("error[E") {
+            let rust_file = Self::extract_rust_file_path(output);
+            let rust_line = Self::extract_rust_line_number(output);
+            let error_code = Self::extract_rust_error_code(output);
+            let error_msg = Self::extract_after(output, "error[E")
+                .map(|s| format!("error[E{}", s))
+                .unwrap_or_else(|| "Rust compilation error".to_string());
+
+            let mut suggested = Vec::new();
+            // Missing crate → suggest adding to Cargo.toml
+            if output.contains("unresolved import") || output.contains("can't find crate") {
+                if let Some(crate_name) = Self::extract_rust_crate_name(output) {
+                    suggested.push(format!("cargo add {}", crate_name));
+                }
+            }
+            // Missing derive or trait
+            if output.contains("doesn't implement") || output.contains("not implemented") {
+                suggested.push("# Implement the required trait or add a derive macro".to_string());
+            }
+
+            failures.push(Failure {
+                failure_type: if error_code.as_deref() == Some("E0433") || error_code.as_deref() == Some("E0432") {
+                    FailureType::ImportError
+                } else if error_code.as_deref() == Some("E0308") || error_code.as_deref() == Some("E0277") {
+                    FailureType::TypeError
+                } else {
+                    FailureType::SyntaxError
+                },
+                file_path: rust_file,
+                line_number: rust_line,
+                error_message: error_msg,
+                suggested_fixes: suggested,
+            });
+        }
+
+        // Rust: missing dependency in Cargo.toml
+        if output.contains("no matching package named") {
+            let pkg = Self::extract_after(output, "no matching package named `")
+                .map(|s| s.trim_end_matches('`').to_string())
+                .unwrap_or_default();
+            failures.push(Failure {
+                failure_type: FailureType::DependencyMissing,
+                file_path: None,
+                line_number: None,
+                error_message: format!("Missing Rust crate: {}", pkg),
+                suggested_fixes: vec![format!("cargo add {}", pkg)],
+            });
+        }
+
+        // ─── JavaScript / TypeScript Errors ──────────────────────
+        if output.contains("ReferenceError:") || output.contains("is not defined") {
+            failures.push(Failure {
+                failure_type: FailureType::RuntimeError,
+                file_path: Self::extract_js_file_path(output),
+                line_number: Self::extract_js_line_number(output),
+                error_message: Self::extract_after(output, "ReferenceError:")
+                    .unwrap_or_else(|| "ReferenceError".to_string()),
+                suggested_fixes: Vec::new(),
+            });
+        }
+
+        // TypeScript compilation errors (TSxxxx)
+        if output.contains("error TS") {
+            failures.push(Failure {
+                failure_type: FailureType::SyntaxError,
+                file_path: Self::extract_ts_file_path(output),
+                line_number: Self::extract_ts_line_number(output),
+                error_message: Self::extract_after(output, "error TS")
+                    .map(|s| format!("TS{}", s))
+                    .unwrap_or_else(|| "TypeScript compilation error".to_string()),
+                suggested_fixes: Vec::new(),
+            });
+        }
+
+        // Node.js MODULE_NOT_FOUND
+        if output.contains("MODULE_NOT_FOUND") || output.contains("Cannot find module") {
+            let module = Self::extract_quoted(output, "Cannot find module");
+            failures.push(Failure {
+                failure_type: FailureType::DependencyMissing,
+                file_path: None,
+                line_number: None,
+                error_message: format!("Missing Node module: '{}'", module),
+                suggested_fixes: vec![format!("npm install {}", module)],
+            });
+        }
+
+        // ─── Go Errors ──────────────────────────────────────────
+        if output.contains("undefined:") && output.contains(".go:") {
+            failures.push(Failure {
+                failure_type: FailureType::SyntaxError,
+                file_path: Self::extract_go_file_path(output),
+                line_number: Self::extract_go_line_number(output),
+                error_message: Self::extract_after(output, "undefined:")
+                    .map(|s| format!("undefined: {}", s))
+                    .unwrap_or_else(|| "Go compilation error".to_string()),
+                suggested_fixes: Vec::new(),
+            });
+        }
+
+        if output.contains("cannot find package") {
+            let pkg = Self::extract_quoted(output, "cannot find package");
+            failures.push(Failure {
+                failure_type: FailureType::DependencyMissing,
+                file_path: None,
+                line_number: None,
+                error_message: format!("Missing Go package: '{}'", pkg),
+                suggested_fixes: vec![format!("go get {}", pkg)],
+            });
+        }
+
+        // ─── Test Failures (multi-language) ──────────────────────
+        let has_test_failure = output.contains("FAILED")
+            || output.contains("test result: FAILED")
+            || output.contains("failures:")
+            || (output.contains("FAIL") && output.contains(".go:"));
+        if has_test_failure {
             failures.push(Failure {
                 failure_type: FailureType::TestFailure,
                 file_path: Self::extract_file_path(output),
@@ -150,9 +265,11 @@ impl FailureAnalyzer {
             });
         }
 
-        // Dependency missing
+        // ─── Dependency Missing (multi-language) ─────────────────
         if output.contains("pip install")
             || output.contains("npm install")
+            || output.contains("cargo add")
+            || output.contains("go get")
             || output.contains("Could not find a version")
         {
             failures.push(Failure {
@@ -226,11 +343,158 @@ impl FailureAnalyzer {
             let trimmed = line.trim();
             if trimmed.starts_with("pip install")
                 || trimmed.starts_with("npm install")
+                || trimmed.starts_with("cargo add")
+                || trimmed.starts_with("go get")
             {
                 cmds.push(trimmed.to_string());
             }
         }
         cmds
+    }
+
+    // ─── Rust-specific extractors ────────────────────────────────
+
+    fn extract_rust_file_path(output: &str) -> Option<String> {
+        // Rust errors: --> src/main.rs:15:5
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("-->") {
+                let rest = trimmed.trim_start_matches("-->").trim();
+                if let Some(colon_pos) = rest.find(':') {
+                    return Some(rest[..colon_pos].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn extract_rust_line_number(output: &str) -> Option<u32> {
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("-->") {
+                let rest = trimmed.trim_start_matches("-->").trim();
+                let parts: Vec<&str> = rest.split(':').collect();
+                if parts.len() >= 2 {
+                    return parts[1].parse().ok();
+                }
+            }
+        }
+        None
+    }
+
+    fn extract_rust_error_code(output: &str) -> Option<String> {
+        // error[E0308]: mismatched types
+        if let Some(start) = output.find("error[E") {
+            let rest = &output[start + 6..]; // skip "error["
+            if let Some(end) = rest.find(']') {
+                return Some(rest[..end].to_string());
+            }
+        }
+        None
+    }
+
+    fn extract_rust_crate_name(output: &str) -> Option<String> {
+        // "unresolved import `foo`" or "can't find crate for `foo`"
+        for pattern in &["unresolved import `", "can't find crate for `"] {
+            if let Some(pos) = output.find(pattern) {
+                let rest = &output[pos + pattern.len()..];
+                if let Some(end) = rest.find('`') {
+                    let name = &rest[..end];
+                    // Take the top-level crate name (before ::)
+                    let crate_name = name.split("::").next().unwrap_or(name);
+                    return Some(crate_name.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    // ─── JavaScript / TypeScript extractors ──────────────────────
+
+    fn extract_js_file_path(output: &str) -> Option<String> {
+        // Node.js: at Object.<anonymous> (/path/to/file.js:10:5)
+        // or: /path/to/file.js:10
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if let Some(paren_start) = trimmed.find('(') {
+                let rest = &trimmed[paren_start + 1..];
+                if let Some(colon) = rest.find(':') {
+                    let path = &rest[..colon];
+                    if path.ends_with(".js") || path.ends_with(".ts") || path.ends_with(".mjs") {
+                        return Some(path.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn extract_js_line_number(output: &str) -> Option<u32> {
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if let Some(paren_start) = trimmed.find('(') {
+                let rest = &trimmed[paren_start + 1..];
+                let parts: Vec<&str> = rest.split(':').collect();
+                if parts.len() >= 2 {
+                    return parts[1].parse().ok();
+                }
+            }
+        }
+        None
+    }
+
+    fn extract_ts_file_path(output: &str) -> Option<String> {
+        // TypeScript: src/app.ts(15,3): error TS2304
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("error TS") {
+                if let Some(paren) = trimmed.find('(') {
+                    return Some(trimmed[..paren].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn extract_ts_line_number(output: &str) -> Option<u32> {
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("error TS") {
+                if let Some(paren) = trimmed.find('(') {
+                    let rest = &trimmed[paren + 1..];
+                    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    return num.parse().ok();
+                }
+            }
+        }
+        None
+    }
+
+    // ─── Go extractors ──────────────────────────────────────────
+
+    fn extract_go_file_path(output: &str) -> Option<String> {
+        // Go: ./main.go:15:5: undefined: foo
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains(".go:") {
+                if let Some(colon) = trimmed.find(".go:") {
+                    return Some(trimmed[..colon + 3].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn extract_go_line_number(output: &str) -> Option<u32> {
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if let Some(go_ext) = trimmed.find(".go:") {
+                let rest = &trimmed[go_ext + 4..]; // skip ".go:"
+                let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                return num.parse().ok();
+            }
+        }
+        None
     }
 }
 
@@ -412,5 +676,154 @@ impl Toolkit for HealerToolkit {
             }
             _ => Err(ToolkitError::ToolNotFound(tool_name.to_string())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── Python errors (existing behavior) ──────────────────────
+    #[test]
+    fn test_python_import_error() {
+        let output = "ModuleNotFoundError: No module named 'flask'";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(!failures.is_empty());
+        assert_eq!(failures[0].failure_type, FailureType::ImportError);
+        assert!(failures[0].suggested_fixes[0].contains("pip install"));
+    }
+
+    #[test]
+    fn test_python_syntax_error() {
+        let output = "  File \"app.py\", line 10\n    def broken(\nSyntaxError: unexpected EOF while parsing";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::SyntaxError));
+    }
+
+    #[test]
+    fn test_python_type_error() {
+        let output = "TypeError: unsupported operand type(s) for +: 'int' and 'str'";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::TypeError));
+    }
+
+    // ─── Rust errors ────────────────────────────────────────────
+    #[test]
+    fn test_rust_compilation_error() {
+        let output = r#"error[E0308]: mismatched types
+ --> src/main.rs:15:5
+  |
+15 |     foo(x)
+  |     ^^^^^^ expected `u32`, found `&str`"#;
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::TypeError));
+        assert_eq!(failures[0].file_path.as_deref(), Some("src/main.rs"));
+        assert_eq!(failures[0].line_number, Some(15));
+    }
+
+    #[test]
+    fn test_rust_unresolved_import() {
+        let output = r#"error[E0432]: unresolved import `tokio`
+ --> src/main.rs:1:5
+  |
+1 | use tokio::runtime;
+  |     ^^^^^ could not find `tokio` in the crate root"#;
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::ImportError));
+        assert!(failures[0].suggested_fixes.iter().any(|f| f.contains("cargo add")));
+    }
+
+    #[test]
+    fn test_rust_missing_crate() {
+        let output = "error: no matching package named `serde_yaml` found";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::DependencyMissing));
+    }
+
+    #[test]
+    fn test_rust_error_code_extraction() {
+        assert_eq!(
+            FailureAnalyzer::extract_rust_error_code("error[E0308]: mismatched types"),
+            Some("E0308".to_string())
+        );
+        assert_eq!(
+            FailureAnalyzer::extract_rust_error_code("no error code here"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_rust_file_path_extraction() {
+        let output = " --> src/lib.rs:42:10\n  |";
+        assert_eq!(
+            FailureAnalyzer::extract_rust_file_path(output),
+            Some("src/lib.rs".to_string())
+        );
+    }
+
+    // ─── JavaScript / TypeScript errors ─────────────────────────
+    #[test]
+    fn test_js_reference_error() {
+        let output = "ReferenceError: foo is not defined\n    at Object.<anonymous> (/app/index.js:5:1)";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::RuntimeError));
+    }
+
+    #[test]
+    fn test_ts_compilation_error() {
+        let output = "src/app.ts(15,3): error TS2304: Cannot find name 'foo'.";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::SyntaxError));
+        assert_eq!(failures[0].file_path.as_deref(), Some("src/app.ts"));
+        assert_eq!(failures[0].line_number, Some(15));
+    }
+
+    #[test]
+    fn test_node_module_not_found() {
+        let output = "Error: Cannot find module 'express'\nRequire stack:\n- /app/index.js\ncode: 'MODULE_NOT_FOUND'";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::DependencyMissing));
+        assert!(failures.iter().any(|f| f.suggested_fixes.iter().any(|s| s.contains("npm install"))));
+    }
+
+    // ─── Go errors ──────────────────────────────────────────────
+    #[test]
+    fn test_go_undefined_error() {
+        let output = "./main.go:15:5: undefined: handleRequest";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::SyntaxError));
+        assert_eq!(failures[0].file_path.as_deref(), Some("./main.go"));
+        assert_eq!(failures[0].line_number, Some(15));
+    }
+
+    #[test]
+    fn test_go_missing_package() {
+        let output = "cannot find package 'github.com/gin-gonic/gin' in any of:";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::DependencyMissing));
+    }
+
+    // ─── Test failures ──────────────────────────────────────────
+    #[test]
+    fn test_cargo_test_failure() {
+        let output = "test result: FAILED. 3 passed; 1 failed; 0 ignored";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert!(failures.iter().any(|f| f.failure_type == FailureType::TestFailure));
+    }
+
+    // ─── Successful command returns no failures ─────────────────
+    #[test]
+    fn test_success_no_failures() {
+        let failures = FailureAnalyzer::analyze("all good", 0);
+        assert!(failures.is_empty());
+    }
+
+    // ─── Unknown fallback ───────────────────────────────────────
+    #[test]
+    fn test_unknown_error_fallback() {
+        let output = "some weird error nobody expected";
+        let failures = FailureAnalyzer::analyze(output, 1);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].failure_type, FailureType::Unknown);
     }
 }

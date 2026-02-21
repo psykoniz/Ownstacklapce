@@ -49,10 +49,39 @@ impl ContextManager {
         self.messages.clear();
     }
 
-    /// Estimate token count for a string (rough approximation)
+    /// Estimate token count for a string using word-boundary heuristic.
+    ///
+    /// Uses a hybrid approach: count whitespace-separated words, then add
+    /// a correction factor for punctuation and newlines. More accurate
+    /// than the naive `len/4` especially on source code.
     pub(crate) fn estimate_tokens(text: &str) -> usize {
-        // Rough estimate: ~4 characters per token
-        text.len() / 4
+        if text.is_empty() {
+            return 0;
+        }
+
+        let word_count = text.split_whitespace().count();
+
+        // Punctuation that typically becomes its own token
+        let punct_count = text
+            .chars()
+            .filter(|c| {
+                matches!(
+                    c,
+                    '(' | ')' | '{' | '}' | '[' | ']' | ';' | ':'
+                        | ',' | '.' | '"' | '\'' | '`' | '#'
+                        | '!' | '?' | '<' | '>' | '=' | '+'
+                        | '-' | '*' | '/' | '\\' | '|' | '&'
+                )
+            })
+            .count();
+
+        let newline_count = text.chars().filter(|c| *c == '\n').count();
+
+        // Words * 1.3 (subword splits) + half of punctuation + newlines
+        let estimate =
+            ((word_count as f64 * 1.3) as usize) + (punct_count / 2) + newline_count;
+
+        estimate.max(1)
     }
 
     /// Get estimated total token count

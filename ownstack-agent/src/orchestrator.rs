@@ -211,11 +211,11 @@ impl AgentOrchestrator {
     fn route_model(&self, task_type: &str) -> Option<String> {
         let provider_name = self.provider.name();
         match (provider_name, task_type) {
-            ("anthropic", "planning") => Some("claude-3-5-sonnet-20241022".to_string()),
-            ("anthropic", "critique") => Some("claude-3-5-sonnet-20241022".to_string()),
-            ("anthropic", "fast") => Some("claude-3-haiku-20240307".to_string()),
-            ("openrouter", "planning") => Some("openai/gpt-4o".to_string()),
-            ("openrouter", "fast") => Some("openai/gpt-4o-mini".to_string()),
+            ("anthropic", "planning") => Some("claude-sonnet-4-6".to_string()),
+            ("anthropic", "critique") => Some("claude-sonnet-4-6".to_string()),
+            ("anthropic", "fast") => Some("claude-haiku-4-5-20251001".to_string()),
+            ("openrouter", "planning") => Some("anthropic/claude-sonnet-4-6".to_string()),
+            ("openrouter", "fast") => Some("anthropic/claude-haiku-4-5-20251001".to_string()),
             _ => None, // use default from config
         }
     }
