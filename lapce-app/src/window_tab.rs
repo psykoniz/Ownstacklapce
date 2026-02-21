@@ -7,13 +7,13 @@ use std::{
         Arc,
         mpsc::{Sender, channel},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use alacritty_terminal::vte::ansi::Handler;
 use floem::{
     ViewId,
-    action::{TimerToken, open_file, remove_overlay},
+    action::{TimerToken, exec_after, open_file, remove_overlay},
     ext_event::{create_ext_action, create_signal_from_channel},
     file::FileDialogOptions,
     keyboard::Modifiers,
@@ -186,6 +186,7 @@ pub struct WindowTabData {
     pub about_data: AboutData,
     pub alert_data: AlertBoxData,
     pub ownstack_chat: crate::ownstack_chat::OwnStackChatData,
+    pub policy_prompt_seq: RwSignal<u64>,
     pub layout_rect: RwSignal<Rect>,
     pub title_height: RwSignal<f64>,
     pub status_height: RwSignal<f64>,
@@ -570,6 +571,7 @@ impl WindowTabData {
             about_data,
             alert_data,
             ownstack_chat,
+            policy_prompt_seq: cx.create_rw_signal(0),
             layout_rect: cx.create_rw_signal(Rect::ZERO),
             title_height,
             status_height,
@@ -2357,10 +2359,16 @@ impl WindowTabData {
                             command, reason
                         ));
 
+                        let seq = self.policy_prompt_seq.get_untracked() + 1;
+                        self.policy_prompt_seq.set(seq);
+
                         let proxy_approve = self.common.proxy.clone();
                         let proxy_deny = self.common.proxy.clone();
+                        let proxy_timeout = self.common.proxy.clone();
                         let active_approve = self.alert_data.active;
                         let active_deny = self.alert_data.active;
+                        let active_timeout = self.alert_data.active;
+                        let policy_prompt_seq = self.policy_prompt_seq;
 
                         self.alert_data
                             .title
@@ -2391,6 +2399,18 @@ impl WindowTabData {
                         ]);
 
                         self.alert_data.active.set(true);
+
+                        // Auto-dismiss after 300s and default to deny if still pending.
+                        exec_after(Duration::from_secs(300), move |_| {
+                            if active_timeout.get_untracked()
+                                && policy_prompt_seq.get_untracked() == seq
+                            {
+                                proxy_timeout.ownstack(OwnStackRpc::PolicyResponse {
+                                    approved: false,
+                                });
+                                active_timeout.set(false);
+                            }
+                        });
                     }
                     _ => {}
                 }
