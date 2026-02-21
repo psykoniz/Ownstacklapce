@@ -8,10 +8,20 @@ import sys
 import threading
 import time
 from pathlib import Path
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
+
+# Check if cryptography is importable in a subprocess first, because broken
+# native bindings (pyo3 panic) can crash the whole Python process.
+_crypto_check = subprocess.run(
+    [sys.executable, "-c", "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey"],
+    capture_output=True,
 )
+HAS_CRYPTOGRAPHY = _crypto_check.returncode == 0
+
+if HAS_CRYPTOGRAPHY:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
 
 def _pipe_reader(pipe, out_queue: queue.Queue, source: str) -> None:
     try:
@@ -184,5 +194,8 @@ def test_wasi_execution():
     return success
 
 if __name__ == "__main__":
+    if not HAS_CRYPTOGRAPHY:
+        print("SKIP: 'cryptography' Python package not available.")
+        sys.exit(0)
     if not test_wasi_execution():
         sys.exit(1)

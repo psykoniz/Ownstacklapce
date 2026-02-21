@@ -1,7 +1,11 @@
+#[cfg(windows)]
 use ownstack_engine::sandbox::{process::ProcessSandbox, Sandbox, SandboxLevel};
+#[cfg(windows)]
 use std::env;
+#[cfg(windows)]
 use std::path::PathBuf;
 
+#[cfg(windows)]
 fn get_cwd() -> PathBuf {
     env::current_dir().unwrap()
 }

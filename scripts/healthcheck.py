@@ -18,6 +18,7 @@ def run_script(script_name):
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
+            timeout=120,
         )
         duration = time.time() - start_time
 
@@ -30,6 +31,9 @@ def run_script(script_name):
         print(result.stdout)
         print("--- STDERR ---")
         print(result.stderr)
+        return False
+    except subprocess.TimeoutExpired:
+        print(f"[FAIL] {script_name} (Timed out after 120s)")
         return False
     except Exception as err:
         print(f"[ERROR] Failed to run {script_name}: {err}")
@@ -50,14 +54,15 @@ def main():
         "verify_llm_e2e.py",
     ]
 
+    llm_api_scripts = {"verify_llm_e2e.py", "test_agent_rpc.py"}
+    has_keys = any(os.getenv(k) for k in ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"])
+
     all_passed = True
     for script in scripts:
-        if script == "verify_llm_e2e.py":
-            has_keys = any(os.getenv(k) for k in ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"])
-            if not has_keys:
-                print(f"\n[SKIP] {script} (No API keys found in environment)")
-                continue
-        
+        if script in llm_api_scripts and not has_keys:
+            print(f"\n[SKIP] {script} (No API keys found in environment)")
+            continue
+
         if not run_script(script):
             all_passed = False
 

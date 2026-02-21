@@ -92,4 +92,13 @@ def test_agent_rpc() -> bool:
 
 
 if __name__ == "__main__":
+    # This test sends ai_prompt and expects ai_stream_chunk responses,
+    # which requires a configured LLM backend (API key).
+    has_keys = any(
+        os.getenv(k)
+        for k in ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"]
+    )
+    if not has_keys:
+        print("SKIP: No LLM API keys found — ai_stream_chunk test requires an LLM backend.")
+        raise SystemExit(0)
     raise SystemExit(0 if test_agent_rpc() else 1)

@@ -133,7 +133,7 @@ impl HostCalls {
     ) -> Result<(), HttpError> {
         let mut st = st.write()?;
 
-        let mut body = &mut st.responses.get_mut(&handle).unwrap().body;
+        let body = &mut st.responses.get_mut(&handle).unwrap().body;
         let mut context = store.as_context_mut();
 
         // Write at most either the remaining of the response body, or the entire
