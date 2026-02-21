@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::provider::{
-    FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig, ProviderError,
-    Role, TokenUsage, ToolCall, ToolDefinition,
+    FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig,
+    ProviderError, Role, TokenUsage, ToolCall, ToolDefinition,
 };
 use crate::resilience::ResilientClient;
 
@@ -40,8 +40,8 @@ impl LocalProvider {
         let base_url = std::env::var("OLLAMA_HOST")
             .unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_string());
 
-        let model = std::env::var("OLLAMA_MODEL")
-            .unwrap_or_else(|_| "llama3.2".to_string());
+        let model =
+            std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
 
         Ok(Self::new(ProviderConfig {
             api_key: String::new(), // Ollama doesn't need API key
@@ -91,6 +91,7 @@ struct OllamaOptions {
 #[derive(Deserialize)]
 struct OllamaResponse {
     message: OllamaResponseMessage,
+    #[serde(rename = "done")]
     _done: bool,
     #[serde(default)]
     prompt_eval_count: u32,
@@ -169,11 +170,7 @@ impl LlmProvider for LocalProvider {
 
         let response = self
             .client
-            .execute(
-                self.client.inner()
-                    .post(&url)
-                    .json(&request)
-            )
+            .execute(self.client.inner().post(&url).json(&request))
             .await?;
 
         let api_response: OllamaResponse = response
@@ -230,8 +227,7 @@ impl LlmProvider for LocalProvider {
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
-        use futures::StreamExt;
-        use crate::provider::{StreamChunk, FinishReason};
+        use crate::provider::{FinishReason, StreamChunk};
 
         let api_messages: Vec<OllamaMessage> = messages
             .into_iter()
@@ -257,7 +253,7 @@ impl LlmProvider for LocalProvider {
         let request = OllamaRequest {
             model: self.config.model.clone(),
             messages: api_messages,
-            stream: true,  // Enable streaming
+            stream: true, // Enable streaming
             tools: api_tools,
             options: OllamaOptions {
                 temperature: self.config.temperature,
@@ -270,11 +266,7 @@ impl LlmProvider for LocalProvider {
 
         let response = self
             .client
-            .execute(
-                self.client.inner()
-                    .post(&url)
-                    .json(&request)
-            )
+            .execute(self.client.inner().post(&url).json(&request))
             .await?;
 
         let byte_stream = response.bytes_stream();
@@ -295,7 +287,8 @@ impl LlmProvider for LocalProvider {
 
                         match serde_json::from_str::<serde_json::Value>(&line) {
                             Ok(json) => {
-                                let done = json.get("done")
+                                let done = json
+                                    .get("done")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
 
@@ -308,15 +301,19 @@ impl LlmProvider for LocalProvider {
 
                                 if done {
                                     // Final chunk with optional usage
-                                    let usage = json.get("prompt_eval_count").and_then(|p| {
-                                        let prompt = p.as_u64()? as u32;
-                                        let completion = json.get("eval_count")?.as_u64()? as u32;
-                                        Some(crate::provider::TokenUsage {
-                                            prompt_tokens: prompt,
-                                            completion_tokens: completion,
-                                            total_tokens: prompt + completion,
-                                        })
-                                    });
+                                    let usage = json
+                                        .get("prompt_eval_count")
+                                        .and_then(|p| {
+                                            let prompt = p.as_u64()? as u32;
+                                            let completion =
+                                                json.get("eval_count")?.as_u64()?
+                                                    as u32;
+                                            Some(crate::provider::TokenUsage {
+                                                prompt_tokens: prompt,
+                                                completion_tokens: completion,
+                                                total_tokens: prompt + completion,
+                                            })
+                                        });
 
                                     let chunk = StreamChunk {
                                         delta_content: content,
@@ -348,7 +345,9 @@ impl LlmProvider for LocalProvider {
                     }
 
                     match byte_stream.next().await {
-                        Some(Ok(bytes)) => buffer.push_str(&String::from_utf8_lossy(&bytes)),
+                        Some(Ok(bytes)) => {
+                            buffer.push_str(&String::from_utf8_lossy(&bytes))
+                        }
                         Some(Err(e)) => {
                             return Some((
                                 Err(ProviderError::StreamError(e.to_string())),

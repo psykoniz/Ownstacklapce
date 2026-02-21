@@ -9,11 +9,12 @@
 //! - Provider config with retry defaults
 //! - Stress tests for concurrent retry config creation
 
-use ownstack_agent::resilience::{RetryConfig, ResilientClient};
 use ownstack_agent::provider::{
-    LlmProvider, ProviderConfig, ProviderError, LlmResponse, LlmMessage, ToolCall,
-    ToolDefinition, FinishReason, TokenUsage, StreamChunk, ToolCallDelta, Role,
+    FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig,
+    ProviderError, Role, StreamChunk, TokenUsage, ToolCall, ToolCallDelta,
+    ToolDefinition,
 };
+use ownstack_agent::resilience::{ResilientClient, RetryConfig};
 
 // ════════════════════════════════════════════════════════════════════
 // 1. RetryConfig — Defaults, presets, edge cases
@@ -186,13 +187,19 @@ fn test_stream_chunk_from_response_with_tool_calls() {
     // Verify first tool call delta
     assert_eq!(chunk.delta_tool_calls[0].index, 0);
     assert_eq!(chunk.delta_tool_calls[0].id, Some("call_1".to_string()));
-    assert_eq!(chunk.delta_tool_calls[0].name, Some("read_file".to_string()));
+    assert_eq!(
+        chunk.delta_tool_calls[0].name,
+        Some("read_file".to_string())
+    );
     assert!(chunk.delta_tool_calls[0].arguments_delta.is_some());
 
     // Verify second tool call delta
     assert_eq!(chunk.delta_tool_calls[1].index, 1);
     assert_eq!(chunk.delta_tool_calls[1].id, Some("call_2".to_string()));
-    assert_eq!(chunk.delta_tool_calls[1].name, Some("write_file".to_string()));
+    assert_eq!(
+        chunk.delta_tool_calls[1].name,
+        Some("write_file".to_string())
+    );
 
     assert_eq!(chunk.finish_reason, Some(FinishReason::ToolCalls));
 }
@@ -392,9 +399,7 @@ fn test_retry_config_multiplier_fractional() {
 #[test]
 fn test_retry_config_mass_clone_stress() {
     let base = RetryConfig::default();
-    let configs: Vec<RetryConfig> = (0..10_000)
-        .map(|_| base.clone())
-        .collect();
+    let configs: Vec<RetryConfig> = (0..10_000).map(|_| base.clone()).collect();
 
     assert_eq!(configs.len(), 10_000);
     for config in &configs {
@@ -469,7 +474,14 @@ fn test_stream_chunk_large_arguments() {
 
     let chunk = StreamChunk::from_response(response);
     assert_eq!(chunk.delta_tool_calls.len(), 1);
-    assert!(chunk.delta_tool_calls[0].arguments_delta.as_ref().unwrap().len() > 100_000);
+    assert!(
+        chunk.delta_tool_calls[0]
+            .arguments_delta
+            .as_ref()
+            .unwrap()
+            .len()
+            > 100_000
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -479,7 +491,10 @@ fn test_stream_chunk_large_arguments() {
 #[test]
 fn test_provider_error_display() {
     let err = ProviderError::RequestFailed("connection timeout".to_string());
-    assert_eq!(format!("{}", err), "HTTP request failed: connection timeout");
+    assert_eq!(
+        format!("{}", err),
+        "HTTP request failed: connection timeout"
+    );
 
     let err = ProviderError::ApiError("429 Too Many Requests".to_string());
     assert_eq!(format!("{}", err), "API error: 429 Too Many Requests");
@@ -664,10 +679,7 @@ async fn test_stream_default_fallback() {
 
     // Use the default stream() which falls back to complete()
     let mut stream = provider
-        .stream(
-            vec![LlmMessage::user("test")],
-            None,
-        )
+        .stream(vec![LlmMessage::user("test")], None)
         .await
         .unwrap();
 
@@ -697,13 +709,11 @@ async fn test_stream_default_fallback_with_tool_calls() {
         ) -> Result<LlmResponse, ProviderError> {
             Ok(LlmResponse {
                 content: None,
-                tool_calls: vec![
-                    ToolCall {
-                        id: "tc_1".to_string(),
-                        name: "search".to_string(),
-                        arguments: serde_json::json!({"q": "test"}),
-                    },
-                ],
+                tool_calls: vec![ToolCall {
+                    id: "tc_1".to_string(),
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                }],
                 finish_reason: FinishReason::ToolCalls,
                 usage: None,
             })
@@ -752,9 +762,7 @@ async fn test_stream_default_fallback_error() {
     }
 
     let provider = FailingProvider;
-    let result = provider
-        .stream(vec![LlmMessage::user("test")], None)
-        .await;
+    let result = provider.stream(vec![LlmMessage::user("test")], None).await;
 
     assert!(result.is_err());
     assert!(result.is_err());
@@ -826,7 +834,8 @@ async fn test_stress_many_concurrent_streams() {
 #[test]
 fn test_llm_message_special_characters() {
     // JSON-breaking characters
-    let msg = LlmMessage::user(r#"{"key": "value with \"quotes\" and \n newlines"}"#);
+    let msg =
+        LlmMessage::user(r#"{"key": "value with \"quotes\" and \n newlines"}"#);
     assert!(msg.content.contains("quotes"));
 
     // SQL injection attempt
@@ -898,7 +907,10 @@ fn test_tool_call_serialization_roundtrip() {
 fn test_role_serialization() {
     assert_eq!(serde_json::to_string(&Role::System).unwrap(), "\"system\"");
     assert_eq!(serde_json::to_string(&Role::User).unwrap(), "\"user\"");
-    assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), "\"assistant\"");
+    assert_eq!(
+        serde_json::to_string(&Role::Assistant).unwrap(),
+        "\"assistant\""
+    );
     assert_eq!(serde_json::to_string(&Role::Tool).unwrap(), "\"tool\"");
 }
 

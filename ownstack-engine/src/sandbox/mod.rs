@@ -15,12 +15,7 @@ pub enum SandboxLevel {
 
 pub trait Sandbox {
     /// Executes a command in the sandbox.
-    fn exec(
-        &self,
-        command: &str,
-        cwd: &Path,
-        level: SandboxLevel,
-    ) -> ToolResult;
+    fn exec(&self, command: &str, cwd: &Path, level: SandboxLevel) -> ToolResult;
 }
 
 #[cfg(test)]
@@ -43,7 +38,11 @@ mod tests {
 
     #[test]
     fn test_all_levels_exist() {
-        let levels = [SandboxLevel::Light, SandboxLevel::Standard, SandboxLevel::Strict];
+        let levels = [
+            SandboxLevel::Light,
+            SandboxLevel::Standard,
+            SandboxLevel::Strict,
+        ];
         assert_eq!(levels.len(), 3);
     }
 
@@ -65,4 +64,3 @@ mod tests {
         assert_eq!(SandboxLevel::Light, SandboxLevel::Light);
     }
 }
-

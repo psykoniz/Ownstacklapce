@@ -3899,8 +3899,11 @@ pub fn launch() {
         tracing_handle: reload_handle,
         config,
         plugin_paths,
-        onboarding: crate::ownstack_onboarding::OnboardingData::new(),
+        onboarding: crate::ownstack_onboarding::OnboardingData::new(scope),
     };
+
+    // First-launch onboarding (OwnStack specific).
+    app_data.onboarding.start();
 
     let app = app_data.create_windows(db.clone(), cli.paths);
 

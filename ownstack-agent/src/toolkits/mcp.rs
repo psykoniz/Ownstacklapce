@@ -3,6 +3,7 @@
 //! Full MCP client implementation for connecting to external MCP servers.
 //! Supports tool discovery and execution via JSON-RPC over stdio.
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -10,7 +11,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tracing::{debug, info};
-use async_trait::async_trait;
 
 use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
 
@@ -126,35 +126,37 @@ impl McpConnection {
             params,
         };
 
-        let request_json = serde_json::to_string(&request)
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Serialize error: {}", e)))?;
+        let request_json = serde_json::to_string(&request).map_err(|e| {
+            ToolkitError::ExecutionFailed(format!("Serialize error: {}", e))
+        })?;
 
         debug!("MCP -> {}: {}", method, request_json);
 
         self.stdin
             .write_all(request_json.as_bytes())
             .await
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Write error: {}", e)))?;
-        self.stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Write error: {}", e)))?;
-        self.stdin
-            .flush()
-            .await
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Flush error: {}", e)))?;
+            .map_err(|e| {
+                ToolkitError::ExecutionFailed(format!("Write error: {}", e))
+            })?;
+        self.stdin.write_all(b"\n").await.map_err(|e| {
+            ToolkitError::ExecutionFailed(format!("Write error: {}", e))
+        })?;
+        self.stdin.flush().await.map_err(|e| {
+            ToolkitError::ExecutionFailed(format!("Flush error: {}", e))
+        })?;
 
         // Read response
         let mut line = String::new();
-        self.stdout
-            .read_line(&mut line)
-            .await
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Read error: {}", e)))?;
+        self.stdout.read_line(&mut line).await.map_err(|e| {
+            ToolkitError::ExecutionFailed(format!("Read error: {}", e))
+        })?;
 
         debug!("MCP <- {}", line.trim());
 
-        let response: JsonRpcResponse = serde_json::from_str(line.trim())
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Parse error: {}", e)))?;
+        let response: JsonRpcResponse =
+            serde_json::from_str(line.trim()).map_err(|e| {
+                ToolkitError::ExecutionFailed(format!("Parse error: {}", e))
+            })?;
 
         if let Some(err) = response.error {
             return Err(ToolkitError::ExecutionFailed(format!(
@@ -163,9 +165,9 @@ impl McpConnection {
             )));
         }
 
-        response
-            .result
-            .ok_or_else(|| ToolkitError::ExecutionFailed("No result in response".to_string()))
+        response.result.ok_or_else(|| {
+            ToolkitError::ExecutionFailed("No result in response".to_string())
+        })
     }
 
     async fn shutdown(&mut self) {
@@ -186,8 +188,14 @@ impl McpClient {
     }
 
     /// Connect to an MCP server
-    pub async fn connect(&mut self, config: McpServerConfig) -> Result<(), ToolkitError> {
-        info!("Connecting to MCP server: {} ({})", config.name, config.command);
+    pub async fn connect(
+        &mut self,
+        config: McpServerConfig,
+    ) -> Result<(), ToolkitError> {
+        info!(
+            "Connecting to MCP server: {} ({})",
+            config.name, config.command
+        );
 
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args)
@@ -200,9 +208,12 @@ impl McpClient {
             cmd.env(key, value);
         }
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Failed to spawn MCP server: {}", e)))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            ToolkitError::ExecutionFailed(format!(
+                "Failed to spawn MCP server: {}",
+                e
+            ))
+        })?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
             ToolkitError::ExecutionFailed("Failed to capture stdin".to_string())
@@ -230,8 +241,10 @@ impl McpClient {
         });
 
         let init_result = conn.send_request("initialize", Some(init_params)).await?;
-        let _init: InitializeResult = serde_json::from_value(init_result)
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Init parse error: {}", e)))?;
+        let _init: InitializeResult =
+            serde_json::from_value(init_result).map_err(|e| {
+                ToolkitError::ExecutionFailed(format!("Init parse error: {}", e))
+            })?;
 
         // Send initialized notification (no response expected for notifications)
         let notif = serde_json::json!({
@@ -256,8 +269,8 @@ impl McpClient {
         // Discover tools
         let tools_result = conn.send_request("tools/list", None).await?;
         if let Some(tools_array) = tools_result.get("tools") {
-            let tools: Vec<McpToolInfo> = serde_json::from_value(tools_array.clone())
-                .unwrap_or_default();
+            let tools: Vec<McpToolInfo> =
+                serde_json::from_value(tools_array.clone()).unwrap_or_default();
             info!("Discovered {} tools from {}", tools.len(), config.name);
             conn.tools = tools;
         }
@@ -276,7 +289,10 @@ impl McpClient {
         arguments: serde_json::Value,
     ) -> Result<ToolResult, ToolkitError> {
         let conn_mutex = self.connections.get(server_name).ok_or_else(|| {
-            ToolkitError::ToolNotFound(format!("MCP server not connected: {}", server_name))
+            ToolkitError::ToolNotFound(format!(
+                "MCP server not connected: {}",
+                server_name
+            ))
         })?;
 
         let mut conn = conn_mutex.lock().await;
@@ -288,8 +304,10 @@ impl McpClient {
 
         let result = conn.send_request("tools/call", Some(params)).await?;
 
-        let tool_result: McpToolResult = serde_json::from_value(result)
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Parse result error: {}", e)))?;
+        let tool_result: McpToolResult =
+            serde_json::from_value(result).map_err(|e| {
+                ToolkitError::ExecutionFailed(format!("Parse result error: {}", e))
+            })?;
 
         let output: String = tool_result
             .content
@@ -300,7 +318,7 @@ impl McpClient {
             .join("\n");
 
         if tool_result.is_error {
-            Ok(ToolResult::error(output))
+            Ok(ToolResult::failure(output, None))
         } else {
             Ok(ToolResult::success(output))
         }
@@ -332,7 +350,10 @@ impl McpToolkit {
     }
 
     /// Connect to an MCP server and register its tools
-    pub async fn add_server(&mut self, config: McpServerConfig) -> Result<(), ToolkitError> {
+    pub async fn add_server(
+        &mut self,
+        config: McpServerConfig,
+    ) -> Result<(), ToolkitError> {
         let server_name = config.name.clone();
         self.client.connect(config).await?;
 
@@ -341,10 +362,8 @@ impl McpToolkit {
             let conn = conn_mutex.lock().await;
             for tool in &conn.tools {
                 let prefixed_name = format!("mcp_{}_{}", server_name, tool.name);
-                self.tool_map.insert(
-                    prefixed_name,
-                    (server_name.clone(), tool.clone()),
-                );
+                self.tool_map
+                    .insert(prefixed_name, (server_name.clone(), tool.clone()));
             }
         }
 
@@ -387,9 +406,7 @@ impl Toolkit for McpToolkit {
             ToolkitError::ToolNotFound(format!("MCP tool not found: {}", tool_name))
         })?;
 
-        self.client
-            .call_tool(server_name, &info.name, args)
-            .await
+        self.client.call_tool(server_name, &info.name, args).await
     }
 }
 

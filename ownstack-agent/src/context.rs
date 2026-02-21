@@ -35,11 +35,11 @@ impl ContextManager {
     /// Get all messages including system prompt
     pub fn get_messages(&self) -> Vec<LlmMessage> {
         let mut result = Vec::new();
-        
+
         if let Some(ref prompt) = self.system_prompt {
             result.push(LlmMessage::system(prompt.clone()));
         }
-        
+
         result.extend(self.messages.clone());
         result
     }
@@ -202,7 +202,10 @@ mod tests {
     fn test_trimming_removes_old_messages() {
         let mut cm = ContextManager::new(50);
         for i in 0..100 {
-            cm.add_message(LlmMessage::user(format!("Message number {} with some content", i)));
+            cm.add_message(LlmMessage::user(format!(
+                "Message number {} with some content",
+                i
+            )));
         }
         assert!(cm.messages.len() < 100, "Should have trimmed messages");
     }
@@ -212,7 +215,9 @@ mod tests {
         let mut cm = ContextManager::new(100);
         cm.add_message(LlmMessage::user("Old message"));
         for _ in 0..50 {
-            cm.add_message(LlmMessage::user("Filling up the context with more text"));
+            cm.add_message(LlmMessage::user(
+                "Filling up the context with more text",
+            ));
         }
         assert!(!cm.messages.is_empty());
         assert!(cm.messages.last().unwrap().content.contains("Filling"));

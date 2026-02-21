@@ -475,6 +475,26 @@ impl ProxyHandler for Dispatcher {
                 );
             }
             OwnStack { message } => {
+                if matches!(
+                    message,
+                    lapce_rpc::ownstack::OwnStackRpc::KillSwitch
+                ) {
+                    // Kill-Switch: stop agent + bridge immediately, and do not auto-restart.
+                    {
+                        let mut agent_guard = self.agent.lock();
+                        if let Some(mut agent) = agent_guard.take() {
+                            let _ = agent.child.kill();
+                            let _ = agent.child.wait();
+                        }
+                    }
+                    {
+                        // Dropping PythonBridge kills the backend process (kill_on_drop).
+                        let mut bridge_guard = self.bridge.lock();
+                        let _ = bridge_guard.take();
+                    }
+                    return;
+                }
+
                 let mut agent_guard = self.agent.lock();
                 if let Some(agent) = agent_guard.as_mut() {
                     if let Err(e) = agent.send_rpc(&message) {

@@ -6,6 +6,7 @@ pub mod counter;
 pub mod dap_types;
 pub mod file;
 pub mod file_line;
+pub mod ownstack;
 mod parse;
 pub mod plugin;
 pub mod proxy;
@@ -13,7 +14,6 @@ pub mod source_control;
 pub mod stdio;
 pub mod style;
 pub mod terminal;
-pub mod ownstack;
 
 pub use ownstack::OwnStackRpc;
 pub use parse::{Call, RequestId, RpcObject};

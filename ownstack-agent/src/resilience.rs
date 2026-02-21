@@ -3,8 +3,8 @@
 //! Provides a resilient HTTP client wrapper that handles transient failures
 //! with configurable retry logic, exponential backoff, and jitter.
 
-use std::time::Duration;
 use reqwest::{Client, Response, StatusCode};
+use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::provider::ProviderError;
@@ -92,7 +92,8 @@ impl ResilientClient {
         &self,
         request_builder: reqwest::RequestBuilder,
     ) -> Result<Response, ProviderError> {
-        let mut last_error = ProviderError::RequestFailed("No attempts made".to_string());
+        let mut last_error =
+            ProviderError::RequestFailed("No attempts made".to_string());
 
         for attempt in 0..=self.config.max_retries {
             if attempt > 0 {
@@ -112,10 +113,9 @@ impl ResilientClient {
                 None => {
                     // If we can't clone (e.g., streaming body), try once
                     if attempt == 0 {
-                        return request_builder
-                            .send()
-                            .await
-                            .map_err(|e| ProviderError::RequestFailed(e.to_string()));
+                        return request_builder.send().await.map_err(|e| {
+                            ProviderError::RequestFailed(e.to_string())
+                        });
                     } else {
                         return Err(last_error);
                     }
@@ -133,7 +133,9 @@ impl ResilientClient {
                     if Self::is_retryable_status(status) {
                         // Check for Retry-After header on 429
                         if status == StatusCode::TOO_MANY_REQUESTS {
-                            if let Some(retry_after) = self.parse_retry_after(&response) {
+                            if let Some(retry_after) =
+                                self.parse_retry_after(&response)
+                            {
                                 debug!(
                                     retry_after_secs = retry_after.as_secs(),
                                     "Respecting Retry-After header"
@@ -225,7 +227,7 @@ impl ResilientClient {
             | StatusCode::BAD_GATEWAY               // 502
             | StatusCode::SERVICE_UNAVAILABLE       // 503
             | StatusCode::GATEWAY_TIMEOUT           // 504
-            | StatusCode::REQUEST_TIMEOUT           // 408
+            | StatusCode::REQUEST_TIMEOUT // 408
         )
     }
 
@@ -280,16 +282,32 @@ mod tests {
 
     #[test]
     fn test_is_retryable_status() {
-        assert!(ResilientClient::is_retryable_status(StatusCode::TOO_MANY_REQUESTS));
-        assert!(ResilientClient::is_retryable_status(StatusCode::INTERNAL_SERVER_ERROR));
-        assert!(ResilientClient::is_retryable_status(StatusCode::BAD_GATEWAY));
-        assert!(ResilientClient::is_retryable_status(StatusCode::SERVICE_UNAVAILABLE));
-        assert!(ResilientClient::is_retryable_status(StatusCode::GATEWAY_TIMEOUT));
-        assert!(ResilientClient::is_retryable_status(StatusCode::REQUEST_TIMEOUT));
+        assert!(ResilientClient::is_retryable_status(
+            StatusCode::TOO_MANY_REQUESTS
+        ));
+        assert!(ResilientClient::is_retryable_status(
+            StatusCode::INTERNAL_SERVER_ERROR
+        ));
+        assert!(ResilientClient::is_retryable_status(
+            StatusCode::BAD_GATEWAY
+        ));
+        assert!(ResilientClient::is_retryable_status(
+            StatusCode::SERVICE_UNAVAILABLE
+        ));
+        assert!(ResilientClient::is_retryable_status(
+            StatusCode::GATEWAY_TIMEOUT
+        ));
+        assert!(ResilientClient::is_retryable_status(
+            StatusCode::REQUEST_TIMEOUT
+        ));
 
         // Non-retryable
-        assert!(!ResilientClient::is_retryable_status(StatusCode::BAD_REQUEST));
-        assert!(!ResilientClient::is_retryable_status(StatusCode::UNAUTHORIZED));
+        assert!(!ResilientClient::is_retryable_status(
+            StatusCode::BAD_REQUEST
+        ));
+        assert!(!ResilientClient::is_retryable_status(
+            StatusCode::UNAUTHORIZED
+        ));
         assert!(!ResilientClient::is_retryable_status(StatusCode::FORBIDDEN));
         assert!(!ResilientClient::is_retryable_status(StatusCode::NOT_FOUND));
         assert!(!ResilientClient::is_retryable_status(StatusCode::OK));

@@ -25,19 +25,19 @@ impl PathValidator {
     /// Validates that a path is safe to access.
     pub fn validate(&self, path: &Path) -> Result<PathBuf, PathError> {
         let path_str = path.to_string_lossy();
-        
+
         // 1. Check for ".." to prevent path traversal
         if path_str.contains("..") {
             return Err(PathError::ForbiddenSequence(path_str.into_owned()));
         }
-        
+
         // 2. Canonicalize and check against workspace root
         let absolute_path = if path.is_absolute() {
             path.to_path_buf()
         } else {
             self.workspace_root.join(path)
         };
-        
+
         let canonical_path = absolute_path.canonicalize().map_err(|_| {
             // If it doesn't exist, we still check the prefix of its parent
             absolute_path.clone()
@@ -49,9 +49,11 @@ impl PathValidator {
         };
 
         if !final_path.starts_with(&self.workspace_root) {
-            return Err(PathError::OutsideWorkspace(final_path.to_string_lossy().into_owned()));
+            return Err(PathError::OutsideWorkspace(
+                final_path.to_string_lossy().into_owned(),
+            ));
         }
-        
+
         Ok(final_path)
     }
 }
@@ -183,7 +185,7 @@ mod tests {
     fn test_error_type_forbidden_sequence() {
         let v = PathValidator::new(workspace());
         match v.validate(Path::new("../etc")) {
-            Err(PathError::ForbiddenSequence(_)) => {},
+            Err(PathError::ForbiddenSequence(_)) => {}
             other => panic!("Expected ForbiddenSequence, got {:?}", other),
         }
     }
@@ -228,16 +230,18 @@ mod tests {
         use std::thread;
 
         let ws = workspace();
-        let handles: Vec<_> = (0..50).map(|i| {
-            let ws = ws.clone();
-            thread::spawn(move || {
-                let v = PathValidator::new(ws);
-                for j in 0..100 {
-                    let p = format!("file_{}_{}.txt", i, j);
-                    let _ = v.validate(Path::new(&p));
-                }
+        let handles: Vec<_> = (0..50)
+            .map(|i| {
+                let ws = ws.clone();
+                thread::spawn(move || {
+                    let v = PathValidator::new(ws);
+                    for j in 0..100 {
+                        let p = format!("file_{}_{}.txt", i, j);
+                        let _ = v.validate(Path::new(&p));
+                    }
+                })
             })
-        }).collect();
+            .collect();
 
         for h in handles {
             h.join().unwrap();
@@ -248,14 +252,20 @@ mod tests {
     fn stress_test_attack_patterns() {
         let v = PathValidator::new(workspace());
         let attacks = [
-            "../etc/passwd", "../../etc/shadow", "../../../root/.ssh/id_rsa",
-            "src/../../../etc/hosts", "../../../../bin/sh",
-            "../..", "../../..", "../../../..",
+            "../etc/passwd",
+            "../../etc/shadow",
+            "../../../root/.ssh/id_rsa",
+            "src/../../../etc/hosts",
+            "../../../../bin/sh",
+            "../..",
+            "../../..",
+            "../../../..",
         ];
         for attack in &attacks {
             assert!(
                 v.validate(Path::new(attack)).is_err(),
-                "Should reject traversal: {}", attack
+                "Should reject traversal: {}",
+                attack
             );
         }
     }

@@ -11,6 +11,7 @@ from app.core.auth import verify_api_key, is_auth_enabled
 from app.core.errors import APIError, api_error_handler
 from app.core.globals import STATE
 from app.utils.audit import log_event, AuditEvent
+import logging
 
 app = FastAPI(title="Ownstack IDE Agent", version="1.0.0")
 
@@ -41,7 +42,6 @@ async def startup_event():
     try:
         cleaned = await STATE.runtime.cleanup_orphans()
     except Exception as e:
-        import logging
         logging.warning(f"Docker cleanup skipped (Docker unavailable): {e}")
 
     # CRITIQUE: Increase default thread pool size (default 40) to prevent starvation

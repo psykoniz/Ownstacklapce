@@ -1,5 +1,5 @@
-use floem::reactive::{RwSignal, create_rw_signal};
 use floem::prelude::{SignalGet, SignalUpdate};
+use floem::reactive::{RwSignal, create_rw_signal};
 
 use crate::ownstack_chat::AgentMode;
 use crate::window_tab::CommonData;

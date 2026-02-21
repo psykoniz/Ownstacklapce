@@ -1,5 +1,5 @@
-use floem::reactive::{RwSignal, create_rw_signal};
 use floem::prelude::{SignalGet, SignalUpdate};
+use floem::reactive::{RwSignal, create_rw_signal};
 use serde::{Deserialize, Serialize};
 
 use crate::window_tab::CommonData;
@@ -114,9 +114,9 @@ impl OwnStackAuditData {
                 } else {
                     e.command.to_lowercase().contains(&query)
                         || e.action.to_string().to_lowercase().contains(&query)
-                        || e.tool_name.as_ref().map_or(false, |t| {
-                            t.to_lowercase().contains(&query)
-                        })
+                        || e.tool_name
+                            .as_ref()
+                            .map_or(false, |t| t.to_lowercase().contains(&query))
                 }
             })
             .collect()

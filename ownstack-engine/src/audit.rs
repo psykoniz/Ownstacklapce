@@ -1,9 +1,9 @@
+use crate::policy::PolicyDecision;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use chrono::Utc;
-use crate::policy::PolicyDecision;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuditEntry {
@@ -28,7 +28,7 @@ impl AuditLogger {
         let mut log_path = workspace;
         log_path.push(".ownstack");
         log_path.push("audit.jsonl");
-        
+
         // Ensure .ownstack directory exists
         if let Some(parent) = log_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -40,13 +40,13 @@ impl AuditLogger {
     /// Logs an entry to the audit file in JSONL format.
     pub fn log(&self, mut entry: AuditEntry) -> std::io::Result<()> {
         entry.timestamp = Utc::now().to_rfc3339();
-        
+
         let json = serde_json::to_string(&entry)?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.log_path)?;
-        
+
         writeln!(file, "{}", json)?;
         Ok(())
     }
@@ -97,11 +97,18 @@ mod tests {
         let ws = temp_workspace("append");
         let logger = AuditLogger::new(ws.clone());
 
-        logger.log(make_entry("first", PolicyDecision::Auto)).unwrap();
-        logger.log(make_entry("second", PolicyDecision::Ask)).unwrap();
-        logger.log(make_entry("third", PolicyDecision::Blocked)).unwrap();
+        logger
+            .log(make_entry("first", PolicyDecision::Auto))
+            .unwrap();
+        logger
+            .log(make_entry("second", PolicyDecision::Ask))
+            .unwrap();
+        logger
+            .log(make_entry("third", PolicyDecision::Blocked))
+            .unwrap();
 
-        let content = fs::read_to_string(ws.join(".ownstack").join("audit.jsonl")).unwrap();
+        let content =
+            fs::read_to_string(ws.join(".ownstack").join("audit.jsonl")).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 3);
         let _ = fs::remove_dir_all(ws);
@@ -112,13 +119,18 @@ mod tests {
         let ws = temp_workspace("json");
         let logger = AuditLogger::new(ws.clone());
 
-        logger.log(make_entry("exec", PolicyDecision::Auto)).unwrap();
-        logger.log(make_entry("write", PolicyDecision::Ask)).unwrap();
+        logger
+            .log(make_entry("exec", PolicyDecision::Auto))
+            .unwrap();
+        logger
+            .log(make_entry("write", PolicyDecision::Ask))
+            .unwrap();
 
-        let content = fs::read_to_string(ws.join(".ownstack").join("audit.jsonl")).unwrap();
+        let content =
+            fs::read_to_string(ws.join(".ownstack").join("audit.jsonl")).unwrap();
         for line in content.lines() {
-            let parsed: serde_json::Value = serde_json::from_str(line)
-                .expect("Each line must be valid JSON");
+            let parsed: serde_json::Value =
+                serde_json::from_str(line).expect("Each line must be valid JSON");
             assert!(parsed.get("action").is_some());
             assert!(parsed.get("timestamp").is_some());
             assert!(parsed.get("session_id").is_some());
@@ -130,12 +142,18 @@ mod tests {
     fn test_timestamp_is_set() {
         let ws = temp_workspace("timestamp");
         let logger = AuditLogger::new(ws.clone());
-        logger.log(make_entry("exec", PolicyDecision::Auto)).unwrap();
+        logger
+            .log(make_entry("exec", PolicyDecision::Auto))
+            .unwrap();
 
-        let content = fs::read_to_string(ws.join(".ownstack").join("audit.jsonl")).unwrap();
+        let content =
+            fs::read_to_string(ws.join(".ownstack").join("audit.jsonl")).unwrap();
         let line = content.lines().next().unwrap();
         let parsed: AuditEntry = serde_json::from_str(line).unwrap();
-        assert!(!parsed.timestamp.is_empty(), "timestamp should be populated");
+        assert!(
+            !parsed.timestamp.is_empty(),
+            "timestamp should be populated"
+        );
         let _ = fs::remove_dir_all(ws);
     }
 
@@ -152,7 +170,10 @@ mod tests {
             success: true,
             duration_ms: 1234,
             workspace: "/home/user/project".to_string(),
-            paths_accessed: vec!["src/main.rs".to_string(), "Cargo.toml".to_string()],
+            paths_accessed: vec![
+                "src/main.rs".to_string(),
+                "Cargo.toml".to_string(),
+            ],
         };
 
         let json = serde_json::to_string(&entry).unwrap();
@@ -168,7 +189,11 @@ mod tests {
 
     #[test]
     fn test_audit_entry_with_all_decisions() {
-        for decision in [PolicyDecision::Auto, PolicyDecision::Ask, PolicyDecision::Blocked] {
+        for decision in [
+            PolicyDecision::Auto,
+            PolicyDecision::Ask,
+            PolicyDecision::Blocked,
+        ] {
             let entry = make_entry("test", decision.clone());
             let json = serde_json::to_string(&entry).unwrap();
             let back: AuditEntry = serde_json::from_str(&json).unwrap();
@@ -234,7 +259,8 @@ mod tests {
             logger.log(entry).unwrap();
         }
 
-        let content = fs::read_to_string(ws.join(".ownstack").join("audit.jsonl")).unwrap();
+        let content =
+            fs::read_to_string(ws.join(".ownstack").join("audit.jsonl")).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 500);
         let _ = fs::remove_dir_all(ws);
@@ -270,19 +296,21 @@ mod tests {
         let log_path = ws.join(".ownstack").join("audit.jsonl");
         let ws_arc = Arc::new(ws.clone());
 
-        let handles: Vec<_> = (0..20).map(|i| {
-            let ws = Arc::clone(&ws_arc);
-            thread::spawn(move || {
-                let logger = AuditLogger::new(ws.as_ref().clone());
-                for j in 0..10 {
-                    let entry = make_entry(
-                        &format!("thread_{}_{}", i, j),
-                        PolicyDecision::Auto,
-                    );
-                    let _ = logger.log(entry);
-                }
+        let handles: Vec<_> = (0..20)
+            .map(|i| {
+                let ws = Arc::clone(&ws_arc);
+                thread::spawn(move || {
+                    let logger = AuditLogger::new(ws.as_ref().clone());
+                    for j in 0..10 {
+                        let entry = make_entry(
+                            &format!("thread_{}_{}", i, j),
+                            PolicyDecision::Auto,
+                        );
+                        let _ = logger.log(entry);
+                    }
+                })
             })
-        }).collect();
+            .collect();
 
         for h in handles {
             h.join().unwrap();

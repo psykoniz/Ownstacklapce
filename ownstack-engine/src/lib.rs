@@ -1,19 +1,19 @@
 //! ownstack-engine: Security core for OwnStack Native IDE.
-//! 
-//! This crate provides the PolicyEngine, PathValidator, AuditLogger, 
+//!
+//! This crate provides the PolicyEngine, PathValidator, AuditLogger,
 //! and Sandbox abstractions required by the OwnStack security flow.
 
-pub mod policy;
-pub mod path_safety;
 pub mod audit;
-pub mod tool_result;
+pub mod path_safety;
+pub mod policy;
 pub mod sandbox;
 pub mod security;
+pub mod tool_result;
 
-pub use policy::{PolicyEngine, PolicyDecision};
-pub use path_safety::{PathValidator, PathError};
-pub use audit::{AuditLogger, AuditEntry};
-pub use tool_result::ToolResult;
-pub use sandbox::{Sandbox, SandboxLevel};
+pub use audit::{AuditEntry, AuditLogger};
+pub use path_safety::{PathError, PathValidator};
+pub use policy::{PolicyDecision, PolicyEngine};
 pub use sandbox::process::ProcessSandbox;
+pub use sandbox::{Sandbox, SandboxLevel};
 pub use security::SecurityContext;
+pub use tool_result::ToolResult;

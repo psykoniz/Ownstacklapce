@@ -3,9 +3,9 @@ use floem::{
     IntoView, View,
     event::{Event, EventListener},
     keyboard::{Key, NamedKey},
-    reactive::{RwSignal, SignalGet, SignalUpdate},
-    style::{CursorStyle, Display},
-    views::{Decorators, container, dyn_stack, empty, label, stack},
+    reactive::{RwSignal, Scope, SignalGet, SignalUpdate},
+    style::CursorStyle,
+    views::{Decorators, container, dyn_stack, empty, h_stack, label, v_stack},
 };
 use lapce_core::directory::Directory;
 use serde::{Deserialize, Serialize};
@@ -34,14 +34,14 @@ pub struct OnboardingData {
 }
 
 impl OnboardingData {
-    pub fn new() -> Self {
+    pub fn new(cx: Scope) -> Self {
         let completed = Self::load_completed_state();
         Self {
-            active: RwSignal::new(false),
-            current_step: RwSignal::new(0),
-            completed: RwSignal::new(completed),
-            chosen_provider: RwSignal::new("OpenRouter".to_string()),
-            chosen_mode: RwSignal::new("Ask".to_string()),
+            active: cx.create_rw_signal(false),
+            current_step: cx.create_rw_signal(0),
+            completed: cx.create_rw_signal(completed),
+            chosen_provider: cx.create_rw_signal("OpenRouter".to_string()),
+            chosen_mode: cx.create_rw_signal("Ask".to_string()),
         }
     }
 
@@ -175,20 +175,24 @@ pub fn onboarding_view(
 
     container(
         container(
-            stack((
+            v_stack((
                 // Header
                 label(move || data_title.current_step_info().title.to_string())
                     .style(move |s| {
                         s.font_bold()
-                            .font_size(24.0)
-                            .margin_bottom(20.0)
+                            .font_size(18.0)
+                            .line_height(1.3)
+                            .width_full()
+                            .margin_bottom(8.0)
                             .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
                     }),
                 // Description
                 label(move || data_desc.current_step_info().description.to_string())
                     .style(move |s| {
-                        s.font_size(16.0)
-                            .margin_bottom(40.0)
+                        s.font_size(13.0)
+                            .line_height(1.45)
+                            .width_full()
+                            .margin_bottom(14.0)
                             .color(config.get().color(LapceColor::EDITOR_DIM))
                     }),
                 // Step content
@@ -201,42 +205,21 @@ pub fn onboarding_view(
                         match ONBOARDING_STEPS[step].step_type {
                             StepType::Welcome => container(
                                 label(|| "🚀".to_string())
-                                    .style(|s| s.font_size(60.0)),
+                                    .style(|s| s.font_size(48.0)),
                             )
-                            .style(|s| {
-                                s.items_center().justify_center().width_full()
-                            })
+                            .style(|s| s.items_center().justify_center().width_full())
                             .into_any(),
-                            StepType::ProviderSetup => stack((
+                            StepType::ProviderSetup => v_stack((
                                 provider_button("OpenRouter", data.clone(), config),
                                 provider_button("Anthropic", data.clone(), config),
-                                provider_button(
-                                    "Local (Ollama)",
-                                    data.clone(),
-                                    config,
-                                ),
+                                provider_button("Local (Ollama)", data.clone(), config),
                             ))
                             .style(|s| s.flex_col().gap(10.0).width_full())
                             .into_any(),
-                            StepType::ModeSelection => stack((
-                                mode_button(
-                                    "Ask",
-                                    "Confirm every action",
-                                    data.clone(),
-                                    config,
-                                ),
-                                mode_button(
-                                    "Auto",
-                                    "Background execution",
-                                    data.clone(),
-                                    config,
-                                ),
-                                mode_button(
-                                    "Plan",
-                                    "Review steps first",
-                                    data.clone(),
-                                    config,
-                                ),
+                            StepType::ModeSelection => v_stack((
+                                mode_button("Ask", "Confirm every action", data.clone(), config),
+                                mode_button("Auto", "Background execution", data.clone(), config),
+                                mode_button("Plan", "Review steps first", data.clone(), config),
                             ))
                             .style(|s| s.flex_col().gap(10.0).width_full())
                             .into_any(),
@@ -244,9 +227,9 @@ pub fn onboarding_view(
                         }
                     },
                 )
-                .style(|s| s.flex_grow(1.0).width_full()),
+                .style(|s| s.width_full()),
                 // Navigation
-                stack((
+                h_stack((
                     {
                         let data = data_nav.clone();
                         label(|| "Skip")
@@ -272,66 +255,58 @@ pub fn onboarding_view(
                                 let config = config.get();
                                 s.padding_horiz(30.0)
                                     .padding_vert(10.0)
-                                    .background(
-                                        config.color(LapceColor::PANEL_BACKGROUND),
-                                    )
+                                    .background(config.color(LapceColor::PANEL_BACKGROUND))
                                     .border(1.0)
-                                    .border_color(
-                                        config.color(LapceColor::LAPCE_BORDER),
-                                    )
+                                    .border_color(config.color(LapceColor::LAPCE_BORDER))
                                     .border_radius(4.0)
                                     .cursor(CursorStyle::Pointer)
-                                    .color(
-                                        config.color(LapceColor::EDITOR_FOREGROUND),
-                                    )
+                                    .color(config.color(LapceColor::EDITOR_FOREGROUND))
                             })
                     },
                 ))
-                .style(|s| {
-                    s.flex_row().items_center().width_full().margin_top(40.0)
-                }),
+                .style(|s| s.items_center().width_full().margin_top(16.0)),
             ))
             .style(move |s| {
                 let config = config.get();
                 s.flex_col()
-                    .items_center()
-                    .width(500.0)
-                    .padding(40.0)
+                    .items_start()
+                    .min_width(320.0)
+                    .max_width(520.0)
+                    .width_full()
+                    .padding_horiz(24.0)
+                    .padding_vert(20.0)
                     .background(config.color(LapceColor::PANEL_BACKGROUND))
                     .border(1.0)
                     .border_color(config.color(LapceColor::LAPCE_BORDER))
                     .border_radius(8.0)
             }),
-        )
-        .keyboard_navigable()
-        .on_event_stop(EventListener::KeyDown, {
-            let data = data_active.clone();
-            move |event| {
-                if let Event::KeyDown(key_event) = event {
-                    if key_event.key.logical_key == Key::Named(NamedKey::Escape) {
-                        data.skip();
-                    }
+        ),
+    )
+    .keyboard_navigable()
+    .on_event_stop(EventListener::PointerDown, |_| {})
+    .on_event_stop(EventListener::KeyDown, {
+        let data = data_active.clone();
+        move |event| {
+            if let Event::KeyDown(key_event) = event {
+                if key_event.key.logical_key == Key::Named(NamedKey::Escape) {
+                    data.skip();
                 }
             }
-        })
-        .style(move |s| {
-            let config = config.get();
-            s.absolute()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .background(
-                    config
-                        .color(LapceColor::LAPCE_DROPDOWN_SHADOW)
-                        .multiply_alpha(0.8),
-                )
-                .display(if data_active.active.get() {
-                    Display::Flex
-                } else {
-                    Display::None
-                })
-        }),
-    )
+        }
+    })
+    .style(move |s| {
+        let config = config.get();
+        s.absolute()
+            .size_pct(100.0, 100.0)
+            .items_center()
+            .justify_center()
+            .apply_if(!data_active.active.get(), |s| s.hide())
+            .background(
+                config
+                    .color(LapceColor::LAPCE_DROPDOWN_SHADOW)
+                    .multiply_alpha(0.8),
+            )
+    })
 }
 
 fn provider_button(
@@ -370,7 +345,7 @@ fn mode_button(
 ) -> impl View {
     let is_selected = move || data.chosen_mode.get() == name;
 
-    stack((
+    v_stack((
         label(move || name.to_string()).style(|s| s.font_bold()),
         label(move || desc.to_string()).style(move |s| {
             let config = config.get();
@@ -378,6 +353,7 @@ fn mode_button(
                 .color(config.color(LapceColor::EDITOR_DIM))
         }),
     ))
+    .style(|s| s.gap(4.0))
     .on_click_stop(move |_| {
         data.chosen_mode.set(name.to_string());
     })
@@ -397,3 +373,4 @@ fn mode_button(
             .cursor(CursorStyle::Pointer)
     })
 }
+

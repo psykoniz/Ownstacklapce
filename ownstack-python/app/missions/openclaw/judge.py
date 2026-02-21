@@ -1,5 +1,6 @@
 import logging
 from typing import Dict, Any, Optional
+from pydantic import BaseModel
 from app.core.globals import STATE
 
 logger = logging.getLogger(__name__)

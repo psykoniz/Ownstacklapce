@@ -38,6 +38,10 @@ name = "Lapce Codicons"
 "symbol_color" = "symbol-color.svg"
 "type_hierarchy" = "type-hierarchy.svg"
 
+"send" = "arrow-up.svg" 
+"stop" = "debug-stop.svg"
+"comment" = "debug-console.svg"
+
 "window.close" = "chrome-close.svg"
 "window.restore" = "chrome-restore.svg"
 "window.maximize" = "chrome-maximize.svg"

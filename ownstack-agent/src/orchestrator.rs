@@ -5,11 +5,12 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::context::ContextManager;
-use crate::provider::{LlmProvider, LlmMessage, FinishReason, ToolDefinition};
-use crate::toolkits::{Toolkit, ToolResult};
+use crate::provider::{FinishReason, LlmMessage, LlmProvider, ToolDefinition};
+use crate::toolkits::{ToolResult, Toolkit, ToolkitError};
 
 // ─── Budget ────────────────────────────────────────────────────────
 
@@ -78,7 +79,11 @@ impl Mission {
     }
 
     pub fn progress(&self) -> (usize, usize) {
-        let done = self.steps.iter().filter(|s| s.status == StepStatus::Completed).count();
+        let done = self
+            .steps
+            .iter()
+            .filter(|s| s.status == StepStatus::Completed)
+            .count();
         (done, self.steps.len())
     }
 }
@@ -119,7 +124,9 @@ pub struct AgentOrchestrator {
     counters: BudgetCounters,
     #[allow(dead_code)]
     workspace: PathBuf,
+    memory: crate::project_memory::ProjectMemory,
     current_mission: Option<Mission>,
+    started_at: Option<Instant>,
 }
 
 impl AgentOrchestrator {
@@ -128,6 +135,7 @@ impl AgentOrchestrator {
         workspace: PathBuf,
         max_context_tokens: usize,
     ) -> Self {
+        let memory = crate::project_memory::ProjectMemory::new(workspace.clone());
         Self {
             provider,
             toolkits: Vec::new(),
@@ -135,7 +143,9 @@ impl AgentOrchestrator {
             budget: AgentBudget::default(),
             counters: BudgetCounters::default(),
             workspace,
+            memory,
             current_mission: None,
+            started_at: None,
         }
     }
 
@@ -167,25 +177,57 @@ impl AgentOrchestrator {
             .collect()
     }
 
-    async fn execute_tool(&mut self, name: &str, args: serde_json::Value) -> ToolResult {
+    pub async fn execute_tool(
+        &mut self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> ToolResult {
         self.counters.tool_calls += 1;
         for toolkit in &self.toolkits {
-            if let Ok(result) = toolkit.execute(name, args.clone()).await {
-                return result;
+            match toolkit.execute(name, args.clone()).await {
+                Ok(result) => return result,
+                Err(e) => {
+                    // Only continue if the tool was not found in this toolkit
+                    match e {
+                        ToolkitError::ToolNotFound(_) => continue,
+                        _ => return ToolResult::failure(format!("{}", e), None),
+                    }
+                }
             }
         }
-        ToolResult::error(format!("Tool not found: {}", name))
+        ToolResult::failure(format!("Tool not found: {}", name), None)
     }
 
     fn check_budget(&self) -> Option<String> {
         if self.counters.steps >= self.budget.max_steps {
-            Some(format!("max_steps ({}/{})", self.counters.steps, self.budget.max_steps))
+            Some(format!(
+                "max_steps ({}/{})",
+                self.counters.steps, self.budget.max_steps
+            ))
         } else if self.counters.tool_calls >= self.budget.max_tool_calls {
-            Some(format!("max_tool_calls ({}/{})", self.counters.tool_calls, self.budget.max_tool_calls))
+            Some(format!(
+                "max_tool_calls ({}/{})",
+                self.counters.tool_calls, self.budget.max_tool_calls
+            ))
         } else if self.counters.llm_calls >= self.budget.max_llm_calls {
-            Some(format!("max_llm_calls ({}/{})", self.counters.llm_calls, self.budget.max_llm_calls))
-        } else if self.counters.consecutive_failures >= self.budget.max_consecutive_failures {
-            Some(format!("max_consecutive_failures ({})", self.counters.consecutive_failures))
+            Some(format!(
+                "max_llm_calls ({}/{})",
+                self.counters.llm_calls, self.budget.max_llm_calls
+            ))
+        } else if self.counters.consecutive_failures
+            >= self.budget.max_consecutive_failures
+        {
+            Some(format!(
+                "max_consecutive_failures ({})",
+                self.counters.consecutive_failures
+            ))
+        } else if let Some(started_at) = self.started_at {
+            let max_secs = (self.budget.max_duration_minutes as u64) * 60;
+            if started_at.elapsed().as_secs() >= max_secs {
+                Some(format!("max_duration_minutes ({}m)", self.budget.max_duration_minutes))
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -217,7 +259,8 @@ impl AgentOrchestrator {
 
         let mut mission = Mission::new(user_goal);
         for step_val in steps {
-            if let Some(desc) = step_val.get("description").and_then(|v| v.as_str()) {
+            if let Some(desc) = step_val.get("description").and_then(|v| v.as_str())
+            {
                 mission.steps.push(MissionStep {
                     description: desc.to_string(),
                     status: StepStatus::Pending,
@@ -233,7 +276,11 @@ impl AgentOrchestrator {
     // ─── Critic Phase ──────────────────────────────────────────────
 
     /// Use the Critic agent to review output
-    pub async fn critique(&mut self, task: &str, output: &str) -> Result<CriticResult, String> {
+    pub async fn critique(
+        &mut self,
+        task: &str,
+        output: &str,
+    ) -> Result<CriticResult, String> {
         info!("Critic: reviewing output for: {}", task);
         self.counters.llm_calls += 1;
 
@@ -242,10 +289,8 @@ impl AgentOrchestrator {
             task, output
         );
 
-        let messages = vec![
-            LlmMessage::system(CRITIC_PROMPT),
-            LlmMessage::user(prompt),
-        ];
+        let messages =
+            vec![LlmMessage::system(CRITIC_PROMPT), LlmMessage::user(prompt)];
 
         let response = self
             .provider
@@ -255,8 +300,8 @@ impl AgentOrchestrator {
 
         let content = response.content.unwrap_or_default();
 
-        let result: CriticResult = serde_json::from_str(&content)
-            .unwrap_or(CriticResult {
+        let result: CriticResult =
+            serde_json::from_str(&content).unwrap_or(CriticResult {
                 approved: true,
                 feedback: content,
                 suggestions: Vec::new(),
@@ -267,8 +312,191 @@ impl AgentOrchestrator {
 
     // ─── Worker Phase (main agent loop) ────────────────────────────
 
+    /// Process a single prompt through the agent loop with streaming
+    pub async fn stream_process<F, M>(
+        &mut self,
+        user_prompt: &str,
+        mut on_chunk: F,
+        mut on_mission: M,
+    ) -> Result<String, String>
+    where
+        F: FnMut(crate::provider::StreamChunk) + Send,
+        M: FnMut(Mission) + Send,
+    {
+        use futures::StreamExt;
+
+        self.started_at = Some(Instant::now());
+
+        // Augment system prompt with project memory
+        let project_rules = self.memory.to_system_prompt();
+        if !project_rules.is_empty() {
+            let base_prompt = self
+                .context
+                .get_messages()
+                .get(0)
+                .map(|m| m.content.clone())
+                .unwrap_or_default();
+            let augmented = format!("{}\n\n{}", base_prompt, project_rules);
+            self.context.set_system_prompt(augmented);
+        }
+
+        self.context.add_message(LlmMessage::user(user_prompt));
+
+        // Create mission if in Plan mode or if specified
+        if let Ok(mission) = self.plan(user_prompt).await {
+            on_mission(mission);
+        }
+
+        loop {
+            self.counters.steps += 1;
+
+            if let Some(reason) = self.check_budget() {
+                warn!("Budget exceeded: {}", reason);
+                return Err(format!("⚠️ Agent stopped: {}", reason));
+            }
+
+            self.counters.llm_calls += 1;
+            let tools = Some(self.get_tool_definitions());
+            let messages = self.context.get_messages();
+
+            debug!(
+                "Worker step {} (LLM call #{}) [STREAMING]",
+                self.counters.steps, self.counters.llm_calls
+            );
+
+            let mut full_content = String::new();
+            let mut tool_calls_deltas: std::collections::HashMap<
+                usize,
+                (Option<String>, Option<String>, String),
+            > = std::collections::HashMap::new();
+            let mut final_finish_reason = None;
+            let mut _final_usage = None;
+
+            let mut stream = self
+                .provider
+                .stream(messages.clone(), tools)
+                .await
+                .map_err(|e| format!("LLM Stream error: {}", e))?;
+
+            while let Some(chunk_result) = stream.next().await {
+                let chunk =
+                    chunk_result.map_err(|e| format!("Stream error: {}", e))?;
+
+                // Emit to UI
+                on_chunk(chunk.clone());
+
+                if let Some(delta) = chunk.delta_content {
+                    full_content.push_str(&delta);
+                }
+
+                for delta in chunk.delta_tool_calls {
+                    let entry = tool_calls_deltas.entry(delta.index).or_insert((
+                        None,
+                        None,
+                        String::new(),
+                    ));
+                    if delta.id.is_some() {
+                        entry.0 = delta.id;
+                    }
+                    if delta.name.is_some() {
+                        entry.1 = delta.name;
+                    }
+                    if let Some(arg) = delta.arguments_delta {
+                        entry.2.push_str(&arg);
+                    }
+                }
+
+                if chunk.finish_reason.is_some() {
+                    final_finish_reason = chunk.finish_reason;
+                }
+                if chunk.usage.is_some() {
+                    _final_usage = chunk.usage;
+                }
+            }
+
+            let finish_reason = final_finish_reason.unwrap_or(FinishReason::Stop);
+
+            match finish_reason {
+                FinishReason::Stop => {
+                    self.context
+                        .add_message(LlmMessage::assistant(&full_content));
+                    self.counters.consecutive_failures = 0;
+                    info!(
+                        "Worker completed: {} steps, {} tool calls",
+                        self.counters.steps, self.counters.tool_calls
+                    );
+                    return Ok(full_content);
+                }
+                FinishReason::ToolCalls => {
+                    let mut tool_calls = Vec::new();
+                    let mut sorted_indices: Vec<_> =
+                        tool_calls_deltas.keys().collect();
+                    sorted_indices.sort();
+
+                    for idx in sorted_indices {
+                        let (id, name, args_str) =
+                            tool_calls_deltas.get(idx).unwrap();
+                        let arguments: serde_json::Value =
+                            serde_json::from_str(args_str)
+                                .unwrap_or(serde_json::Value::Null);
+
+                        tool_calls.push(crate::provider::ToolCall {
+                            id: id
+                                .clone()
+                                .unwrap_or_else(|| format!("call_{}", idx)),
+                            name: name.clone().unwrap_or_default(),
+                            arguments,
+                        });
+                    }
+
+                    let mut assistant_msg = LlmMessage::assistant(&full_content);
+                    assistant_msg.tool_calls = Some(tool_calls.clone());
+                    self.context.add_message(assistant_msg);
+
+                    for tool_call in tool_calls {
+                        debug!(
+                            "Executing: {} ({})",
+                            tool_call.name, tool_call.arguments
+                        );
+                        let result = self
+                            .execute_tool(&tool_call.name, tool_call.arguments)
+                            .await;
+
+                        if !result.success {
+                            self.counters.consecutive_failures += 1;
+                        } else {
+                            self.counters.consecutive_failures = 0;
+                        }
+
+                        let result_json = serde_json::to_string(&result)
+                            .unwrap_or_else(|_| {
+                                if result.success {
+                                    result.stdout.clone()
+                                } else {
+                                    result.stderr.clone()
+                                }
+                            });
+                        self.context.add_message(LlmMessage::tool_result(
+                            &tool_call.id,
+                            result_json,
+                        ));
+                    }
+                    // Loop back for next interaction after tool results
+                }
+                FinishReason::Length => {
+                    return Err("Response truncated (max tokens)".to_string());
+                }
+                FinishReason::Error => {
+                    self.counters.consecutive_failures += 1;
+                    return Err("LLM returned error".to_string());
+                }
+            }
+        }
+    }
+
     /// Process a single prompt through the agent loop (Worker role)
     pub async fn process(&mut self, user_prompt: &str) -> Result<String, String> {
+        self.started_at = Some(Instant::now());
         self.context.add_message(LlmMessage::user(user_prompt));
 
         loop {
@@ -283,7 +511,10 @@ impl AgentOrchestrator {
             let tools = Some(self.get_tool_definitions());
             let messages = self.context.get_messages();
 
-            debug!("Worker step {} (LLM call #{})", self.counters.steps, self.counters.llm_calls);
+            debug!(
+                "Worker step {} (LLM call #{})",
+                self.counters.steps, self.counters.llm_calls
+            );
 
             let response = self
                 .provider
@@ -296,21 +527,28 @@ impl AgentOrchestrator {
                     let content = response.content.unwrap_or_default();
                     self.context.add_message(LlmMessage::assistant(&content));
                     self.counters.consecutive_failures = 0;
-                    info!("Worker completed: {} steps, {} tool calls",
-                          self.counters.steps, self.counters.tool_calls);
+                    info!(
+                        "Worker completed: {} steps, {} tool calls",
+                        self.counters.steps, self.counters.tool_calls
+                    );
                     return Ok(content);
                 }
                 FinishReason::ToolCalls => {
                     let mut assistant_msg = LlmMessage::assistant(
-                        response.content.clone().unwrap_or_default()
+                        response.content.clone().unwrap_or_default(),
                     );
                     assistant_msg.tool_calls = Some(response.tool_calls.clone());
                     self.context.add_message(assistant_msg);
 
                     for tool_call in response.tool_calls {
-                        debug!("Executing: {} ({})", tool_call.name, tool_call.arguments);
-                        let result = self.execute_tool(&tool_call.name, tool_call.arguments).await;
-                        
+                        debug!(
+                            "Executing: {} ({})",
+                            tool_call.name, tool_call.arguments
+                        );
+                        let result = self
+                            .execute_tool(&tool_call.name, tool_call.arguments)
+                            .await;
+
                         if !result.success {
                             self.counters.consecutive_failures += 1;
                         } else {
@@ -318,10 +556,17 @@ impl AgentOrchestrator {
                         }
 
                         let result_json = serde_json::to_string(&result)
-                            .unwrap_or_else(|_| result.output.clone());
-                        self.context.add_message(
-                            LlmMessage::tool_result(&tool_call.id, result_json)
-                        );
+                            .unwrap_or_else(|_| {
+                                if result.success {
+                                    result.stdout.clone()
+                                } else {
+                                    result.stderr.clone()
+                                }
+                            });
+                        self.context.add_message(LlmMessage::tool_result(
+                            &tool_call.id,
+                            result_json,
+                        ));
                     }
                 }
                 FinishReason::Length => {
@@ -347,7 +592,12 @@ impl AgentOrchestrator {
 
         // Phase 2: Execute each step with Worker + review with Critic
         for (i, step) in mission.steps.iter().enumerate() {
-            info!("Mission step {}/{}: {}", i + 1, mission.steps.len(), step.description);
+            info!(
+                "Mission step {}/{}: {}",
+                i + 1,
+                mission.steps.len(),
+                step.description
+            );
 
             // Update mission status
             if let Some(ref mut m) = self.current_mission {
@@ -382,7 +632,12 @@ impl AgentOrchestrator {
                 }
             }
 
-            results.push(format!("Step {}: {}\n{}", i + 1, step.description, output));
+            results.push(format!(
+                "Step {}: {}\n{}",
+                i + 1,
+                step.description,
+                output
+            ));
 
             // Reset context between steps to avoid overflow
             self.context.clear();
@@ -600,7 +855,11 @@ mod tests {
         for i in 0..1000 {
             m.steps.push(MissionStep {
                 description: format!("Step {}", i),
-                status: if i % 3 == 0 { StepStatus::Completed } else { StepStatus::Pending },
+                status: if i % 3 == 0 {
+                    StepStatus::Completed
+                } else {
+                    StepStatus::Pending
+                },
             });
         }
         let (done, total) = m.progress();

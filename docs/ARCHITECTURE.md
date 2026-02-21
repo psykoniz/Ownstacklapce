@@ -2,7 +2,7 @@
 
 > **Version**: 1.1  
 > **Dernière mise à jour**: 9 février 2026  
-> **Statut**: Phase 0 — Fork & Rebrand
+> **Statut**: Phase 4 — Distribution (Installers & Bundling)
 
 ---
 

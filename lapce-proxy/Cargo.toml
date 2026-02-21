@@ -29,6 +29,7 @@ tracing            = { workspace = true }
 tracing-log        = { workspace = true }
 url                = { workspace = true }
 zstd               = { workspace = true }
+tokio              = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "process"] }
 
 lsp-types = { workspace = true }
 psp-types = { workspace = true }

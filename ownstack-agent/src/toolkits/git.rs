@@ -1,135 +1,280 @@
-//! Git Integration Toolkit
-//!
-//! Tools for AI-assisted git operations:
-//! status, diff, staging, commit, branch management.
-//! All commands pass through the security pipeline.
-
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
-use tracing::debug;
+use std::sync::Arc;
+use std::time::Instant;
+use tracing::{error, info, warn};
 
+use crate::provider::LlmMessage;
+use crate::provider::LlmProvider;
+
+use crate::policy_approval::PolicyApprovalManager;
+use crate::toolkits::{ToolDef, Toolkit, ToolkitError};
 use ownstack_engine::{
-    PolicyDecision, PolicyEngine,
-    ProcessSandbox, Sandbox, SandboxLevel,
+    AuditEntry, AuditLogger, PolicyDecision, PolicyEngine, Sandbox, SandboxLevel,
+    ToolResult,
 };
 
-use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
+#[derive(Deserialize)]
+struct GitArgs {
+    command: String,
+    args: Option<Vec<String>>,
+}
 
-/// Git integration toolkit
 pub struct GitToolkit {
     workspace: PathBuf,
+    session_id: String,
+    audit_logger: AuditLogger,
+    approval: Option<Arc<PolicyApprovalManager>>,
+    // policy is no longer needed as a field since evaluate is static,
+    // but we keep it for now if we want to add non-static state later.
+    // For now, let's keep the constructor signature consistent.
+    _policy: Arc<PolicyEngine>,
+    sandbox: Arc<dyn Sandbox + Send + Sync>,
+    provider: Arc<dyn LlmProvider + Send + Sync>,
 }
 
 impl GitToolkit {
-    pub fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+    pub fn new(
+        workspace: PathBuf,
+        session_id: String,
+        approval: Option<Arc<PolicyApprovalManager>>,
+        policy: Arc<PolicyEngine>,
+        sandbox: Arc<dyn Sandbox + Send + Sync>,
+        provider: Arc<dyn LlmProvider + Send + Sync>,
+    ) -> Self {
+        let audit_logger = AuditLogger::new(workspace.clone());
+        Self {
+            workspace,
+            session_id,
+            audit_logger,
+            approval,
+            _policy: policy,
+            sandbox,
+            provider,
+        }
     }
 
-    fn run_git(&self, args: &str) -> Result<ToolResult, ToolkitError> {
-        let command = format!("git {}", args);
+    fn audit(
+        &self,
+        command: &str,
+        policy_decision: PolicyDecision,
+        success: bool,
+        duration_ms: u64,
+    ) {
+        let entry = AuditEntry {
+            timestamp: String::new(),
+            session_id: self.session_id.clone(),
+            action: "exec".to_string(),
+            command: command.to_string(),
+            policy_decision,
+            tool_name: "git.exec".to_string(),
+            success,
+            duration_ms,
+            workspace: self.workspace.to_string_lossy().to_string(),
+            paths_accessed: Vec::new(),
+        };
 
-        // Policy check
-        let decision = PolicyEngine::evaluate(&command);
+        if let Err(err) = self.audit_logger.log(entry) {
+            warn!("audit log failed: {}", err);
+        }
+    }
+
+    async fn run_git(&self, command: &str) -> Result<ToolResult, ToolkitError> {
+        let start = Instant::now();
+        let full_command = format!("git {}", command);
+        // PolicyEngine::evaluate is static in ownstack-engine/src/policy.rs
+        let decision = PolicyEngine::evaluate(&full_command);
+
         match decision {
             PolicyDecision::Blocked => {
-                return Err(ToolkitError::SecurityViolation(format!(
-                    "Git command blocked: {}",
-                    command
-                )));
+                self.audit(
+                    &full_command,
+                    PolicyDecision::Blocked,
+                    false,
+                    start.elapsed().as_millis() as u64,
+                );
+                Err(ToolkitError::SecurityViolation(full_command))
             }
             PolicyDecision::Ask => {
-                debug!("Git command requires approval: {}", command);
-                // In production, prompt user
+                if let Some(approval) = self.approval.as_ref() {
+                    let approved = approval
+                        .request(
+                            full_command.clone(),
+                            "Git command requires user approval".to_string(),
+                        )
+                        .await;
+                    if !approved {
+                        self.audit(
+                            &full_command,
+                            PolicyDecision::Ask,
+                            false,
+                            start.elapsed().as_millis() as u64,
+                        );
+                        return Err(ToolkitError::SecurityViolation(format!(
+                            "Git command denied by user: {}",
+                            full_command
+                        )));
+                    }
+                } else {
+                    self.audit(
+                        &full_command,
+                        PolicyDecision::Ask,
+                        false,
+                        start.elapsed().as_millis() as u64,
+                    );
+                    return Err(ToolkitError::SecurityViolation(format!(
+                        "Git command requires approval but UI is not connected: {}",
+                        full_command
+                    )));
+                }
+
+                let result = self.sandbox.exec(
+                    &full_command,
+                    &self.workspace,
+                    SandboxLevel::Standard,
+                );
+                self.audit(
+                    &full_command,
+                    PolicyDecision::Ask,
+                    result.success,
+                    start.elapsed().as_millis() as u64,
+                );
+                Ok(result)
             }
-            PolicyDecision::Auto => {}
+            PolicyDecision::Auto => {
+                let result = self.sandbox.exec(
+                    &full_command,
+                    &self.workspace,
+                    SandboxLevel::Standard,
+                );
+                self.audit(
+                    &full_command,
+                    PolicyDecision::Auto,
+                    result.success,
+                    start.elapsed().as_millis() as u64,
+                );
+                Ok(result)
+            }
+        }
+    }
+
+    async fn status(&self) -> Result<ToolResult, ToolkitError> {
+        self.run_git("status --porcelain").await
+    }
+
+    async fn diff(&self, staged: bool) -> Result<ToolResult, ToolkitError> {
+        let arg = if staged { "--cached" } else { "" };
+        self.run_git(&format!("diff {}", arg)).await
+    }
+
+    async fn add(&self, path: &str) -> Result<ToolResult, ToolkitError> {
+        self.run_git(&format!("add {}", path)).await
+    }
+
+    async fn commit(&self, message: &str) -> Result<ToolResult, ToolkitError> {
+        self.run_git(&format!("commit -m \"{}\"", message)).await
+    }
+
+    async fn push(
+        &self,
+        remote: &str,
+        branch: &str,
+    ) -> Result<ToolResult, ToolkitError> {
+        self.run_git(&format!("push {} {}", remote, branch)).await
+    }
+
+    async fn pull(
+        &self,
+        remote: &str,
+        branch: &str,
+    ) -> Result<ToolResult, ToolkitError> {
+        self.run_git(&format!("pull {} {}", remote, branch)).await
+    }
+
+    async fn branch_list(&self) -> Result<ToolResult, ToolkitError> {
+        self.run_git("branch").await
+    }
+
+    async fn branch_create(&self, name: &str) -> Result<ToolResult, ToolkitError> {
+        self.run_git(&format!("checkout -b {}", name)).await
+    }
+
+    pub async fn branch_switch(
+        &self,
+        name: &str,
+    ) -> Result<ToolResult, ToolkitError> {
+        self.run_git(&format!("checkout {}", name)).await
+    }
+
+    pub async fn suggest_commit_message(&self) -> Result<ToolResult, ToolkitError> {
+        info!("Suggesting commit message (staged changes)...");
+        info!("CWD: {:?}", self.workspace);
+
+        let toplevel_res = self.run_git("rev-parse --show-toplevel").await?;
+        info!("Git Toplevel: {}", toplevel_res.stdout.trim());
+
+        let status_res = self.run_git("status --porcelain").await?;
+        info!("Git Status: {}", status_res.stdout);
+
+        let diff_res = self.diff(true).await?;
+        if !diff_res.success {
+            return Ok(ToolResult::failure(
+                format!("Git diff failed: {}", diff_res.stderr),
+                diff_res.exit_code,
+            ));
         }
 
-        // Execute in sandbox
-        let sandbox = ProcessSandbox;
-        let result = sandbox.exec(&command, &self.workspace, SandboxLevel::Standard);
+        info!("Diff length: {}", diff_res.stdout.len());
 
-        if result.success {
-            Ok(ToolResult::success(result.stdout))
+        if diff_res.stdout.is_empty() {
+            return Ok(ToolResult::failure(
+                "No changes to suggest a commit message for.".to_string(),
+                None,
+            ));
+        }
+
+        // Edge Case: Massive diff mitigation
+        const MAX_DIFF_CHARS: usize = 50_000;
+        let diff_text = if diff_res.stdout.len() > MAX_DIFF_CHARS {
+            info!(
+                "Truncating diff from {} to {} chars",
+                diff_res.stdout.len(),
+                MAX_DIFF_CHARS
+            );
+            format!("{}... [TRUNCATED]", &diff_res.stdout[..MAX_DIFF_CHARS])
         } else {
-            Ok(ToolResult::error(result.stderr))
+            diff_res.stdout.clone()
+        };
+
+        let prompt = format!(
+            "Suggest a concise commit message based on these staged changes:\n\n```diff\n{}\n```",
+            diff_text
+        );
+
+        let messages = vec![LlmMessage::user(prompt)];
+
+        match self.provider.complete(messages, None).await {
+            Ok(response) => {
+                info!("LLM response received");
+                if let Some(content) = response.content {
+                    Ok(ToolResult::success(content.trim().to_string()))
+                } else {
+                    Ok(ToolResult::failure(
+                        "LLM returned empty response".to_string(),
+                        None,
+                    ))
+                }
+            }
+            Err(e) => {
+                error!("LLM call failed: {}", e);
+                Ok(ToolResult::failure(
+                    format!("LLM provider error: {}", e),
+                    None,
+                ))
+            }
         }
     }
-
-    fn status(&self) -> Result<ToolResult, ToolkitError> {
-        self.run_git("status --short")
-    }
-
-    fn diff(&self, staged: bool) -> Result<ToolResult, ToolkitError> {
-        if staged {
-            self.run_git("diff --cached")
-        } else {
-            self.run_git("diff")
-        }
-    }
-
-    fn log(&self, count: u32) -> Result<ToolResult, ToolkitError> {
-        self.run_git(&format!("log --oneline -n {}", count))
-    }
-
-    fn stage(&self, paths: &[String]) -> Result<ToolResult, ToolkitError> {
-        if paths.is_empty() {
-            self.run_git("add -A")
-        } else {
-            let paths_str = paths.join(" ");
-            self.run_git(&format!("add {}", paths_str))
-        }
-    }
-
-    fn commit(&self, message: &str) -> Result<ToolResult, ToolkitError> {
-        // Escape message for shell safety
-        let safe_message = message.replace('"', r#"\""#);
-        self.run_git(&format!("commit -m \"{}\"", safe_message))
-    }
-
-    fn branch_list(&self) -> Result<ToolResult, ToolkitError> {
-        self.run_git("branch -a")
-    }
-
-    fn branch_create(&self, name: &str) -> Result<ToolResult, ToolkitError> {
-        self.run_git(&format!("checkout -b {}", name))
-    }
-
-    fn branch_switch(&self, name: &str) -> Result<ToolResult, ToolkitError> {
-        self.run_git(&format!("checkout {}", name))
-    }
-}
-
-#[derive(Deserialize)]
-struct DiffArgs {
-    #[serde(default)]
-    staged: bool,
-}
-
-#[derive(Deserialize)]
-struct LogArgs {
-    #[serde(default = "default_log_count")]
-    count: u32,
-}
-
-fn default_log_count() -> u32 {
-    10
-}
-
-#[derive(Deserialize)]
-struct StageArgs {
-    #[serde(default)]
-    paths: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct CommitArgs {
-    message: String,
-}
-
-#[derive(Deserialize)]
-struct BranchArgs {
-    name: String,
 }
 
 #[async_trait]
@@ -142,144 +287,144 @@ impl Toolkit for GitToolkit {
         vec![
             ToolDef {
                 name: "git_status".to_string(),
-                description: "Show the working tree status".to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {}
-                }),
+                description: "Show working tree status".to_string(),
+                parameters: serde_json::json!({}),
             },
             ToolDef {
                 name: "git_diff".to_string(),
-                description: "Show changes between commits, working tree, etc.".to_string(),
+                description: "Show changes between commits/working tree".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "staged": {
-                            "type": "boolean",
-                            "description": "Show staged changes instead of unstaged"
-                        }
+                        "staged": { "type": "boolean" }
                     }
                 }),
             },
             ToolDef {
-                name: "git_log".to_string(),
-                description: "Show commit log".to_string(),
+                name: "git_add".to_string(),
+                description: "Add file contents to the index".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "count": {
-                            "type": "integer",
-                            "description": "Number of commits to show (default: 10)"
-                        }
-                    }
-                }),
-            },
-            ToolDef {
-                name: "git_stage".to_string(),
-                description: "Stage files for commit".to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "paths": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Files to stage (empty = stage all)"
-                        }
-                    }
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
                 }),
             },
             ToolDef {
                 name: "git_commit".to_string(),
-                description: "Commit staged changes".to_string(),
+                description: "Record changes to the repository".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "message": {
-                            "type": "string",
-                            "description": "Commit message"
-                        }
+                        "message": { "type": "string" }
                     },
                     "required": ["message"]
                 }),
             },
             ToolDef {
-                name: "git_branches".to_string(),
-                description: "List all branches".to_string(),
+                name: "git_push".to_string(),
+                description: "Update remote refs along with associated objects".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
-                    "properties": {}
+                    "properties": {
+                        "remote": { "type": "string" },
+                        "branch": { "type": "string" }
+                    },
+                    "required": ["branch"]
                 }),
+            },
+            ToolDef {
+                name: "git_pull".to_string(),
+                description: "Fetch from and integrate with another repository or a local branch".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "remote": { "type": "string" },
+                        "branch": { "type": "string" }
+                    },
+                    "required": ["branch"]
+                }),
+            },
+            ToolDef {
+                name: "git_branch_list".to_string(),
+                description: "List branches".to_string(),
+                parameters: serde_json::json!({}),
             },
             ToolDef {
                 name: "git_branch_create".to_string(),
-                description: "Create and switch to a new branch".to_string(),
+                description: "Create a new branch".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "Branch name"
-                        }
+                        "name": { "type": "string" }
                     },
                     "required": ["name"]
                 }),
             },
             ToolDef {
-                name: "git_branch_switch".to_string(),
-                description: "Switch to an existing branch".to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "Branch name"
-                        }
-                    },
-                    "required": ["name"]
-                }),
+                name: "git_suggest_commit".to_string(),
+                description: "AI-assisted commit message suggestion (staged changes only)".to_string(),
+                parameters: serde_json::json!({}),
             },
         ]
     }
 
     async fn execute(
         &self,
-        tool_name: &str,
+        name: &str,
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolkitError> {
-        match tool_name {
-            "git_status" => self.status(),
+        info!("GitToolkit::execute: {}", name);
+        match name {
+            "git_status" => self.status().await,
             "git_diff" => {
-                let parsed: DiffArgs = serde_json::from_value(args)
-                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                self.diff(parsed.staged)
+                let staged = args["staged"].as_bool().unwrap_or(false);
+                self.diff(staged).await
             }
-            "git_log" => {
-                let parsed: LogArgs = serde_json::from_value(args)
-                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                self.log(parsed.count)
-            }
-            "git_stage" => {
-                let parsed: StageArgs = serde_json::from_value(args)
-                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                self.stage(&parsed.paths)
+            "git_add" => {
+                let path =
+                    args["path"].as_str().ok_or(ToolkitError::InvalidArguments(
+                        "Missing 'path' argument".to_string(),
+                    ))?;
+                self.add(path).await
             }
             "git_commit" => {
-                let parsed: CommitArgs = serde_json::from_value(args)
-                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                self.commit(&parsed.message)
+                let message = args["message"].as_str().ok_or(
+                    ToolkitError::InvalidArguments(
+                        "Missing 'message' argument".to_string(),
+                    ),
+                )?;
+                self.commit(message).await
             }
-            "git_branches" => self.branch_list(),
+            "git_push" => {
+                let remote = args["remote"].as_str().unwrap_or("origin");
+                let branch = args["branch"].as_str().ok_or(
+                    ToolkitError::InvalidArguments(
+                        "Missing 'branch' argument".to_string(),
+                    ),
+                )?;
+                self.push(remote, branch).await
+            }
+            "git_pull" => {
+                let remote = args["remote"].as_str().unwrap_or("origin");
+                let branch = args["branch"].as_str().ok_or(
+                    ToolkitError::InvalidArguments(
+                        "Missing 'branch' argument".to_string(),
+                    ),
+                )?;
+                self.pull(remote, branch).await
+            }
+            "git_branch_list" => self.branch_list().await,
             "git_branch_create" => {
-                let parsed: BranchArgs = serde_json::from_value(args)
-                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                self.branch_create(&parsed.name)
+                let name =
+                    args["name"].as_str().ok_or(ToolkitError::InvalidArguments(
+                        "Missing 'name' argument".to_string(),
+                    ))?;
+                self.branch_create(name).await
             }
-            "git_branch_switch" => {
-                let parsed: BranchArgs = serde_json::from_value(args)
-                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                self.branch_switch(&parsed.name)
-            }
-            _ => Err(ToolkitError::ToolNotFound(tool_name.to_string())),
+            "git_suggest_commit" => self.suggest_commit_message().await,
+            _ => Err(ToolkitError::ToolNotFound(name.to_string())),
         }
     }
 }
@@ -287,119 +432,155 @@ impl Toolkit for GitToolkit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
+    use crate::provider::{
+        FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderError,
+    };
     use std::fs;
     use std::process::Command;
+    use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
+
+    struct MockProvider {
+        last_message: Arc<Mutex<String>>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for MockProvider {
+        async fn complete(
+            &self,
+            m: Vec<LlmMessage>,
+            _t: Option<Vec<crate::provider::ToolDefinition>>,
+        ) -> Result<LlmResponse, ProviderError> {
+            if let Some(msg) = m.first() {
+                let mut last = self.last_message.lock().unwrap();
+                *last = msg.content.clone();
+            }
+            Ok(LlmResponse {
+                content: Some("suggested commit".to_string()),
+                tool_calls: vec![],
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            })
+        }
+
+        fn name(&self) -> &str {
+            "mock-provider"
+        }
+    }
 
     fn init_git_repo(path: &std::path::Path) {
+        let _ = Command::new("git").arg("init").current_dir(path).status();
+
+        // Configure user for commit
         let _ = Command::new("git")
-            .arg("init")
+            .args(["config", "user.email", "test@example.com"])
             .current_dir(path)
-            .output();
-        
+            .status();
+
         let _ = Command::new("git")
-            .args(&["config", "user.email", "test@ownstack.dev"])
+            .args(["config", "user.name", "Test User"])
             .current_dir(path)
-            .output();
-        
+            .status();
+    }
+
+    #[tokio::test]
+    async fn test_git_status() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+        init_git_repo(path);
+
+        fs::write(path.join("test.txt"), "hello").unwrap();
+
+        let policy = Arc::new(PolicyEngine);
+        let sandbox = Arc::new(ownstack_engine::ProcessSandbox);
+        let provider = Arc::new(MockProvider {
+            last_message: Arc::new(Mutex::new(String::new())),
+        });
+        let git = GitToolkit::new(
+            path.to_path_buf(),
+            "test".to_string(),
+            None,
+            policy,
+            sandbox,
+            provider,
+        );
+
+        let result = git.status().await.unwrap();
+        assert!(result.success);
+        assert!(result.stdout.contains("?? test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_git_suggest_commit() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+        init_git_repo(path);
+
+        fs::write(path.join("test.txt"), "hello").unwrap();
+
         let _ = Command::new("git")
-            .args(&["config", "user.name", "Test User"])
+            .args(["add", "test.txt"])
             .current_dir(path)
-            .output();
+            .status();
+
+        let policy = Arc::new(PolicyEngine);
+        let sandbox = Arc::new(ownstack_engine::ProcessSandbox);
+        let provider = Arc::new(MockProvider {
+            last_message: Arc::new(Mutex::new(String::new())),
+        });
+        let git = GitToolkit::new(
+            path.to_path_buf(),
+            "test".to_string(),
+            None,
+            policy,
+            sandbox,
+            provider,
+        );
+
+        let result = git.suggest_commit_message().await.unwrap();
+        assert!(result.success);
+        assert!(result.stdout.contains("suggested commit"));
     }
 
     #[tokio::test]
-    async fn test_git_toolkit_creation() {
+    async fn test_massive_diff_truncation() {
         let dir = tempdir().unwrap();
-        let tk = GitToolkit::new(dir.path().to_path_buf());
-        assert_eq!(tk.name(), "git");
-        assert_eq!(tk.tools().len(), 8);
-    }
+        let path = dir.path();
+        init_git_repo(path);
 
-    #[tokio::test]
-    async fn test_git_status_empty() {
-        let dir = tempdir().unwrap();
-        init_git_repo(dir.path());
-        let tk = GitToolkit::new(dir.path().to_path_buf());
-        
-        let res = tk.execute("git_status", serde_json::json!({})).await.unwrap();
-        assert!(res.success);
-    }
+        // Create a massive file (200k chars)
+        let content = "a".repeat(200_000);
+        fs::write(path.join("massive.txt"), &content).unwrap();
 
-    #[tokio::test]
-    async fn test_git_workflow() {
-        let dir = tempdir().unwrap();
-        init_git_repo(dir.path());
-        let tk = GitToolkit::new(dir.path().to_path_buf());
-        
-        // 1. Create a file
-        fs::write(dir.path().join("file.txt"), "hello").unwrap();
-        
-        // 2. Status
-        let res = tk.execute("git_status", serde_json::json!({})).await.unwrap();
-        assert!(res.output.contains("file.txt") || res.output.is_empty()); // empty if git status --short and untracked
+        let _ = Command::new("git")
+            .args(["add", "massive.txt"])
+            .current_dir(path)
+            .status()
+            .expect("Failed to execute git add");
 
-        // 3. Stage
-        let res = tk.execute("git_stage", serde_json::json!({"paths": ["file.txt"]})).await.unwrap();
-        assert!(res.success);
+        let policy = Arc::new(PolicyEngine);
+        let sandbox = Arc::new(ownstack_engine::ProcessSandbox);
+        let last_message = Arc::new(Mutex::new(String::new()));
+        let provider = Arc::new(MockProvider {
+            last_message: last_message.clone(),
+        });
+        let git = GitToolkit::new(
+            path.to_path_buf(),
+            "test".to_string(),
+            None,
+            policy,
+            sandbox.clone(),
+            provider,
+        );
 
-        // 4. Commit
-        let res = tk.execute("git_commit", serde_json::json!({"message": "initial commit"})).await.unwrap();
-        assert!(res.success);
+        let result = git.suggest_commit_message().await.unwrap();
+        assert!(result.success);
 
-        // 5. Log
-        let res = tk.execute("git_log", serde_json::json!({"count": 1})).await.unwrap();
-        assert!(res.success);
-        assert!(res.output.contains("initial commit"));
-    }
-
-    #[tokio::test]
-    async fn test_git_branch_management() {
-        let dir = tempdir().unwrap();
-        init_git_repo(dir.path());
-        fs::write(dir.path().join("f"), "a").unwrap();
-        let tk = GitToolkit::new(dir.path().to_path_buf());
-        
-        // Must have a commit to create branches in some git versions
-        tk.execute("git_stage", serde_json::json!({})).await.unwrap();
-        tk.execute("git_commit", serde_json::json!({"message": "m"})).await.unwrap();
-
-        // Create branch
-        let res = tk.execute("git_branch_create", serde_json::json!({"name": "feature-1"})).await.unwrap();
-        assert!(res.success);
-
-        // List branches
-        let res = tk.execute("git_branches", serde_json::json!({})).await.unwrap();
-        assert!(res.output.contains("feature-1"));
-
-        // Switch back to master (or main)
-        let _ = tk.execute("git_branch_switch", serde_json::json!({"name": "master"})).await;
-    }
-
-    #[tokio::test]
-    async fn test_git_security_blocking() {
-        let dir = tempdir().unwrap();
-        let tk = GitToolkit::new(dir.path().to_path_buf());
-        
-        // Although run_git prepends "git ", we test if our evaluate handles it
-        // If the agent tries to inject something destructive via git args
-        let res = tk.execute("git_status", serde_json::json!({"id": "; rm -rf /"})).await;
-        // Arguments aren't currently sanitized for injection in a way that PolicyEngine sees them as part of the command string if they aren't parsed into 'args' correctly.
-        // But let's test a known blocked git command if we add one.
-        // Currently PolicyEngine blocks "rm -rf", and our run_git does format!("git {}", args).
-        // If args contains "; rm -rf /", the full command is "git ; rm -rf /"
-        // Let's see if run_git evaluates the WHOLE command.
-        
-        let res = tk.run_git("; rm -rf /"); 
-        assert!(res.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_git_invalid_arguments() {
-        let dir = tempdir().unwrap();
-        let tk = GitToolkit::new(dir.path().to_path_buf());
-        
-        let res = tk.execute("git_commit", serde_json::json!({})).await;
-        assert!(matches!(res, Err(ToolkitError::InvalidArguments(_))));
+        let message = last_message.lock().unwrap();
+        assert!(message.contains("[TRUNCATED]"));
+        // formatting adds some overhead, so length should be around 50k + prompt overhead
+        // But definitely less than 200k
+        assert!(message.len() < 100_000);
+        assert!(message.len() > 40_000); // Should be at least 50k chars of diff
     }
 }

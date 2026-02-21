@@ -162,7 +162,8 @@ mod tests {
     fn test_metadata_multiple_entries() {
         let mut r = ToolResult::success("ok".to_string());
         for i in 0..100 {
-            r.metadata.insert(format!("key_{}", i), format!("val_{}", i));
+            r.metadata
+                .insert(format!("key_{}", i), format!("val_{}", i));
         }
         assert_eq!(r.metadata.len(), 100);
     }
@@ -186,4 +187,3 @@ mod tests {
         }
     }
 }
-

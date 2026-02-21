@@ -3,8 +3,8 @@
 //! This is the high-level API that all tools and agents should use
 //! to ensure the multi-step security flow is followed correctly.
 
-use std::path::{Path, PathBuf};
 use chrono;
+use std::path::{Path, PathBuf};
 
 use crate::{
     AuditEntry, AuditLogger, PathError, PathValidator, PolicyDecision, PolicyEngine,
@@ -23,9 +23,13 @@ impl SecurityContext {
     }
 
     /// Evaluates a command and logs the result
-    pub fn evaluate_and_audit(&self, command: &str, tool_name: &str) -> PolicyDecision {
+    pub fn evaluate_and_audit(
+        &self,
+        command: &str,
+        tool_name: &str,
+    ) -> PolicyDecision {
         let decision = PolicyEngine::evaluate(command);
-        
+
         // Always log the evaluation
         let entry = AuditEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -42,7 +46,7 @@ impl SecurityContext {
 
         let logger = AuditLogger::new(self.workspace.clone());
         let _ = logger.log(entry);
-        
+
         decision
     }
 
@@ -56,7 +60,13 @@ impl SecurityContext {
     }
 
     /// Logs a tool execution result
-    pub fn log_result(&self, command: &str, tool_name: &str, result: &ToolResult, duration_ms: u64) {
+    pub fn log_result(
+        &self,
+        command: &str,
+        tool_name: &str,
+        result: &ToolResult,
+        duration_ms: u64,
+    ) {
         let entry = AuditEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
             session_id: "system".to_string(),
@@ -84,10 +94,10 @@ mod tests {
     fn test_security_context_evaluate() {
         let dir = tempdir().unwrap();
         let ctx = SecurityContext::new(dir.path());
-        
+
         let decision = ctx.evaluate_and_audit("ls", "test");
         assert_eq!(decision, PolicyDecision::Auto);
-        
+
         // Verify audit log exists
         let audit_path = dir.path().join(".ownstack").join("audit.jsonl");
         assert!(audit_path.exists());
@@ -97,7 +107,7 @@ mod tests {
     fn test_security_context_validate_paths() {
         let dir = tempdir().unwrap();
         let ctx = SecurityContext::new(dir.path());
-        
+
         assert!(ctx.validate_paths(&["src/lib.rs".to_string()]).is_ok());
         assert!(ctx.validate_paths(&["/etc/passwd".to_string()]).is_err());
     }

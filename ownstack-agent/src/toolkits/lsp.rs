@@ -10,8 +10,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use url::Url;
 
-use crate::lsp::LspClient;
 use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
+use crate::lsp::LspClient;
 
 /// LSP toolkit for code intelligence operations
 pub struct LspToolkit {
@@ -36,7 +36,9 @@ impl LspToolkit {
             command = Some("rust-analyzer");
         }
         // Check for Python
-        else if self.workspace.join("pyproject.toml").exists() || self.workspace.join("requirements.txt").exists() {
+        else if self.workspace.join("pyproject.toml").exists()
+            || self.workspace.join("requirements.txt").exists()
+        {
             command = Some("pylsp");
         }
         // Check for Node/TS
@@ -46,38 +48,57 @@ impl LspToolkit {
         }
         // Check for Go
         else if self.workspace.join("go.mod").exists() {
-             command = Some("gopls");
+            command = Some("gopls");
         }
 
         if let Some(cmd) = command {
             self.connect(cmd, args).await
         } else {
-            Ok(ToolResult::error("Could not auto-detect language server from workspace files".to_string()))
+            Ok(ToolResult::failure(
+                "Could not auto-detect language server from workspace files"
+                    .to_string(),
+                None,
+            ))
         }
     }
 
-    async fn connect(&self, command: &str, args: Vec<String>) -> Result<ToolResult, ToolkitError> {
-        let client = LspClient::start(command, &args)
-            .await
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Failed to start LSP: {}", e)))?;
+    async fn connect(
+        &self,
+        command: &str,
+        args: Vec<String>,
+    ) -> Result<ToolResult, ToolkitError> {
+        let client = LspClient::start(command, &args).await.map_err(|e| {
+            ToolkitError::ExecutionFailed(format!("Failed to start LSP: {}", e))
+        })?;
 
         // Initialize with workspace root
-        let root_uri = Url::from_directory_path(&self.workspace)
-            .map_err(|_| ToolkitError::ExecutionFailed("Invalid workspace path".to_string()))?;
+        let root_uri = Url::from_directory_path(&self.workspace).map_err(|_| {
+            ToolkitError::ExecutionFailed("Invalid workspace path".to_string())
+        })?;
 
-        client.initialize(root_uri)
-            .await
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("LSP initialization failed: {}", e)))?;
+        client.initialize(root_uri).await.map_err(|e| {
+            ToolkitError::ExecutionFailed(format!(
+                "LSP initialization failed: {}",
+                e
+            ))
+        })?;
 
         let mut c = self.client.lock().await;
         *c = Some(client);
 
-        Ok(ToolResult::success(format!("Connected to LSP server: {} {:?}", command, args)))
+        Ok(ToolResult::success(format!(
+            "Connected to LSP server: {} {:?}",
+            command, args
+        )))
     }
 
     async fn ensure_client(&self) -> Result<Arc<LspClient>, ToolkitError> {
         let c = self.client.lock().await;
-        c.as_ref().cloned().ok_or_else(|| ToolkitError::ExecutionFailed("LSP not connected. Use 'lsp_connect' first.".to_string()))
+        c.as_ref().cloned().ok_or_else(|| {
+            ToolkitError::ExecutionFailed(
+                "LSP not connected. Use 'lsp_connect' first.".to_string(),
+            )
+        })
     }
 
     fn to_uri(&self, path: &str) -> Result<Url, ToolkitError> {
@@ -87,64 +108,107 @@ impl LspToolkit {
         } else {
             self.workspace.join(path)
         };
-        
+
         // Canonicalize to ensure correct URI (resolve symlinks, etc)
         let abs_path = abs_path.canonicalize().unwrap_or(abs_path);
 
-        Url::from_file_path(abs_path)
-            .map_err(|_| ToolkitError::InvalidArguments(format!("Invalid path for URL conversion: {}", path.display())))
+        Url::from_file_path(abs_path).map_err(|_| {
+            ToolkitError::InvalidArguments(format!(
+                "Invalid path for URL conversion: {}",
+                path.display()
+            ))
+        })
     }
 
     async fn get_diagnostics(&self, path: &str) -> Result<ToolResult, ToolkitError> {
         let client = self.ensure_client().await?;
         let uri = self.to_uri(path)?;
-        
+
         let diags = client.get_diagnostics(&uri).await;
-        
+
         match diags {
-            Some(d) => Ok(ToolResult::success(serde_json::to_string_pretty(&d).unwrap_or_default())),
-            None => Ok(ToolResult::success("No diagnostics available (file not open or no errors)".to_string())),
+            Some(d) => Ok(ToolResult::success(
+                serde_json::to_string_pretty(&d).unwrap_or_default(),
+            )),
+            None => Ok(ToolResult::success(
+                "No diagnostics available (file not open or no errors)".to_string(),
+            )),
         }
     }
 
-    async fn goto_definition(&self, path: &str, line: u32, column: u32) -> Result<ToolResult, ToolkitError> {
+    async fn goto_definition(
+        &self,
+        path: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<ToolResult, ToolkitError> {
         let client = self.ensure_client().await?;
         let uri = self.to_uri(path)?;
-        
-        let result = client.goto_definition(uri, line, column).await
-            .map_err(|e| ToolkitError::ExecutionFailed(format!("Request failed: {}", e)))?;
-            
-        Ok(ToolResult::success(serde_json::to_string_pretty(&result).unwrap_or_default()))
+
+        let result =
+            client
+                .goto_definition(uri, line, column)
+                .await
+                .map_err(|e| {
+                    ToolkitError::ExecutionFailed(format!("Request failed: {}", e))
+                })?;
+
+        Ok(ToolResult::success(
+            serde_json::to_string_pretty(&result).unwrap_or_default(),
+        ))
     }
 
-    async fn find_references(&self, path: &str, line: u32, column: u32) -> Result<ToolResult, ToolkitError> {
+    async fn find_references(
+        &self,
+        path: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<ToolResult, ToolkitError> {
         let client = self.ensure_client().await?;
         let uri = self.to_uri(path)?;
-        
-        let result = client.find_references(uri, line, column).await
-             .map_err(|e| ToolkitError::ExecutionFailed(format!("Request failed: {}", e)))?;
 
-        Ok(ToolResult::success(serde_json::to_string_pretty(&result).unwrap_or_default()))
+        let result =
+            client
+                .find_references(uri, line, column)
+                .await
+                .map_err(|e| {
+                    ToolkitError::ExecutionFailed(format!("Request failed: {}", e))
+                })?;
+
+        Ok(ToolResult::success(
+            serde_json::to_string_pretty(&result).unwrap_or_default(),
+        ))
     }
 
     async fn get_symbols(&self, path: &str) -> Result<ToolResult, ToolkitError> {
         let client = self.ensure_client().await?;
         let uri = self.to_uri(path)?;
-        
-        let result = client.document_symbol(uri).await
-             .map_err(|e| ToolkitError::ExecutionFailed(format!("Request failed: {}", e)))?;
 
-        Ok(ToolResult::success(serde_json::to_string_pretty(&result).unwrap_or_default()))
+        let result = client.document_symbol(uri).await.map_err(|e| {
+            ToolkitError::ExecutionFailed(format!("Request failed: {}", e))
+        })?;
+
+        Ok(ToolResult::success(
+            serde_json::to_string_pretty(&result).unwrap_or_default(),
+        ))
     }
 
-    async fn hover(&self, path: &str, line: u32, column: u32) -> Result<ToolResult, ToolkitError> {
+    async fn hover(
+        &self,
+        path: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<ToolResult, ToolkitError> {
         let client = self.ensure_client().await?;
         let uri = self.to_uri(path)?;
 
-        let result = client.hover(uri, line, column).await
-             .map_err(|e| ToolkitError::ExecutionFailed(format!("Request failed: {}", e)))?;
+        let result = client.hover(uri, line, column).await.map_err(|e| {
+            ToolkitError::ExecutionFailed(format!("Request failed: {}", e))
+        })?;
 
-        Ok(ToolResult::success(serde_json::to_string_pretty(&result).unwrap_or_default()))
+        Ok(ToolResult::success(
+            serde_json::to_string_pretty(&result).unwrap_or_default(),
+        ))
     }
 }
 
@@ -188,7 +252,9 @@ impl Toolkit for LspToolkit {
             },
             ToolDef {
                 name: "lsp_auto_connect".to_string(),
-                description: "Auto-detect and connect to LSP server based on workspace files".to_string(),
+                description:
+                    "Auto-detect and connect to LSP server based on workspace files"
+                        .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {},
@@ -209,7 +275,7 @@ impl Toolkit for LspToolkit {
                 description: "Go to definition".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
-                    "properties": { 
+                    "properties": {
                         "path": { "type": "string" },
                         "line": { "type": "integer" },
                         "column": { "type": "integer" }
@@ -222,7 +288,7 @@ impl Toolkit for LspToolkit {
                 description: "Find references".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
-                    "properties": { 
+                    "properties": {
                         "path": { "type": "string" },
                         "line": { "type": "integer" },
                         "column": { "type": "integer" }
@@ -239,12 +305,12 @@ impl Toolkit for LspToolkit {
                     "required": ["path"]
                 }),
             },
-             ToolDef {
+            ToolDef {
                 name: "lsp_hover".to_string(),
                 description: "Get hover information".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
-                    "properties": { 
+                    "properties": {
                         "path": { "type": "string" },
                         "line": { "type": "integer" },
                         "column": { "type": "integer" }
@@ -264,11 +330,10 @@ impl Toolkit for LspToolkit {
             "lsp_connect" => {
                 let parsed: ConnectArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                self.connect(&parsed.command, parsed.args.unwrap_or_default()).await
+                self.connect(&parsed.command, parsed.args.unwrap_or_default())
+                    .await
             }
-            "lsp_auto_connect" => {
-                self.auto_connect().await
-            }
+            "lsp_auto_connect" => self.auto_connect().await,
             "lsp_diagnostics" => {
                 let parsed: PathArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
@@ -277,12 +342,14 @@ impl Toolkit for LspToolkit {
             "lsp_definition" => {
                 let parsed: LocationArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                self.goto_definition(&parsed.path, parsed.line, parsed.column).await
+                self.goto_definition(&parsed.path, parsed.line, parsed.column)
+                    .await
             }
             "lsp_references" => {
                 let parsed: LocationArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                self.find_references(&parsed.path, parsed.line, parsed.column).await
+                self.find_references(&parsed.path, parsed.line, parsed.column)
+                    .await
             }
             "lsp_symbols" => {
                 let parsed: PathArgs = serde_json::from_value(args)

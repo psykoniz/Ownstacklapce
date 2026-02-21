@@ -19,6 +19,7 @@ pub enum PanelKind {
     DocumentSymbol,
     References,
     Implementation,
+    OwnStackChat,
 }
 
 impl PanelKind {
@@ -35,6 +36,7 @@ impl PanelKind {
             PanelKind::DocumentSymbol => LapceIcons::DOCUMENT_SYMBOL,
             PanelKind::References => LapceIcons::REFERENCES,
             PanelKind::Implementation => LapceIcons::IMPLEMENTATION,
+            PanelKind::OwnStackChat => LapceIcons::COMMENT,
         }
     }
 
@@ -61,6 +63,7 @@ impl PanelKind {
             PanelKind::DocumentSymbol => PanelPosition::RightTop,
             PanelKind::References => PanelPosition::BottomLeft,
             PanelKind::Implementation => PanelPosition::BottomLeft,
+            PanelKind::OwnStackChat => PanelPosition::RightTop,
         }
     }
 }

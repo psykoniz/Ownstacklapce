@@ -1,6 +1,8 @@
 from ..worker_bridge import ClaudeCodeBridge, NativeAgentBridge
 from .planner import OpenClawPlanner
 from app.core.globals import STATE
+import logging
+from app.missions.models import MissionStatus
 
 logger = logging.getLogger(__name__)
 

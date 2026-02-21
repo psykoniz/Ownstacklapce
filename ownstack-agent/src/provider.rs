@@ -1,9 +1,9 @@
 //! LLM Provider trait and common types
 
-use std::pin::Pin;
 use async_trait::async_trait;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
 use thiserror::Error;
 
 use crate::resilience::RetryConfig;
@@ -72,7 +72,10 @@ impl LlmMessage {
         }
     }
 
-    pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn tool_result(
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
         Self {
             role: Role::Tool,
             content: content.into(),
@@ -108,7 +111,7 @@ pub struct LlmResponse {
 }
 
 /// Why the LLM stopped generating
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FinishReason {
     Stop,
     ToolCalls,
@@ -117,7 +120,7 @@ pub enum FinishReason {
 }
 
 /// Token usage statistics
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -127,7 +130,7 @@ pub struct TokenUsage {
 // ─── Streaming Types ───────────────────────────────────────────────
 
 /// A single chunk from a streaming LLM response
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamChunk {
     /// Incremental text content delta
     pub delta_content: Option<String>,
@@ -140,7 +143,7 @@ pub struct StreamChunk {
 }
 
 /// Incremental update for a tool call being streamed
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallDelta {
     /// Index of the tool call in the array
     pub index: usize,
@@ -177,7 +180,8 @@ impl StreamChunk {
 }
 
 /// Type alias for streamed responses
-pub type StreamResult = Pin<Box<dyn Stream<Item = Result<StreamChunk, ProviderError>> + Send>>;
+pub type StreamResult =
+    Pin<Box<dyn Stream<Item = Result<StreamChunk, ProviderError>> + Send>>;
 
 /// Configuration for LLM providers
 #[derive(Debug, Clone)]
@@ -300,7 +304,12 @@ mod tests {
         let expected = ["system", "user", "assistant", "tool"];
         for (role, exp) in roles.iter().zip(expected.iter()) {
             let json = serde_json::to_string(role).unwrap();
-            assert!(json.contains(exp), "Role {:?} should serialize to {}", role, exp);
+            assert!(
+                json.contains(exp),
+                "Role {:?} should serialize to {}",
+                role,
+                exp
+            );
         }
     }
 
@@ -480,7 +489,11 @@ mod tests {
                 arguments: serde_json::json!({}),
             }],
             finish_reason: FinishReason::ToolCalls,
-            usage: Some(TokenUsage { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }),
+            usage: Some(TokenUsage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+            }),
         };
         assert!(r.content.is_none());
         assert_eq!(r.tool_calls.len(), 1);
@@ -511,7 +524,10 @@ mod tests {
                 0 => LlmMessage::system(format!("sys_{}", i)),
                 1 => LlmMessage::user(format!("usr_{}", i)),
                 2 => LlmMessage::assistant(format!("asst_{}", i)),
-                _ => LlmMessage::tool_result(format!("tc_{}", i), format!("res_{}", i)),
+                _ => LlmMessage::tool_result(
+                    format!("tc_{}", i),
+                    format!("res_{}", i),
+                ),
             };
             let json = serde_json::to_string(&m).unwrap();
             let _: LlmMessage = serde_json::from_str(&json).unwrap();
@@ -521,14 +537,18 @@ mod tests {
     #[test]
     fn stress_test_concurrent_message_creation() {
         use std::thread;
-        let handles: Vec<_> = (0..50).map(|i| {
-            thread::spawn(move || {
-                for j in 0..100 {
-                    let m = LlmMessage::user(format!("msg_{}_{}", i, j));
-                    let _ = serde_json::to_string(&m).unwrap();
-                }
+        let handles: Vec<_> = (0..50)
+            .map(|i| {
+                thread::spawn(move || {
+                    for j in 0..100 {
+                        let m = LlmMessage::user(format!("msg_{}_{}", i, j));
+                        let _ = serde_json::to_string(&m).unwrap();
+                    }
+                })
             })
-        }).collect();
-        for h in handles { h.join().unwrap(); }
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
     }
 }

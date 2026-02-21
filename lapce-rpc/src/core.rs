@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    RequestId, RpcError, RpcMessage, OwnStackRpc,
+    OwnStackRpc, RequestId, RpcError, RpcMessage,
     dap_types::{
         self, DapId, RunDebugConfig, Scope, StackFrame, Stopped, ThreadId, Variable,
     },

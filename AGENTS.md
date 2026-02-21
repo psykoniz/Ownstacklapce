@@ -7,10 +7,13 @@
 
 ## Quick Reference
 
-### Current Phase: 0 (Fork & Rebrand)
+### Current Phase: See `.ownstack/current_phase.json`
 
-**ALLOWED**: Rebranding, file creation, documentation  
-**NOT ALLOWED**: ownstack-engine, ownstack-bridge, Python code, RPC modifications
+**Source of truth**: `.ownstack/current_phase.json`  
+**Currently**: Phase 4 (Distribution)
+
+**ALLOWED**: Phase-appropriate work per `GEMINI.md` (installers/bundling/onboarding), docs, bug fixes  
+**NOT ALLOWED**: Skipping phases, touching protected files, bypassing the security flow
 
 ---
 

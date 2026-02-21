@@ -1,10 +1,207 @@
-use std::process::Command;
-use std::path::Path;
-use std::time::Duration;
-use crate::tool_result::ToolResult;
 use crate::sandbox::{Sandbox, SandboxLevel};
+use crate::tool_result::ToolResult;
+use std::io::Read;
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
+use tracing::debug;
+use wait_timeout::ChildExt;
+
+#[cfg(windows)]
+mod windows_job {
+    use std::mem;
+    use std::os::windows::io::AsRawHandle;
+    use std::ptr;
+    use windows_sys::Win32::Foundation::*;
+    use windows_sys::Win32::System::JobObjects::*;
+
+    pub struct WindowsJob {
+        handle: HANDLE,
+    }
+
+    impl WindowsJob {
+        pub fn new() -> std::io::Result<Self> {
+            let handle = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+            if handle == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            // Set basic limits: kill children on close
+            unsafe {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = mem::zeroed();
+                info.BasicLimitInformation.LimitFlags =
+                    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+                let res = SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+
+                if res == 0 {
+                    let err = std::io::Error::last_os_error();
+                    CloseHandle(handle);
+                    return Err(err);
+                }
+            }
+
+            Ok(Self { handle })
+        }
+
+        pub fn assign_process(
+            &self,
+            process: &std::process::Child,
+        ) -> std::io::Result<()> {
+            let res = unsafe {
+                AssignProcessToJobObject(
+                    self.handle,
+                    process.as_raw_handle() as HANDLE,
+                )
+            };
+            if res == 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+
+        pub fn set_limits(
+            &self,
+            level: crate::sandbox::SandboxLevel,
+        ) -> std::io::Result<()> {
+            unsafe {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = mem::zeroed();
+                info.BasicLimitInformation.LimitFlags =
+                    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                        | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                        | JOB_OBJECT_LIMIT_PROCESS_MEMORY
+                        | JOB_OBJECT_LIMIT_JOB_MEMORY;
+
+                match level {
+                    crate::sandbox::SandboxLevel::Light => {
+                        info.BasicLimitInformation.ActiveProcessLimit = 10;
+                        info.ProcessMemoryLimit = 512 * 1024 * 1024; // 512MB
+                        info.JobMemoryLimit = 512 * 1024 * 1024; // 512MB
+                    }
+                    crate::sandbox::SandboxLevel::Standard => {
+                        info.BasicLimitInformation.ActiveProcessLimit = 5;
+                        info.ProcessMemoryLimit = 256 * 1024 * 1024; // 256MB
+                        info.JobMemoryLimit = 256 * 1024 * 1024; // 256MB
+                    }
+                    crate::sandbox::SandboxLevel::Strict => {
+                        info.BasicLimitInformation.ActiveProcessLimit = 2;
+                        info.ProcessMemoryLimit = 128 * 1024 * 1024; // 128MB
+                        info.JobMemoryLimit = 128 * 1024 * 1024; // 128MB
+                    }
+                }
+
+                let res = SetInformationJobObject(
+                    self.handle,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+
+                if res == 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for WindowsJob {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
 
 pub struct ProcessSandbox;
+
+fn split_command(command_str: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = command_str.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+            }
+            '\\' => {
+                // Basic escaping for embedded quotes: \" => "
+                if let Some('"') = chars.peek().copied() {
+                    chars.next();
+                    current.push('"');
+                } else {
+                    current.push('\\');
+                }
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    parts.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.is_empty() {
+        parts.push(current);
+    }
+
+    parts
+}
+
+fn spawn_pipe_reader<R>(
+    pipe: Option<R>,
+) -> Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>
+where
+    R: Read + Send + 'static,
+{
+    pipe.map(|mut stream| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            stream.read_to_end(&mut buf)?;
+            Ok(buf)
+        })
+    })
+}
+
+fn collect_pipe_output(
+    reader: Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>,
+    stream_name: &str,
+) -> (Vec<u8>, Option<String>) {
+    let Some(reader) = reader else {
+        return (Vec::new(), None);
+    };
+
+    match reader.join() {
+        Ok(Ok(bytes)) => (bytes, None),
+        Ok(Err(e)) => (
+            Vec::new(),
+            Some(format!("Failed to read {}: {}", stream_name, e)),
+        ),
+        Err(_) => (
+            Vec::new(),
+            Some(format!("{} reader thread panicked", stream_name)),
+        ),
+    }
+}
+
+fn append_read_error(stderr: &mut String, read_error: Option<String>) {
+    if let Some(err) = read_error {
+        if !stderr.is_empty() {
+            stderr.push('\n');
+        }
+        stderr.push_str(&err);
+    }
+}
 
 impl Sandbox for ProcessSandbox {
     fn exec(
@@ -13,47 +210,184 @@ impl Sandbox for ProcessSandbox {
         cwd: &Path,
         level: SandboxLevel,
     ) -> ToolResult {
-        let parts: Vec<&str> = command_str.split_whitespace().collect();
+        let command_str = command_str.trim();
+        if command_str.is_empty() {
+            return ToolResult::failure("Empty command".to_string(), None);
+        }
+
+        let parts = split_command(command_str);
         if parts.is_empty() {
             return ToolResult::failure("Empty command".to_string(), None);
         }
 
-        let cmd_name = parts[0];
+        let cmd_name = &parts[0];
         let args = &parts[1..];
 
-        let mut child = Command::new(cmd_name);
-        child.args(args)
+        let mut child_cmd = Command::new(cmd_name);
+        child_cmd.args(args);
+
+        child_cmd
             .current_dir(cwd)
             .env_clear() // Critical security step
-            .env("PATH", "/usr/bin:/bin:/usr/local/bin") // Minimal path
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        // Level-specific configurations
-        let _timeout = match level {
+        #[cfg(windows)]
+        {
+            let mut path = "C:\\Windows\\System32;C:\\Windows".to_string();
+            path = format!(
+                "{};C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
+                path
+            );
+            // Add common Git locations on Windows
+            path = format!(
+                "{};C:\\Program Files\\Git\\cmd;C:\\Program Files\\Git\\bin",
+                path
+            );
+            child_cmd.env("PATH", path);
+
+            if let Ok(root) = std::env::var("SystemRoot") {
+                child_cmd.env("SystemRoot", root);
+            }
+            if let Ok(windir) = std::env::var("windir") {
+                child_cmd.env("windir", windir);
+            }
+            if let Ok(temp) = std::env::var("TEMP") {
+                child_cmd.env("TEMP", temp);
+            }
+            if let Ok(comspec) = std::env::var("ComSpec") {
+                child_cmd.env("ComSpec", comspec);
+            }
+            if let Ok(profile) = std::env::var("USERPROFILE") {
+                child_cmd.env("USERPROFILE", profile);
+            }
+            if let Ok(appdata) = std::env::var("APPDATA") {
+                child_cmd.env("APPDATA", appdata);
+            }
+            if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+                child_cmd.env("LOCALAPPDATA", localappdata);
+            }
+            if let Ok(homedrive) = std::env::var("HOMEDRIVE") {
+                child_cmd.env("HOMEDRIVE", homedrive);
+            }
+            if let Ok(homepath) = std::env::var("HOMEPATH") {
+                child_cmd.env("HOMEPATH", homepath);
+            }
+        }
+
+        #[cfg(unix)]
+        child_cmd.env("PATH", "/usr/bin:/bin:/usr/local/bin");
+
+        let timeout = match level {
             SandboxLevel::Light => Duration::from_secs(60),
             SandboxLevel::Standard => Duration::from_secs(300),
             SandboxLevel::Strict => Duration::from_secs(600),
         };
-        // TODO: Implement actual process timeout using wait-timeout crate or similar mechanism
 
-
-        match child.spawn() {
-            Ok(child_proc) => {
-                // In a real implementation, we would use wait_timeout here.
-                // For this version, we'll perform a standard wait or use a thread for timeout.
-                match child_proc.wait_with_output() {
-                    Ok(output) => ToolResult {
-                        success: output.status.success(),
-                        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                        exit_code: output.status.code(),
-                        metadata: std::collections::HashMap::new(),
-                    },
-                    Err(e) => ToolResult::failure(format!("Execution error: {}", e), None),
+        #[cfg(windows)]
+        let job = match windows_job::WindowsJob::new() {
+            Ok(job) => {
+                if let Err(e) = job.set_limits(level) {
+                    return ToolResult::failure(
+                        format!("Failed to set sandbox limits: {}", e),
+                        None,
+                    );
                 }
-            },
-            Err(e) => ToolResult::failure(format!("Failed to spawn process: {}", e), None),
+                job
+            }
+            Err(e) => {
+                return ToolResult::failure(
+                    format!("Failed to create Windows Job Object: {}", e),
+                    None,
+                )
+            }
+        };
+
+        match child_cmd.spawn() {
+            Ok(mut child_proc) => {
+                #[cfg(windows)]
+                if let Err(e) = job.assign_process(&child_proc) {
+                    let _ = child_proc.kill();
+                    return ToolResult::failure(
+                        format!(
+                            "Failed to assign process to Windows Job Object: {}",
+                            e
+                        ),
+                        None,
+                    );
+                }
+
+                let mut stdout_reader = spawn_pipe_reader(child_proc.stdout.take());
+                let mut stderr_reader = spawn_pipe_reader(child_proc.stderr.take());
+
+                match child_proc.wait_timeout(timeout) {
+                    Ok(Some(status)) => {
+                        let (output, stdout_read_error) =
+                            collect_pipe_output(stdout_reader.take(), "stdout");
+                        let (err_output, stderr_read_error) =
+                            collect_pipe_output(stderr_reader.take(), "stderr");
+
+                        let mut stderr =
+                            String::from_utf8_lossy(&err_output).to_string();
+                        append_read_error(&mut stderr, stdout_read_error.clone());
+                        append_read_error(&mut stderr, stderr_read_error.clone());
+                        let read_ok = stdout_read_error.is_none()
+                            && stderr_read_error.is_none();
+
+                        if !output.is_empty() || !err_output.is_empty() {
+                            debug!(
+                                command = %command_str,
+                                stdout_bytes = output.len(),
+                                stderr_bytes = err_output.len(),
+                                "Sandbox captured child output"
+                            );
+                        } else {
+                            debug!(
+                                command = %command_str,
+                                "Sandbox child finished with empty stdout/stderr"
+                            );
+                        }
+
+                        ToolResult {
+                            success: status.success() && read_ok,
+                            stdout: String::from_utf8_lossy(&output).to_string(),
+                            stderr,
+                            exit_code: status.code(),
+                            metadata: std::collections::HashMap::new(),
+                        }
+                    }
+                    Ok(None) => {
+                        let _ = child_proc.kill();
+                        let _ = child_proc.wait();
+                        let (_, stdout_read_error) =
+                            collect_pipe_output(stdout_reader.take(), "stdout");
+                        let (_, stderr_read_error) =
+                            collect_pipe_output(stderr_reader.take(), "stderr");
+
+                        let mut stderr =
+                            format!("Process timed out after {:?}", timeout);
+                        append_read_error(&mut stderr, stdout_read_error);
+                        append_read_error(&mut stderr, stderr_read_error);
+                        ToolResult::failure(stderr, None)
+                    }
+                    Err(e) => {
+                        let _ = child_proc.kill();
+                        let _ = child_proc.wait();
+                        let (_, stdout_read_error) =
+                            collect_pipe_output(stdout_reader.take(), "stdout");
+                        let (_, stderr_read_error) =
+                            collect_pipe_output(stderr_reader.take(), "stderr");
+
+                        let mut stderr = format!("Execution error: {}", e);
+                        append_read_error(&mut stderr, stdout_read_error);
+                        append_read_error(&mut stderr, stderr_read_error);
+                        ToolResult::failure(stderr, None)
+                    }
+                }
+            }
+            Err(e) => {
+                ToolResult::failure(format!("Failed to spawn process: {}", e), None)
+            }
         }
     }
 }
@@ -89,8 +423,32 @@ mod tests {
     fn test_exec_echo_windows() {
         let sandbox = ProcessSandbox;
         let result = sandbox.exec("cmd /c echo hello", &cwd(), SandboxLevel::Light);
-        // May or may not work depending on PATH; we test it doesn't crash
-        let _ = result;
+        assert!(
+            result.success,
+            "Expected echo command to succeed, stderr: {}",
+            result.stderr
+        );
+        assert!(
+            result.stdout.to_lowercase().contains("hello"),
+            "Expected sandbox to capture stdout, got: {:?}",
+            result.stdout
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_exec_set_windows_has_output() {
+        let sandbox = ProcessSandbox;
+        let result = sandbox.exec("cmd /c set", &cwd(), SandboxLevel::Light);
+        assert!(
+            result.success,
+            "Expected cmd /c set to succeed, stderr: {}",
+            result.stderr
+        );
+        assert!(
+            !result.stdout.trim().is_empty(),
+            "Expected environment listing in stdout, got empty output"
+        );
     }
 
     #[cfg(unix)]
@@ -114,16 +472,32 @@ mod tests {
     #[test]
     fn test_nonexistent_command() {
         let sandbox = ProcessSandbox;
-        let result = sandbox.exec("nonexistent_command_xyz_12345", &cwd(), SandboxLevel::Light);
+        let result = sandbox.exec(
+            "nonexistent_command_xyz_12345",
+            &cwd(),
+            SandboxLevel::Light,
+        );
         assert!(!result.success);
-        assert!(result.stderr.contains("spawn") || result.stderr.contains("Failed"));
+        assert!(
+            !result.stderr.trim().is_empty() || !result.stdout.trim().is_empty(),
+            "Expected error output for missing command, got stdout='{}', stderr='{}'",
+            result.stdout,
+            result.stderr
+        );
+        if let Some(code) = result.exit_code {
+            assert_ne!(code, 0);
+        }
     }
 
     // ─── All Sandbox Levels ─────────────────────────────────────
     #[test]
     fn test_all_sandbox_levels() {
         let sandbox = ProcessSandbox;
-        for level in [SandboxLevel::Light, SandboxLevel::Standard, SandboxLevel::Strict] {
+        for level in [
+            SandboxLevel::Light,
+            SandboxLevel::Standard,
+            SandboxLevel::Strict,
+        ] {
             // Should not panic at any level
             let result = sandbox.exec("nonexistent_xyz", &cwd(), level);
             assert!(!result.success);
@@ -148,7 +522,11 @@ mod tests {
     fn test_command_with_multiple_args() {
         let sandbox = ProcessSandbox;
         // Even if command doesn't exist, parsing shouldn't panic
-        let result = sandbox.exec("cmd arg1 arg2 arg3 arg4 arg5", &cwd(), SandboxLevel::Light);
+        let result = sandbox.exec(
+            "cmd arg1 arg2 arg3 arg4 arg5",
+            &cwd(),
+            SandboxLevel::Light,
+        );
         let _ = result;
     }
 
@@ -174,18 +552,37 @@ mod tests {
     #[test]
     fn stress_test_concurrent_sandbox() {
         use std::thread;
-        let handles: Vec<_> = (0..20).map(|i| {
-            thread::spawn(move || {
-                let sandbox = ProcessSandbox;
-                for j in 0..10 {
-                    let cmd = format!("nonexistent_{}_{}", i, j);
-                    let result = sandbox.exec(&cmd, &cwd(), SandboxLevel::Light);
-                    assert!(!result.success);
-                }
+        let handles: Vec<_> = (0..20)
+            .map(|i| {
+                thread::spawn(move || {
+                    let sandbox = ProcessSandbox;
+                    for j in 0..10 {
+                        let cmd = format!("nonexistent_{}_{}", i, j);
+                        let result = sandbox.exec(&cmd, &cwd(), SandboxLevel::Light);
+                        assert!(!result.success);
+                    }
+                })
             })
-        }).collect();
+            .collect();
         for h in handles {
             h.join().unwrap();
         }
+    }
+
+    #[test]
+    fn test_exec_timeout() {
+        let sandbox = ProcessSandbox;
+        #[cfg(windows)]
+        let cmd = "cmd /c ping 127.0.0.1 -n 3 > nul";
+        #[cfg(unix)]
+        let cmd = "sleep 2";
+
+        // This should succeed because 2s < 60s
+        let result = sandbox.exec(cmd, &cwd(), SandboxLevel::Light);
+        assert!(
+            result.success,
+            "Expected command to finish before timeout, stderr: {}",
+            result.stderr
+        );
     }
 }

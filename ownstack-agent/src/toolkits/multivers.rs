@@ -50,7 +50,9 @@ impl MultiversRun {
         let mut best_score = 0.0_f64;
         let mut winner = None;
 
-        let min_duration = self.results.values()
+        let min_duration = self
+            .results
+            .values()
             .filter(|r| r.exit_code == 0)
             .map(|r| r.duration_ms)
             .min()
@@ -63,11 +65,14 @@ impl MultiversRun {
                 score += 50.0; // Success weight
 
                 // Performance bonus (20 max, fastest gets full)
-                let perf = 20.0 * (min_duration as f64 / result.duration_ms.max(1) as f64);
+                let perf =
+                    20.0 * (min_duration as f64 / result.duration_ms.max(1) as f64);
                 score += perf;
 
                 // Quality bonus (no warnings/errors in output)
-                if !result.stdout.contains("WARNING") && !result.stderr.contains("error") {
+                if !result.stdout.contains("WARNING")
+                    && !result.stderr.contains("error")
+                {
                     score += 20.0;
                 }
 
@@ -107,10 +112,13 @@ impl MultiversToolkit {
         command: &str,
         variants: &HashMap<String, VariantConfig>,
     ) -> MultiversRun {
-        let run_id = format!("multivers-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis());
+        let run_id = format!(
+            "multivers-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
 
         let mut run = MultiversRun {
             run_id: run_id.clone(),
@@ -120,7 +128,11 @@ impl MultiversToolkit {
             completed: false,
         };
 
-        info!("Multivers: starting {} variants for '{}'", variants.len(), command);
+        info!(
+            "Multivers: starting {} variants for '{}'",
+            variants.len(),
+            command
+        );
 
         for (name, config) in variants {
             let result = self.run_variant(name, command, config);
@@ -133,7 +145,12 @@ impl MultiversToolkit {
         run
     }
 
-    fn run_variant(&self, name: &str, command: &str, config: &VariantConfig) -> ForkResult {
+    fn run_variant(
+        &self,
+        name: &str,
+        command: &str,
+        config: &VariantConfig,
+    ) -> ForkResult {
         debug!("Multivers: running variant '{}'", name);
 
         let sandbox = ProcessSandbox;
@@ -143,7 +160,9 @@ impl MultiversToolkit {
         let full_command = if config.env_vars.is_empty() {
             command.to_string()
         } else {
-            let env_prefix: String = config.env_vars.iter()
+            let env_prefix: String = config
+                .env_vars
+                .iter()
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
                 .join(" ");
@@ -157,12 +176,17 @@ impl MultiversToolkit {
         }
 
         // Run main command
-        let result = sandbox.exec(&full_command, &self.workspace, SandboxLevel::Standard);
+        let result =
+            sandbox.exec(&full_command, &self.workspace, SandboxLevel::Standard);
         let duration_ms = start.elapsed().as_millis() as u64;
 
         ForkResult {
             variant_name: name.to_string(),
-            status: if result.success { ForkStatus::Completed } else { ForkStatus::Failed },
+            status: if result.success {
+                ForkStatus::Completed
+            } else {
+                ForkStatus::Failed
+            },
             exit_code: if result.success { 0 } else { 1 },
             stdout: result.stdout,
             stderr: result.stderr,

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::provider::{
-    FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig, ProviderError,
-    Role, TokenUsage, ToolCall, ToolDefinition,
+    FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig,
+    ProviderError, Role, TokenUsage, ToolCall, ToolDefinition,
 };
 use crate::resilience::ResilientClient;
 
@@ -24,15 +24,13 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new(config: ProviderConfig) -> Self {
         let client = ResilientClient::new(config.retry.clone());
-        Self {
-            client,
-            config,
-        }
+        Self { client, config }
     }
 
     pub fn from_env() -> Result<Self, ProviderError> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .map_err(|_| ProviderError::ConfigError("ANTHROPIC_API_KEY not set".to_string()))?;
+        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+            ProviderError::ConfigError("ANTHROPIC_API_KEY not set".to_string())
+        })?;
 
         let model = std::env::var("ANTHROPIC_MODEL")
             .unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string());
@@ -72,13 +70,21 @@ enum AnthropicContent {
 
 #[derive(Serialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)]
 enum AnthropicContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "tool_use")]
-    ToolUse { id: String, name: String, input: serde_json::Value },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     #[serde(rename = "tool_result")]
-    ToolResult { tool_use_id: String, content: String },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -101,7 +107,11 @@ enum AnthropicResponseContent {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "tool_use")]
-    ToolUse { id: String, name: String, input: serde_json::Value },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
 }
 
 #[derive(Deserialize)]
@@ -133,12 +143,14 @@ impl LlmProvider for AnthropicProvider {
                     Role::Assistant => "assistant",
                     Role::System => unreachable!(),
                 };
-                
+
                 let content = if m.role == Role::Tool {
-                    AnthropicContent::Blocks(vec![AnthropicContentBlock::ToolResult {
-                        tool_use_id: m.tool_call_id.unwrap_or_default(),
-                        content: m.content,
-                    }])
+                    AnthropicContent::Blocks(vec![
+                        AnthropicContentBlock::ToolResult {
+                            tool_use_id: m.tool_call_id.unwrap_or_default(),
+                            content: m.content,
+                        },
+                    ])
                 } else {
                     AnthropicContent::Text(m.content)
                 };
@@ -173,12 +185,13 @@ impl LlmProvider for AnthropicProvider {
         let response = self
             .client
             .execute(
-                self.client.inner()
+                self.client
+                    .inner()
                     .post(ANTHROPIC_API_URL)
                     .header("x-api-key", &self.config.api_key)
                     .header("anthropic-version", ANTHROPIC_VERSION)
                     .header("content-type", "application/json")
-                    .json(&request)
+                    .json(&request),
             )
             .await?;
 
@@ -215,11 +228,16 @@ impl LlmProvider for AnthropicProvider {
         let usage = TokenUsage {
             prompt_tokens: api_response.usage.input_tokens,
             completion_tokens: api_response.usage.output_tokens,
-            total_tokens: api_response.usage.input_tokens + api_response.usage.output_tokens,
+            total_tokens: api_response.usage.input_tokens
+                + api_response.usage.output_tokens,
         };
 
         Ok(LlmResponse {
-            content: if content_text.is_empty() { None } else { Some(content_text) },
+            content: if content_text.is_empty() {
+                None
+            } else {
+                Some(content_text)
+            },
             tool_calls,
             finish_reason,
             usage: Some(usage),
@@ -239,8 +257,7 @@ impl LlmProvider for AnthropicProvider {
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
-        use futures::StreamExt;
-        use crate::provider::{StreamChunk, ToolCallDelta, FinishReason};
+        use crate::provider::{FinishReason, StreamChunk, ToolCallDelta};
 
         // Extract system message
         let system_msg = messages
@@ -258,14 +275,19 @@ impl LlmProvider for AnthropicProvider {
                     Role::System => unreachable!(),
                 };
                 let content = if m.role == Role::Tool {
-                    AnthropicContent::Blocks(vec![AnthropicContentBlock::ToolResult {
-                        tool_use_id: m.tool_call_id.unwrap_or_default(),
-                        content: m.content,
-                    }])
+                    AnthropicContent::Blocks(vec![
+                        AnthropicContentBlock::ToolResult {
+                            tool_use_id: m.tool_call_id.unwrap_or_default(),
+                            content: m.content,
+                        },
+                    ])
                 } else {
                     AnthropicContent::Text(m.content)
                 };
-                AnthropicMessage { role: role.to_string(), content }
+                AnthropicMessage {
+                    role: role.to_string(),
+                    content,
+                }
             })
             .collect();
 
@@ -287,19 +309,25 @@ impl LlmProvider for AnthropicProvider {
             tools: api_tools,
         })
         .map_err(|e| ProviderError::SerializationError(e.to_string()))?;
-        body.as_object_mut().unwrap().insert("stream".to_string(), serde_json::Value::Bool(true));
+        body.as_object_mut()
+            .unwrap()
+            .insert("stream".to_string(), serde_json::Value::Bool(true));
 
-        debug!("Streaming request to Anthropic: model={}", self.config.model);
+        debug!(
+            "Streaming request to Anthropic: model={}",
+            self.config.model
+        );
 
         let response = self
             .client
             .execute(
-                self.client.inner()
+                self.client
+                    .inner()
                     .post(ANTHROPIC_API_URL)
                     .header("x-api-key", &self.config.api_key)
                     .header("anthropic-version", ANTHROPIC_VERSION)
                     .header("content-type", "application/json")
-                    .json(&body)
+                    .json(&body),
             )
             .await?;
 
@@ -328,7 +356,11 @@ impl LlmProvider for AnthropicProvider {
 
                             match event.as_str() {
                                 "content_block_delta" => {
-                                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                                    if let Ok(json) =
+                                        serde_json::from_str::<serde_json::Value>(
+                                            data,
+                                        )
+                                    {
                                         let delta = json.get("delta");
                                         let delta_type = delta
                                             .and_then(|d| d.get("type"))
@@ -346,43 +378,68 @@ impl LlmProvider for AnthropicProvider {
                                                     finish_reason: None,
                                                     usage: None,
                                                 };
-                                                return Some((Ok(chunk), (byte_stream, buffer, current_event)));
+                                                return Some((
+                                                    Ok(chunk),
+                                                    (
+                                                        byte_stream,
+                                                        buffer,
+                                                        current_event,
+                                                    ),
+                                                ));
                                             }
                                             Some("input_json_delta") => {
                                                 let partial = delta
-                                                    .and_then(|d| d.get("partial_json"))
+                                                    .and_then(|d| {
+                                                        d.get("partial_json")
+                                                    })
                                                     .and_then(|t| t.as_str())
                                                     .map(|s| s.to_string());
                                                 let index = json
                                                     .get("index")
                                                     .and_then(|i| i.as_u64())
-                                                    .unwrap_or(0) as usize;
+                                                    .unwrap_or(0)
+                                                    as usize;
                                                 let chunk = StreamChunk {
                                                     delta_content: None,
-                                                    delta_tool_calls: vec![ToolCallDelta {
-                                                        index,
-                                                        id: None,
-                                                        name: None,
-                                                        arguments_delta: partial,
-                                                    }],
+                                                    delta_tool_calls: vec![
+                                                        ToolCallDelta {
+                                                            index,
+                                                            id: None,
+                                                            name: None,
+                                                            arguments_delta: partial,
+                                                        },
+                                                    ],
                                                     finish_reason: None,
                                                     usage: None,
                                                 };
-                                                return Some((Ok(chunk), (byte_stream, buffer, current_event)));
+                                                return Some((
+                                                    Ok(chunk),
+                                                    (
+                                                        byte_stream,
+                                                        buffer,
+                                                        current_event,
+                                                    ),
+                                                ));
                                             }
                                             _ => continue,
                                         }
                                     }
                                 }
                                 "message_delta" => {
-                                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                                    if let Ok(json) =
+                                        serde_json::from_str::<serde_json::Value>(
+                                            data,
+                                        )
+                                    {
                                         let stop_reason = json
                                             .get("delta")
                                             .and_then(|d| d.get("stop_reason"))
                                             .and_then(|s| s.as_str())
                                             .map(|s| match s {
                                                 "end_turn" => FinishReason::Stop,
-                                                "tool_use" => FinishReason::ToolCalls,
+                                                "tool_use" => {
+                                                    FinishReason::ToolCalls
+                                                }
                                                 "max_tokens" => FinishReason::Length,
                                                 _ => FinishReason::Stop,
                                             });
@@ -392,7 +449,10 @@ impl LlmProvider for AnthropicProvider {
                                             finish_reason: stop_reason,
                                             usage: None,
                                         };
-                                        return Some((Ok(chunk), (byte_stream, buffer, current_event)));
+                                        return Some((
+                                            Ok(chunk),
+                                            (byte_stream, buffer, current_event),
+                                        ));
                                     }
                                 }
                                 "message_stop" => return None,
@@ -403,7 +463,9 @@ impl LlmProvider for AnthropicProvider {
                     }
 
                     match byte_stream.next().await {
-                        Some(Ok(bytes)) => buffer.push_str(&String::from_utf8_lossy(&bytes)),
+                        Some(Ok(bytes)) => {
+                            buffer.push_str(&String::from_utf8_lossy(&bytes))
+                        }
                         Some(Err(e)) => {
                             return Some((
                                 Err(ProviderError::StreamError(e.to_string())),
@@ -432,7 +494,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: None,
         };
-        
+
         let api_msg = AnthropicMessage {
             role: "user".to_string(),
             content: AnthropicContent::Text(msg.content),
@@ -450,13 +512,15 @@ mod tests {
             tool_call_id: Some("call_123".to_string()),
             tool_calls: None,
         };
-        
+
         let api_msg = AnthropicMessage {
             role: "user".to_string(),
-            content: AnthropicContent::Blocks(vec![AnthropicContentBlock::ToolResult {
-                tool_use_id: msg.tool_call_id.unwrap(),
-                content: msg.content,
-            }]),
+            content: AnthropicContent::Blocks(vec![
+                AnthropicContentBlock::ToolResult {
+                    tool_use_id: msg.tool_call_id.unwrap(),
+                    content: msg.content,
+                },
+            ]),
         };
 
         let json = serde_json::to_string(&api_msg).unwrap();

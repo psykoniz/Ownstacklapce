@@ -601,8 +601,27 @@ impl LapceConfig {
         });
 
         svg.unwrap_or_else(|| {
-            let name = DEFAULT_ICON_THEME_ICON_CONFIG.ui.get(icon).unwrap();
-            self.svg_store.write().get_default_svg(name)
+            let requested_name = DEFAULT_ICON_THEME_ICON_CONFIG
+                .ui
+                .get(icon)
+                .map(String::as_str);
+
+            if requested_name.is_none() {
+                tracing::warn!(
+                    "Missing icon mapping for key `{icon}`, falling back to default file icon"
+                );
+            }
+
+            let default_name = requested_name
+                .or_else(|| {
+                    DEFAULT_ICON_THEME_ICON_CONFIG
+                        .ui
+                        .get(LapceIcons::FILE)
+                        .map(String::as_str)
+                })
+                .unwrap_or("file.svg");
+
+            self.svg_store.write().get_default_svg(default_name)
         })
     }
 

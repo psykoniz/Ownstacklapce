@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::provider::{
-    FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig, ProviderError,
-    Role, TokenUsage, ToolCall, ToolDefinition,
+    FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig,
+    ProviderError, Role, TokenUsage, ToolCall, ToolDefinition,
 };
 use crate::resilience::ResilientClient;
 
@@ -24,15 +24,13 @@ pub struct OpenRouterProvider {
 impl OpenRouterProvider {
     pub fn new(config: ProviderConfig) -> Self {
         let client = ResilientClient::new(config.retry.clone());
-        Self {
-            client,
-            config,
-        }
+        Self { client, config }
     }
 
     pub fn from_env() -> Result<Self, ProviderError> {
-        let api_key = std::env::var("OPENROUTER_API_KEY")
-            .map_err(|_| ProviderError::ConfigError("OPENROUTER_API_KEY not set".to_string()))?;
+        let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {
+            ProviderError::ConfigError("OPENROUTER_API_KEY not set".to_string())
+        })?;
 
         let model = std::env::var("OPENROUTER_MODEL")
             .unwrap_or_else(|_| "anthropic/claude-3.5-sonnet".to_string());
@@ -166,12 +164,16 @@ impl LlmProvider for OpenRouterProvider {
         let response = self
             .client
             .execute(
-                self.client.inner()
+                self.client
+                    .inner()
                     .post(OPENROUTER_API_URL)
-                    .header("Authorization", format!("Bearer {}", self.config.api_key))
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}", self.config.api_key),
+                    )
                     .header("HTTP-Referer", "https://ownstack.dev")
                     .header("X-Title", "OwnStack IDE")
-                    .json(&request)
+                    .json(&request),
             )
             .await?;
 
@@ -180,11 +182,9 @@ impl LlmProvider for OpenRouterProvider {
             .await
             .map_err(|e| ProviderError::SerializationError(e.to_string()))?;
 
-        let choice = api_response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| ProviderError::ApiError("No choices in response".to_string()))?;
+        let choice = api_response.choices.into_iter().next().ok_or_else(|| {
+            ProviderError::ApiError("No choices in response".to_string())
+        })?;
 
         let tool_calls: Vec<ToolCall> = choice
             .message
@@ -193,7 +193,8 @@ impl LlmProvider for OpenRouterProvider {
             .into_iter()
             .map(|tc| {
                 let arguments: serde_json::Value =
-                    serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
+                    serde_json::from_str(&tc.function.arguments)
+                        .unwrap_or(serde_json::Value::Null);
                 ToolCall {
                     id: tc.id,
                     name: tc.function.name,
@@ -236,8 +237,6 @@ impl LlmProvider for OpenRouterProvider {
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
-        use futures::StreamExt;
-
         let api_messages: Vec<OpenRouterMessage> = messages
             .into_iter()
             .map(|m| OpenRouterMessage {
@@ -269,19 +268,28 @@ impl LlmProvider for OpenRouterProvider {
             tools: api_tools,
         })
         .map_err(|e| ProviderError::SerializationError(e.to_string()))?;
-        body.as_object_mut().unwrap().insert("stream".to_string(), serde_json::Value::Bool(true));
+        body.as_object_mut()
+            .unwrap()
+            .insert("stream".to_string(), serde_json::Value::Bool(true));
 
-        debug!("Streaming request to OpenRouter: model={}", self.config.model);
+        debug!(
+            "Streaming request to OpenRouter: model={}",
+            self.config.model
+        );
 
         let response = self
             .client
             .execute(
-                self.client.inner()
+                self.client
+                    .inner()
                     .post(OPENROUTER_API_URL)
-                    .header("Authorization", format!("Bearer {}", self.config.api_key))
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}", self.config.api_key),
+                    )
                     .header("HTTP-Referer", "https://ownstack.dev")
                     .header("X-Title", "OwnStack IDE")
-                    .json(&body)
+                    .json(&body),
             )
             .await?;
 
@@ -309,13 +317,18 @@ impl LlmProvider for OpenRouterProvider {
                             match serde_json::from_str::<serde_json::Value>(data) {
                                 Ok(json) => {
                                     if let Some(chunk) = parse_sse_chunk(&json) {
-                                        return Some((Ok(chunk), (byte_stream, buffer)));
+                                        return Some((
+                                            Ok(chunk),
+                                            (byte_stream, buffer),
+                                        ));
                                     }
                                     continue;
                                 }
                                 Err(e) => {
                                     return Some((
-                                        Err(ProviderError::StreamError(e.to_string())),
+                                        Err(ProviderError::StreamError(
+                                            e.to_string(),
+                                        )),
                                         (byte_stream, buffer),
                                     ));
                                 }
@@ -346,14 +359,19 @@ impl LlmProvider for OpenRouterProvider {
 }
 
 /// Parse an OpenRouter/OpenAI SSE chunk JSON into a StreamChunk
-fn parse_sse_chunk(json: &serde_json::Value) -> Option<crate::provider::StreamChunk> {
-    use crate::provider::{StreamChunk, ToolCallDelta, FinishReason};
+fn parse_sse_chunk(
+    json: &serde_json::Value,
+) -> Option<crate::provider::StreamChunk> {
+    use crate::provider::{FinishReason, StreamChunk, ToolCallDelta};
 
     let choices = json.get("choices")?.as_array()?;
     let choice = choices.first()?;
     let delta = choice.get("delta")?;
 
-    let delta_content = delta.get("content").and_then(|c| c.as_str()).map(|s| s.to_string());
+    let delta_content = delta
+        .get("content")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
 
     let delta_tool_calls: Vec<ToolCallDelta> = delta
         .get("tool_calls")
@@ -362,28 +380,38 @@ fn parse_sse_chunk(json: &serde_json::Value) -> Option<crate::provider::StreamCh
             arr.iter()
                 .filter_map(|tc| {
                     let index = tc.get("index")?.as_u64()? as usize;
-                    let id = tc.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let id =
+                        tc.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
                     let func = tc.get("function")?;
-                    let name = func.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let name = func
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     let arguments_delta = func
                         .get("arguments")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    Some(ToolCallDelta { index, id, name, arguments_delta })
+                    Some(ToolCallDelta {
+                        index,
+                        id,
+                        name,
+                        arguments_delta,
+                    })
                 })
                 .collect()
         })
         .unwrap_or_default();
 
-    let finish_reason = choice
-        .get("finish_reason")
-        .and_then(|fr| fr.as_str())
-        .map(|s| match s {
-            "stop" => FinishReason::Stop,
-            "tool_calls" => FinishReason::ToolCalls,
-            "length" => FinishReason::Length,
-            _ => FinishReason::Stop,
-        });
+    let finish_reason =
+        choice
+            .get("finish_reason")
+            .and_then(|fr| fr.as_str())
+            .map(|s| match s {
+                "stop" => FinishReason::Stop,
+                "tool_calls" => FinishReason::ToolCalls,
+                "length" => FinishReason::Length,
+                _ => FinishReason::Stop,
+            });
 
     let usage = json.get("usage").and_then(|u| {
         Some(crate::provider::TokenUsage {
@@ -432,7 +460,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: None,
         }];
-        
+
         let api_messages: Vec<OpenRouterMessage> = messages
             .into_iter()
             .map(|m| OpenRouterMessage {

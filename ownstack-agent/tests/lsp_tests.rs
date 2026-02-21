@@ -10,26 +10,36 @@ async fn test_lsp_client_integration() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mock_server_path = manifest_dir.join("tests").join("mock_lsp.py");
 
-    assert!(mock_server_path.exists(), "Mock server script not found at {:?}", mock_server_path);
+    assert!(
+        mock_server_path.exists(),
+        "Mock server script not found at {:?}",
+        mock_server_path
+    );
 
     // Initial check for python
     let python_cmd = if cfg!(windows) { "python" } else { "python3" };
 
     // Start client
-    let client = LspClient::start(python_cmd, &[mock_server_path.to_string_lossy().to_string()])
-        .await
-        .expect("Failed to start LSP client");
+    let client = LspClient::start(
+        python_cmd,
+        &[mock_server_path.to_string_lossy().to_string()],
+    )
+    .await
+    .expect("Failed to start LSP client");
 
     // Initialize
     let root_uri = Url::from_directory_path(&manifest_dir).unwrap();
-    let init_result = client.initialize(root_uri.clone()).await.expect("Failed to initialize");
+    let init_result = client
+        .initialize(root_uri.clone())
+        .await
+        .expect("Failed to initialize");
 
     // Check capabilities
     let caps = init_result.capabilities;
     use lsp_types::HoverProviderCapability;
     match caps.hover_provider.unwrap() {
-        HoverProviderCapability::Simple(true) => {},
-        HoverProviderCapability::Options(_) => {},
+        HoverProviderCapability::Simple(true) => {}
+        HoverProviderCapability::Options(_) => {}
         _ => panic!("Unexpected hover provider capability"),
     }
 
@@ -39,7 +49,7 @@ async fn test_lsp_client_integration() {
 
     let diag_uri = Url::parse("file:///workspace/test.rs").unwrap();
     let diags = client.get_diagnostics(&diag_uri).await;
-    
+
     assert!(diags.is_some(), "Should have received diagnostics");
     let diags_vec = diags.unwrap();
     assert_eq!(diags_vec.len(), 1);

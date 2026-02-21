@@ -39,6 +39,7 @@ use lapce_rpc::{
     core::CoreNotification,
     dap_types::{ConfigSource, RunDebugConfig},
     file::{Naming, PathObject},
+    ownstack::OwnStackRpc,
     plugin::PluginId,
     proxy::{ProxyResponse, ProxyRpcHandler, ProxyStatus},
     source_control::FileDiff,
@@ -2335,7 +2336,64 @@ impl WindowTabData {
                 self.file_explorer.reload();
             }
             CoreNotification::OwnStack { message } => {
-                self.ownstack_chat.receive_chunk(message.clone());
+                match message.clone() {
+                    m @ OwnStackRpc::AiStreamChunk { .. } => {
+                        self.ownstack_chat.receive_chunk(m);
+                    }
+                    OwnStackRpc::MissionUpdate { goal, steps } => {
+                        self.ownstack_chat.receive_mission(goal, steps);
+                    }
+                    OwnStackRpc::ToolResultMsg { json_result } => {
+                        self.ownstack_chat
+                            .add_system_message(format!("ToolResult: {}", json_result));
+                    }
+                    OwnStackRpc::AuditEvent { json_entry } => {
+                        self.ownstack_chat
+                            .add_system_message(format!("AuditEvent: {}", json_entry));
+                    }
+                    OwnStackRpc::PolicyPrompt { command, reason } => {
+                        self.ownstack_chat.add_system_message(format!(
+                            "Approval required (Ask mode):\n{}\nReason: {}",
+                            command, reason
+                        ));
+
+                        let proxy_approve = self.common.proxy.clone();
+                        let proxy_deny = self.common.proxy.clone();
+                        let active_approve = self.alert_data.active;
+                        let active_deny = self.alert_data.active;
+
+                        self.alert_data
+                            .title
+                            .set("OwnStack approval required".to_string());
+                        self.alert_data.msg.set(format!(
+                            "{command}\n\nReason: {reason}"
+                        ));
+
+                        self.alert_data.buttons.set(vec![
+                            AlertButton {
+                                text: "Approve".to_string(),
+                                action: Rc::new(move || {
+                                    proxy_approve.ownstack(OwnStackRpc::PolicyResponse {
+                                        approved: true,
+                                    });
+                                    active_approve.set(false);
+                                }),
+                            },
+                            AlertButton {
+                                text: "Deny".to_string(),
+                                action: Rc::new(move || {
+                                    proxy_deny.ownstack(OwnStackRpc::PolicyResponse {
+                                        approved: false,
+                                    });
+                                    active_deny.set(false);
+                                }),
+                            },
+                        ]);
+
+                        self.alert_data.active.set(true);
+                    }
+                    _ => {}
+                }
             }
             _ => {}
         }

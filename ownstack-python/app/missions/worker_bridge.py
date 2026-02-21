@@ -1,4 +1,8 @@
 from typing import AsyncGenerator, Optional, Any
+import logging
+import asyncio
+import os
+import subprocess
 from app.agent.core import BaseAgent, AgentConfig
 
 logger = logging.getLogger(__name__)

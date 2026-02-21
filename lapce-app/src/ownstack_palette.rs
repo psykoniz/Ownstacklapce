@@ -8,7 +8,7 @@ use crate::window_tab::CommonData;
 pub struct OwnStackPaletteData {
     pub input: RwSignal<String>,
     pub active: RwSignal<bool>,
-    _common: CommonData,
+    common: CommonData,
 }
 
 impl OwnStackPaletteData {
@@ -16,7 +16,7 @@ impl OwnStackPaletteData {
         Self {
             input: create_rw_signal(String::new()),
             active: create_rw_signal(false),
-            _common: common,
+            common,
         }
     }
 
@@ -37,9 +37,8 @@ impl OwnStackPaletteData {
 
         // Send AI prompt via RPC
         let message = OwnStackRpc::AiPrompt { prompt };
-
-        // TODO: Send via proxy RPC when bridge is fully integrated
-        tracing::info!("OwnStack AI Prompt: {:?}", message);
+        self.common.proxy.ownstack(message);
+        tracing::info!("OwnStack Palette: AiPrompt sent");
 
         self.hide();
     }

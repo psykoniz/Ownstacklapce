@@ -111,15 +111,15 @@ impl OwnStackChatData {
 
     /// Send a message from the user
     pub fn send_message(&self) {
-        let content = self.input.get_untracked();
-        if content.trim().is_empty() {
+        let prompt = self.input.get_untracked();
+        if prompt.trim().is_empty() {
             return;
         }
 
         // Add user message to history
         let user_msg = ChatMessage {
             role: ChatRole::User,
-            content: content.clone(),
+            content: prompt.clone(),
             timestamp: chrono_now(),
             diff_content: None,
         };
@@ -133,12 +133,12 @@ impl OwnStackChatData {
 
         // Set loading state
         self.is_loading.set(true);
+        self.streaming_content.set(String::new());
 
         // Send via RPC
-        let message = OwnStackRpc::AiPrompt { prompt: content };
-        tracing::info!("OwnStack Chat: {:?}", message);
-
-        // TODO: Wire to proxy RPC for bridge forwarding
+        let message = OwnStackRpc::AiPrompt { prompt };
+        self.common.proxy.ownstack(message);
+        tracing::info!("OwnStack Chat: AiPrompt sent");
     }
 
     /// Receive a response from the AI
@@ -195,6 +195,8 @@ impl OwnStackChatData {
 
     /// Stop the current operation
     pub fn stop(&self) {
+        // Kill-switch is enforced in the proxy (owns the agent process handle).
+        self.common.proxy.ownstack(OwnStackRpc::KillSwitch);
         self.is_loading.set(false);
         let content = self.streaming_content.get_untracked();
         if !content.is_empty() {

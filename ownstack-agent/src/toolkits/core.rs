@@ -4,52 +4,135 @@
 //! All operations go through ownstack-engine for security.
 
 use async_trait::async_trait;
+use regex::Regex;
 use serde::Deserialize;
 use std::path::PathBuf;
-use tracing::info;
+use std::sync::Arc;
+use std::time::Instant;
+use tracing::warn;
 
 use ownstack_engine::{
-    PolicyDecision, PolicyEngine,
-    PathValidator,
-    ProcessSandbox, SandboxLevel, Sandbox,
-    AuditLogger,
+    AuditEntry, AuditLogger, PathValidator, PolicyDecision, PolicyEngine,
+    ProcessSandbox, Sandbox, SandboxLevel,
 };
+
+use crate::policy_approval::PolicyApprovalManager;
 
 use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
 
 /// Core toolkit with essential file and command operations
 pub struct CoreToolkit {
     workspace: PathBuf,
+    session_id: String,
     path_validator: PathValidator,
-    #[allow(dead_code)]
     audit_logger: AuditLogger,
+    approval: Option<Arc<PolicyApprovalManager>>,
 }
 
 impl CoreToolkit {
-    pub fn new(workspace: PathBuf) -> Self {
+    pub fn new(
+        workspace: PathBuf,
+        session_id: String,
+        approval: Option<Arc<PolicyApprovalManager>>,
+    ) -> Self {
         let audit_logger = AuditLogger::new(workspace.clone());
         let path_validator = PathValidator::new(workspace.clone());
         Self {
             workspace,
+            session_id,
             path_validator,
             audit_logger,
+            approval,
+        }
+    }
+
+    fn audit(
+        &self,
+        action: &str,
+        command: &str,
+        policy_decision: PolicyDecision,
+        tool_name: &str,
+        success: bool,
+        duration_ms: u64,
+        paths_accessed: Vec<String>,
+    ) {
+        let entry = AuditEntry {
+            timestamp: String::new(),
+            session_id: self.session_id.clone(),
+            action: action.to_string(),
+            command: command.to_string(),
+            policy_decision,
+            tool_name: tool_name.to_string(),
+            success,
+            duration_ms,
+            workspace: self.workspace.to_string_lossy().to_string(),
+            paths_accessed,
+        };
+
+        if let Err(err) = self.audit_logger.log(entry) {
+            warn!("audit log failed: {}", err);
         }
     }
 
     async fn exec_command(&self, command: &str) -> Result<ToolResult, ToolkitError> {
+        let start = Instant::now();
+
         // Step 1: Policy check
         let decision = PolicyEngine::evaluate(command);
         match decision {
             PolicyDecision::Blocked => {
+                self.audit(
+                    "exec",
+                    command,
+                    PolicyDecision::Blocked,
+                    "core.exec",
+                    false,
+                    start.elapsed().as_millis() as u64,
+                    Vec::new(),
+                );
                 return Err(ToolkitError::SecurityViolation(format!(
                     "Command blocked by policy: {}",
                     command
                 )));
             }
             PolicyDecision::Ask => {
-                // In production, this would prompt the user
-                // For now, we log and proceed with caution
-                info!("Command requires approval: {}", command);
+                if let Some(approval) = self.approval.as_ref() {
+                    let approved = approval
+                        .request(
+                            command.to_string(),
+                            "Command requires user approval".to_string(),
+                        )
+                        .await;
+                    if !approved {
+                        self.audit(
+                            "exec",
+                            command,
+                            PolicyDecision::Ask,
+                            "core.exec",
+                            false,
+                            start.elapsed().as_millis() as u64,
+                            Vec::new(),
+                        );
+                        return Err(ToolkitError::SecurityViolation(format!(
+                            "Command denied by user: {}",
+                            command
+                        )));
+                    }
+                } else {
+                    self.audit(
+                        "exec",
+                        command,
+                        PolicyDecision::Ask,
+                        "core.exec",
+                        false,
+                        start.elapsed().as_millis() as u64,
+                        Vec::new(),
+                    );
+                    return Err(ToolkitError::SecurityViolation(format!(
+                        "Command requires approval but UI is not connected: {}",
+                        command
+                    )));
+                }
             }
             PolicyDecision::Auto => {}
         }
@@ -57,48 +140,301 @@ impl CoreToolkit {
         // Step 2: Execute in sandbox using Sandbox trait
         let sandbox = ProcessSandbox;
         let result = sandbox.exec(command, &self.workspace, SandboxLevel::Standard);
-        
-        if result.success {
-            Ok(ToolResult::success(result.stdout))
-        } else {
-            Ok(ToolResult::error(result.stderr))
-        }
+        self.audit(
+            "exec",
+            command,
+            decision,
+            "core.exec",
+            result.success,
+            start.elapsed().as_millis() as u64,
+            Vec::new(),
+        );
+        Ok(result)
     }
 
     async fn read_file(&self, path: &str) -> Result<ToolResult, ToolkitError> {
+        let start = Instant::now();
         let file_path = std::path::Path::new(path);
-        
-        // Path validation
-        let validated_path = self.path_validator.validate(file_path)
-            .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?;
 
-        match tokio::fs::read_to_string(&validated_path).await {
+        // Path validation
+        let validated_path = self
+            .path_validator
+            .validate(file_path)
+            .map_err(|e| {
+                self.audit(
+                    "read",
+                    path,
+                    PolicyDecision::Blocked,
+                    "core.read",
+                    false,
+                    start.elapsed().as_millis() as u64,
+                    vec![path.to_string()],
+                );
+                ToolkitError::SecurityViolation(e.to_string())
+            })?;
+
+        let res = match tokio::fs::read_to_string(&validated_path).await {
             Ok(content) => Ok(ToolResult::success(content)),
-            Err(e) => Ok(ToolResult::error(format!("Failed to read file: {}", e))),
+            Err(e) => Ok(ToolResult::failure(
+                format!("Failed to read file: {}", e),
+                None,
+            )),
+        };
+
+        if let Ok(result) = &res {
+            self.audit(
+                "read",
+                path,
+                PolicyDecision::Auto,
+                "core.read",
+                result.success,
+                start.elapsed().as_millis() as u64,
+                vec![validated_path.to_string_lossy().to_string()],
+            );
         }
+
+        res
     }
 
-    async fn write_file(&self, path: &str, content: &str) -> Result<ToolResult, ToolkitError> {
+    async fn write_file(
+        &self,
+        path: &str,
+        content: &str,
+    ) -> Result<ToolResult, ToolkitError> {
+        let start = Instant::now();
         let file_path = std::path::Path::new(path);
-        
+
         // Path validation
-        let validated_path = self.path_validator.validate(file_path)
-            .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?;
+        let validated_path = self
+            .path_validator
+            .validate(file_path)
+            .map_err(|e| {
+                self.audit(
+                    "write",
+                    path,
+                    PolicyDecision::Blocked,
+                    "core.write",
+                    false,
+                    start.elapsed().as_millis() as u64,
+                    vec![path.to_string()],
+                );
+                ToolkitError::SecurityViolation(e.to_string())
+            })?;
 
         // Create parent directories if needed
         if let Some(parent) = validated_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }
 
-        match tokio::fs::write(&validated_path, content).await {
+        let res = match tokio::fs::write(&validated_path, content).await {
             Ok(()) => Ok(ToolResult::success(format!("File written: {}", path))),
-            Err(e) => Ok(ToolResult::error(format!("Failed to write file: {}", e))),
+            Err(e) => Ok(ToolResult::failure(
+                format!("Failed to write file: {}", e),
+                None,
+            )),
+        };
+
+        if let Ok(result) = &res {
+            self.audit(
+                "write",
+                path,
+                PolicyDecision::Auto,
+                "core.write",
+                result.success,
+                start.elapsed().as_millis() as u64,
+                vec![validated_path.to_string_lossy().to_string()],
+            );
         }
+
+        res
     }
 
     async fn search_files(&self, pattern: &str) -> Result<ToolResult, ToolkitError> {
-        let command = format!("grep -rn \"{}\" . --include=\"*.rs\" --include=\"*.py\" --include=\"*.ts\" --include=\"*.js\" | head -50", pattern);
-        self.exec_command(&command).await
+        let start = Instant::now();
+        let pattern = pattern.trim();
+        if pattern.is_empty() {
+            self.audit(
+                "search",
+                pattern,
+                PolicyDecision::Auto,
+                "core.search",
+                false,
+                start.elapsed().as_millis() as u64,
+                Vec::new(),
+            );
+            return Err(ToolkitError::InvalidArguments(
+                "pattern must not be empty".to_string(),
+            ));
+        }
+
+        let regex = Regex::new(pattern).map_err(|err| {
+            ToolkitError::InvalidArguments(format!("Invalid regex pattern: {err}"))
+        })?;
+
+        let workspace = self.workspace.clone();
+        let pattern_for_audit = pattern.to_string();
+
+        // File walking + reading is blocking; keep it off the async runtime.
+        let join_res = tokio::task::spawn_blocking(move || {
+            search_workspace(workspace, regex)
+        })
+        .await;
+
+        let (tool_result, paths_accessed) = match join_res {
+            Ok(Ok((stdout, paths))) => (ToolResult::success(stdout), paths),
+            Ok(Err(err)) => (ToolResult::failure(err, None), Vec::new()),
+            Err(err) => (
+                ToolResult::failure(format!("Search task failed: {err}"), None),
+                Vec::new(),
+            ),
+        };
+
+        self.audit(
+            "search",
+            &pattern_for_audit,
+            PolicyDecision::Auto,
+            "core.search",
+            tool_result.success,
+            start.elapsed().as_millis() as u64,
+            paths_accessed,
+        );
+
+        Ok(tool_result)
+    }
+}
+
+fn search_workspace(
+    workspace: PathBuf,
+    regex: Regex,
+) -> Result<(String, Vec<String>), String> {
+    const MAX_MATCHES: usize = 50;
+    const MAX_FILE_BYTES: u64 = 1_000_000; // avoid huge files
+    const MAX_AUDIT_PATHS: usize = 20;
+
+    fn is_allowed_ext(path: &std::path::Path) -> bool {
+        let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        matches!(ext, "rs" | "py" | "ts" | "js" | "toml" | "md")
+    }
+
+    fn should_skip_dir(name: &std::ffi::OsStr) -> bool {
+        let Some(name) = name.to_str() else {
+            return true;
+        };
+        matches!(
+            name,
+            ".git"
+                | "target"
+                | "node_modules"
+                | ".ownstack"
+                | "artifacts"
+                | "dist"
+                | "build"
+        )
+    }
+
+    fn search_dir(
+        workspace_root: &std::path::Path,
+        dir: &std::path::Path,
+        regex: &Regex,
+        out: &mut Vec<String>,
+        audit_paths: &mut Vec<String>,
+    ) -> Result<(), std::io::Error> {
+        let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)?
+            .filter_map(Result::ok)
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+
+        for entry in entries {
+            if out.len() >= MAX_MATCHES {
+                return Ok(());
+            }
+
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+
+            // Avoid leaving the workspace via symlinks/junctions.
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            if file_type.is_dir() {
+                if should_skip_dir(&entry.file_name()) {
+                    continue;
+                }
+                let _ = search_dir(workspace_root, &path, regex, out, audit_paths);
+                continue;
+            }
+
+            if !file_type.is_file() {
+                continue;
+            }
+            if !is_allowed_ext(&path) {
+                continue;
+            }
+
+            let meta = match std::fs::metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.len() > MAX_FILE_BYTES {
+                continue;
+            }
+
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            // Likely binary; skip.
+            if bytes.iter().any(|b| *b == 0) {
+                continue;
+            }
+
+            let text = String::from_utf8_lossy(&bytes);
+            for (idx, line) in text.lines().enumerate() {
+                if out.len() >= MAX_MATCHES {
+                    break;
+                }
+                if !regex.is_match(line) {
+                    continue;
+                }
+
+                let rel = path.strip_prefix(workspace_root).unwrap_or(&path);
+                let rel_s = rel.to_string_lossy().to_string();
+
+                // Keep audit payload bounded.
+                if audit_paths.len() < MAX_AUDIT_PATHS
+                    && !audit_paths.iter().any(|p| p == &rel_s)
+                {
+                    audit_paths.push(rel_s.clone());
+                }
+
+                let mut snippet = line.trim_end().to_string();
+                if snippet.len() > 240 {
+                    snippet.truncate(240);
+                    snippet.push_str("...");
+                }
+                out.push(format!("{}:{}:{}", rel_s, idx + 1, snippet));
+            }
+        }
+
+        Ok(())
+    }
+
+    let mut results: Vec<String> = Vec::new();
+    let mut audit_paths: Vec<String> = Vec::new();
+
+    search_dir(&workspace, &workspace, &regex, &mut results, &mut audit_paths)
+        .map_err(|e| format!("Search failed: {e}"))?;
+
+    if results.is_empty() {
+        Ok(("No matches found.".to_string(), audit_paths))
+    } else {
+        Ok((results.join("\n"), audit_paths))
     }
 }
 
@@ -233,7 +569,7 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_creation() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf());
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
         assert_eq!(tk.name(), "core");
         assert_eq!(tk.tools().len(), 4);
     }
@@ -241,7 +577,7 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_tools_list() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf());
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
         let tools = tk.tools();
         let names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         assert!(names.contains(&"exec".to_string()));
@@ -253,8 +589,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_write_read() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf());
-        
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
         // Write
         let write_args = serde_json::json!({
             "path": "test.txt",
@@ -267,14 +603,14 @@ mod tests {
         let read_args = serde_json::json!({"path": "test.txt"});
         let res = tk.execute("read", read_args).await.unwrap();
         assert!(res.success);
-        assert_eq!(res.output, "hello world");
+        assert_eq!(res.stdout, "hello world");
     }
 
     #[tokio::test]
     async fn test_core_toolkit_invalid_path() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf());
-        
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
         let args = serde_json::json!({"path": "../outside.txt"});
         let res = tk.execute("read", args).await;
         assert!(res.is_err()); // SecurityViolation
@@ -283,8 +619,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_exec_blocked() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf());
-        
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
         let args = serde_json::json!({"command": "rm -rf /"});
         let res = tk.execute("exec", args).await;
         assert!(res.is_err()); // SecurityViolation
@@ -293,8 +629,8 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_unknown_tool() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf());
-        
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
         let res = tk.execute("nonexistent", serde_json::json!({})).await;
         assert!(matches!(res, Err(ToolkitError::ToolNotFound(_))));
     }
@@ -302,10 +638,54 @@ mod tests {
     #[tokio::test]
     async fn test_core_toolkit_invalid_args() {
         let dir = tempdir().unwrap();
-        let tk = CoreToolkit::new(dir.path().to_path_buf());
-        
-        let res = tk.execute("write", serde_json::json!({"wrong": "key"})).await;
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
+        let res = tk
+            .execute("write", serde_json::json!({"wrong": "key"}))
+            .await;
+        assert!(matches!(res, Err(ToolkitError::InvalidArguments(_))));
+    }
+
+    #[tokio::test]
+    async fn test_core_toolkit_exec_ask_requires_ui() {
+        let dir = tempdir().unwrap();
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
+        // Likely classified as Ask by policy (network / push operations).
+        let args = serde_json::json!({"command": "git push origin main"});
+        let res = tk.execute("exec", args).await;
+        assert!(res.is_err()); // SecurityViolation (needs approval)
+    }
+
+    #[tokio::test]
+    async fn test_core_toolkit_search_finds_match() {
+        let dir = tempdir().unwrap();
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
+        std::fs::write(
+            dir.path().join("needle_ownstack_test.rs"),
+            "hello world\nno match here\nhello again\n",
+        )
+        .unwrap();
+
+        let args = serde_json::json!({"pattern": "hello"});
+        let res = tk.execute("search", args).await.unwrap();
+        assert!(res.success);
+        assert!(
+            res.stdout
+                .contains("needle_ownstack_test.rs:1:hello world"),
+            "stdout was: {}",
+            res.stdout
+        );
+    }
+
+    #[tokio::test]
+    async fn test_core_toolkit_search_rejects_invalid_regex() {
+        let dir = tempdir().unwrap();
+        let tk = CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
+
+        let args = serde_json::json!({"pattern": "["});
+        let res = tk.execute("search", args).await;
         assert!(matches!(res, Err(ToolkitError::InvalidArguments(_))));
     }
 }
-

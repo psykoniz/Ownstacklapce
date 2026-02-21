@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use super::plugin::VoltID;
 use crate::{
-    RequestId, RpcError, RpcMessage, OwnStackRpc,
+    OwnStackRpc, RequestId, RpcError, RpcMessage,
     buffer::BufferId,
     dap_types::{self, DapId, RunDebugConfig, SourceBreakpoint, ThreadId},
     file::{FileNodeItem, PathObject},
@@ -637,6 +637,10 @@ impl ProxyRpcHandler {
         if let Err(err) = self.tx.send(ProxyRpc::Shutdown) {
             tracing::error!("{:?}", err);
         }
+    }
+
+    pub fn ownstack(&self, message: OwnStackRpc) {
+        self.notification(ProxyNotification::OwnStack { message });
     }
 
     pub fn initialize(

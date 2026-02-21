@@ -40,6 +40,10 @@ impl LapceIcons {
     pub const SYMBOL_COLOR: &'static str = "symbol_color";
     pub const TYPE_HIERARCHY: &'static str = "type_hierarchy";
 
+    pub const SEND: &'static str = "send";
+    pub const STOP: &'static str = "stop";
+    pub const COMMENT: &'static str = "comment";
+
     pub const FILE: &'static str = "file";
     pub const FILE_EXPLORER: &'static str = "file_explorer";
     pub const FILE_PICKER_UP: &'static str = "file_picker_up";

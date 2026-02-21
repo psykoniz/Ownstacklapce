@@ -23,8 +23,11 @@ impl ProjectMemory {
         if rules_path.exists() {
             match std::fs::read_to_string(&rules_path) {
                 Ok(content) => {
-                    info!("ProjectMemory: loaded rules from {:?} ({} bytes)",
-                          rules_path, content.len());
+                    info!(
+                        "ProjectMemory: loaded rules from {:?} ({} bytes)",
+                        rules_path,
+                        content.len()
+                    );
                     Some(content)
                 }
                 Err(e) => {
@@ -96,8 +99,8 @@ impl ProjectMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_project_memory_load_rules() {
@@ -123,7 +126,7 @@ mod tests {
 
         let memory = ProjectMemory::new(dir.path().to_path_buf());
         let ctx = memory.load_all();
-        
+
         assert_eq!(ctx.rules, Some("rules".to_string()));
         assert_eq!(ctx.stack, Some("stack".to_string()));
         assert_eq!(ctx.conventions, Some("conventions".to_string()));
@@ -139,7 +142,7 @@ mod tests {
 
         let memory = ProjectMemory::new(dir.path().to_path_buf());
         let prompt = memory.to_system_prompt();
-        
+
         assert!(prompt.contains("# Project Memory"));
         assert!(prompt.contains("## Project Rules"));
         assert!(prompt.contains("Project rules here"));

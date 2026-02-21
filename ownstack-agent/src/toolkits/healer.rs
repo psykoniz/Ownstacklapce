@@ -11,8 +11,7 @@ use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 use ownstack_engine::{
-    PolicyDecision, PolicyEngine,
-    ProcessSandbox, Sandbox, SandboxLevel,
+    PolicyDecision, PolicyEngine, ProcessSandbox, Sandbox, SandboxLevel,
 };
 
 use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
@@ -113,8 +112,13 @@ impl FailureAnalyzer {
                 file_path: Self::extract_file_path(output),
                 line_number: Self::extract_line_number(output),
                 error_message: Self::extract_after(output, "SyntaxError:")
-                    .unwrap_or_else(|| Self::extract_after(output, "IndentationError:").unwrap_or_default()),
-                suggested_fixes: vec!["# Syntax error requires code review".to_string()],
+                    .unwrap_or_else(|| {
+                        Self::extract_after(output, "IndentationError:")
+                            .unwrap_or_default()
+                    }),
+                suggested_fixes: vec![
+                    "# Syntax error requires code review".to_string()
+                ],
             });
         }
 
@@ -125,7 +129,10 @@ impl FailureAnalyzer {
                 file_path: Self::extract_file_path(output),
                 line_number: Self::extract_line_number(output),
                 error_message: Self::extract_after(output, "TypeError:")
-                    .unwrap_or_else(|| Self::extract_after(output, "AttributeError:").unwrap_or_default()),
+                    .unwrap_or_else(|| {
+                        Self::extract_after(output, "AttributeError:")
+                            .unwrap_or_default()
+                    }),
                 suggested_fixes: Vec::new(),
             });
         }
@@ -137,13 +144,17 @@ impl FailureAnalyzer {
                 file_path: Self::extract_file_path(output),
                 line_number: Self::extract_line_number(output),
                 error_message: "Test failure detected".to_string(),
-                suggested_fixes: vec!["# Test failure requires LLM analysis".to_string()],
+                suggested_fixes: vec![
+                    "# Test failure requires LLM analysis".to_string()
+                ],
             });
         }
 
         // Dependency missing
-        if output.contains("pip install") || output.contains("npm install") ||
-           output.contains("Could not find a version") {
+        if output.contains("pip install")
+            || output.contains("npm install")
+            || output.contains("Could not find a version")
+        {
             failures.push(Failure {
                 failure_type: FailureType::DependencyMissing,
                 file_path: None,
@@ -202,7 +213,8 @@ impl FailureAnalyzer {
     fn extract_line_number(output: &str) -> Option<u32> {
         if let Some(pos) = output.find(", line ") {
             let rest = &output[pos + 7..];
-            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let num: String =
+                rest.chars().take_while(|c| c.is_ascii_digit()).collect();
             return num.parse().ok();
         }
         None
@@ -212,7 +224,9 @@ impl FailureAnalyzer {
         let mut cmds = Vec::new();
         for line in output.lines() {
             let trimmed = line.trim();
-            if trimmed.starts_with("pip install") || trimmed.starts_with("npm install") {
+            if trimmed.starts_with("pip install")
+                || trimmed.starts_with("npm install")
+            {
                 cmds.push(trimmed.to_string());
             }
         }
@@ -233,10 +247,13 @@ impl HealerToolkit {
 
     /// Run the self-healing loop for a failing command
     pub fn heal(&self, command: &str, max_attempts: u32) -> HealingSession {
-        let session_id = format!("heal-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis());
+        let session_id = format!(
+            "heal-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
 
         let mut session = HealingSession {
             session_id,
@@ -260,11 +277,14 @@ impl HealerToolkit {
         }
 
         // Analyze failures
-        session.failures_detected = FailureAnalyzer::analyze(
-            &session.original_output, 1
-        );
+        session.failures_detected =
+            FailureAnalyzer::analyze(&session.original_output, 1);
 
-        info!("Healer: {} failures detected for: {}", session.failures_detected.len(), command);
+        info!(
+            "Healer: {} failures detected for: {}",
+            session.failures_detected.len(),
+            command
+        );
 
         // Healing loop
         let mut applied_fixes: HashSet<String> = HashSet::new();
@@ -277,7 +297,9 @@ impl HealerToolkit {
             }
 
             let failure = session.failures_detected[0].clone();
-            let fix = failure.suggested_fixes.iter()
+            let fix = failure
+                .suggested_fixes
+                .iter()
                 .find(|f| !applied_fixes.contains(*f))
                 .cloned();
 
@@ -300,11 +322,16 @@ impl HealerToolkit {
             let start = std::time::Instant::now();
 
             // Apply fix
-            let fix_result = sandbox.exec(&fix, &self.workspace, SandboxLevel::Standard);
-            debug!("Healer: applied fix '{}' → success={}", fix, fix_result.success);
+            let fix_result =
+                sandbox.exec(&fix, &self.workspace, SandboxLevel::Standard);
+            debug!(
+                "Healer: applied fix '{}' → success={}",
+                fix, fix_result.success
+            );
 
             // Re-run original command
-            let verify = sandbox.exec(command, &self.workspace, SandboxLevel::Standard);
+            let verify =
+                sandbox.exec(command, &self.workspace, SandboxLevel::Standard);
             let verify_output = format!("{}\n{}", verify.stdout, verify.stderr);
 
             let attempt = HealingAttempt {
@@ -337,7 +364,9 @@ struct HealArgs {
     max_attempts: u32,
 }
 
-fn default_max_attempts() -> u32 { 5 }
+fn default_max_attempts() -> u32 {
+    5
+}
 
 #[async_trait]
 impl Toolkit for HealerToolkit {
@@ -348,7 +377,8 @@ impl Toolkit for HealerToolkit {
     fn tools(&self) -> Vec<ToolDef> {
         vec![ToolDef {
             name: "heal".to_string(),
-            description: "Run a command and automatically detect + fix failures".to_string(),
+            description: "Run a command and automatically detect + fix failures"
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

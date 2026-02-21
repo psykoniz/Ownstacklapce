@@ -1,5 +1,6 @@
 import logging
 import re
+import json
 from typing import List, Optional
 from pydantic import BaseModel
 from app.agent.providers.base import Message, Role

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info};
 
-use crate::toolkits::{Toolkit, ToolDef};
+use crate::toolkits::{ToolDef, Toolkit};
 
 // ─── MCP Server Protocol Types ─────────────────────────────────────
 
@@ -96,7 +96,7 @@ impl McpServer {
                     let content = serde_json::json!({
                         "content": [{
                             "type": "text",
-                            "text": result.output
+                            "text": if result.success { result.stdout } else { result.stderr }
                         }],
                         "isError": !result.success
                     });
@@ -110,7 +110,10 @@ impl McpServer {
     }
 
     /// Handle a single incoming request
-    async fn handle_request(&self, request: IncomingRequest) -> Option<OutgoingResponse> {
+    async fn handle_request(
+        &self,
+        request: IncomingRequest,
+    ) -> Option<OutgoingResponse> {
         debug!("MCP Server handling: {}", request.method);
 
         match request.method.as_str() {
@@ -156,17 +159,17 @@ impl McpServer {
 
             "tools/call" => {
                 let params = request.params.unwrap_or_default();
-                let tool_name = params
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let tool_name =
+                    params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let arguments = params
                     .get("arguments")
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
 
                 match self.execute_tool(tool_name, arguments).await {
-                    Ok(result) => Some(OutgoingResponse::success(request.id, result)),
+                    Ok(result) => {
+                        Some(OutgoingResponse::success(request.id, result))
+                    }
                     Err(e) => Some(OutgoingResponse::error(request.id, -32000, e)),
                 }
             }
@@ -202,7 +205,9 @@ impl McpServer {
 
                     match serde_json::from_str::<IncomingRequest>(trimmed) {
                         Ok(request) => {
-                            if let Some(response) = self.handle_request(request).await {
+                            if let Some(response) =
+                                self.handle_request(request).await
+                            {
                                 let response_json = serde_json::to_string(&response)
                                     .map_err(|e| e.to_string())?;
                                 stdout
@@ -243,7 +248,6 @@ impl McpServer {
                 }
             }
         }
-
     }
 }
 
@@ -257,7 +261,9 @@ mod tests {
 
     #[async_trait]
     impl Toolkit for MockToolkit {
-        fn name(&self) -> &str { "mock" }
+        fn name(&self) -> &str {
+            "mock"
+        }
         fn tools(&self) -> Vec<ToolDef> {
             vec![ToolDef {
                 name: "mock_tool".to_string(),
@@ -265,7 +271,11 @@ mod tests {
                 parameters: serde_json::json!({"type": "object"}),
             }]
         }
-        async fn execute(&self, name: &str, _args: serde_json::Value) -> Result<ToolResult, ToolkitError> {
+        async fn execute(
+            &self,
+            name: &str,
+            _args: serde_json::Value,
+        ) -> Result<ToolResult, ToolkitError> {
             if name == "mock_tool" {
                 Ok(ToolResult::success("mock output".to_string()))
             } else {
@@ -286,14 +296,17 @@ mod tests {
         let res = server.handle_request(req).await.unwrap();
         assert_eq!(res.id, Some(1));
         let result = res.result.unwrap();
-        assert_eq!(result.get("serverInfo").unwrap().get("name").unwrap(), "test-server");
+        assert_eq!(
+            result.get("serverInfo").unwrap().get("name").unwrap(),
+            "test-server"
+        );
     }
 
     #[tokio::test]
     async fn test_mcp_tools_list() {
         let mut server = McpServer::new("test", "1.0");
         server.register_toolkit(Arc::new(MockToolkit));
-        
+
         let req = IncomingRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(2),
@@ -301,7 +314,14 @@ mod tests {
             params: None,
         };
         let res = server.handle_request(req).await.unwrap();
-        let tools = res.result.unwrap().get("tools").unwrap().as_array().unwrap().clone();
+        let tools = res
+            .result
+            .unwrap()
+            .get("tools")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].get("name").unwrap(), "mock_tool");
     }
@@ -310,7 +330,7 @@ mod tests {
     async fn test_mcp_tools_call() {
         let mut server = McpServer::new("test", "1.0");
         server.register_toolkit(Arc::new(MockToolkit));
-        
+
         let req = IncomingRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(3),
@@ -322,7 +342,9 @@ mod tests {
         };
         let res = server.handle_request(req).await.unwrap();
         let result = res.result.unwrap();
-        let text = result.get("content").unwrap().as_array().unwrap()[0].get("text").unwrap();
+        let text = result.get("content").unwrap().as_array().unwrap()[0]
+            .get("text")
+            .unwrap();
         assert_eq!(text, "mock output");
     }
 
