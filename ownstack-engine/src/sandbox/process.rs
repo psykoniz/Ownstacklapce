@@ -220,11 +220,38 @@ impl Sandbox for ProcessSandbox {
             return ToolResult::failure("Empty command".to_string(), None);
         }
 
-        let cmd_name = &parts[0];
-        let args = &parts[1..];
+        #[allow(unused_mut)]
+        let mut cmd_name = parts[0].clone();
+        #[allow(unused_mut)]
+        let mut args: Vec<String> = parts[1..].to_vec();
 
-        let mut child_cmd = Command::new(cmd_name);
-        child_cmd.args(args);
+        #[cfg(target_os = "linux")]
+        {
+            let resolved = super::linux::resolve_command(
+                &cmd_name,
+                &args,
+                command_str,
+                level,
+            );
+            cmd_name = resolved.0;
+            args = resolved.1;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let resolved = super::macos::resolve_command(
+                &cmd_name,
+                &args,
+                command_str,
+                cwd,
+                level,
+            );
+            cmd_name = resolved.0;
+            args = resolved.1;
+        }
+
+        let mut child_cmd = Command::new(&cmd_name);
+        child_cmd.args(&args);
 
         child_cmd
             .current_dir(cwd)

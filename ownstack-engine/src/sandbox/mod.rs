@@ -2,6 +2,10 @@ use crate::tool_result::ToolResult;
 use std::path::Path;
 
 pub mod process;
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "macos")]
+pub mod macos;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SandboxLevel {
