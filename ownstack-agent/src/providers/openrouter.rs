@@ -57,9 +57,12 @@ struct OpenRouterRequest {
 #[derive(Serialize)]
 struct OpenRouterMessage {
     role: String,
-    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OpenRouterToolCallRequest>>,
 }
 
 #[derive(Serialize)]
@@ -74,6 +77,20 @@ struct OpenRouterFunction {
     name: String,
     description: String,
     parameters: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct OpenRouterToolCallRequest {
+    id: String,
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: OpenRouterFunctionCallRequest,
+}
+
+#[derive(Serialize)]
+struct OpenRouterFunctionCallRequest {
+    name: String,
+    arguments: String,
 }
 
 #[derive(Deserialize)]
@@ -122,6 +139,41 @@ fn role_to_string(role: &Role) -> String {
     }
 }
 
+fn to_openrouter_messages(messages: Vec<LlmMessage>) -> Vec<OpenRouterMessage> {
+    messages
+        .into_iter()
+        .map(|m| {
+            let tool_calls = m.tool_calls.map(|calls| {
+                calls
+                    .into_iter()
+                    .map(|call| OpenRouterToolCallRequest {
+                        id: call.id,
+                        tool_type: "function".to_string(),
+                        function: OpenRouterFunctionCallRequest {
+                            name: call.name,
+                            arguments: call.arguments.to_string(),
+                        },
+                    })
+                    .collect()
+            });
+
+            // OpenAI-compatible APIs expect assistant tool-call messages to omit content.
+            let content = if tool_calls.is_some() {
+                None
+            } else {
+                Some(m.content)
+            };
+
+            OpenRouterMessage {
+                role: role_to_string(&m.role),
+                content,
+                tool_call_id: m.tool_call_id,
+                tool_calls,
+            }
+        })
+        .collect()
+}
+
 #[async_trait]
 impl LlmProvider for OpenRouterProvider {
     async fn complete(
@@ -129,14 +181,8 @@ impl LlmProvider for OpenRouterProvider {
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<LlmResponse, ProviderError> {
-        let api_messages: Vec<OpenRouterMessage> = messages
-            .into_iter()
-            .map(|m| OpenRouterMessage {
-                role: role_to_string(&m.role),
-                content: m.content,
-                tool_call_id: m.tool_call_id,
-            })
-            .collect();
+        let api_messages: Vec<OpenRouterMessage> =
+            to_openrouter_messages(messages);
 
         let api_tools = tools.map(|t| {
             t.into_iter()
@@ -237,14 +283,8 @@ impl LlmProvider for OpenRouterProvider {
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
-        let api_messages: Vec<OpenRouterMessage> = messages
-            .into_iter()
-            .map(|m| OpenRouterMessage {
-                role: role_to_string(&m.role),
-                content: m.content,
-                tool_call_id: m.tool_call_id,
-            })
-            .collect();
+        let api_messages: Vec<OpenRouterMessage> =
+            to_openrouter_messages(messages);
 
         let api_tools = tools.map(|t| {
             t.into_iter()
@@ -461,14 +501,8 @@ mod tests {
             tool_calls: None,
         }];
 
-        let api_messages: Vec<OpenRouterMessage> = messages
-            .into_iter()
-            .map(|m| OpenRouterMessage {
-                role: role_to_string(&m.role),
-                content: m.content,
-                tool_call_id: m.tool_call_id,
-            })
-            .collect();
+        let api_messages: Vec<OpenRouterMessage> =
+            to_openrouter_messages(messages);
 
         let request = OpenRouterRequest {
             model: "gpt-4".to_string(),
@@ -481,5 +515,68 @@ mod tests {
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"role\":\"user\""));
         assert!(json.contains("\"content\":\"hello\""));
+    }
+
+    #[test]
+    fn test_tool_call_message_serialization() {
+        let mut assistant = LlmMessage::assistant("");
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: "call_1".to_string(),
+            name: "search".to_string(),
+            arguments: serde_json::json!({"pattern": "\\.rs$"}),
+        }]);
+
+        let api_messages = to_openrouter_messages(vec![assistant]);
+        let json = serde_json::to_string(&api_messages[0]).unwrap();
+
+        assert!(json.contains("\"tool_calls\""));
+        assert!(json.contains("\"name\":\"search\""));
+        assert!(!json.contains("\"content\""));
+    }
+
+    #[test]
+    fn test_parse_sse_chunk_content_delta() {
+        let json = serde_json::json!({
+            "choices": [
+                {
+                    "delta": {"content": "hel"},
+                    "finish_reason": null
+                }
+            ]
+        });
+
+        let chunk = parse_sse_chunk(&json).expect("chunk");
+        assert_eq!(chunk.delta_content.as_deref(), Some("hel"));
+        assert!(chunk.delta_tool_calls.is_empty());
+        assert!(chunk.finish_reason.is_none());
+    }
+
+    #[test]
+    fn test_parse_sse_chunk_tool_delta_and_finish() {
+        let json = serde_json::json!({
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {
+                                    "name": "search",
+                                    "arguments": "{\"pattern\":\"\\\\.rs$\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls"
+                }
+            ]
+        });
+
+        let chunk = parse_sse_chunk(&json).expect("chunk");
+        assert_eq!(chunk.delta_content, None);
+        assert_eq!(chunk.delta_tool_calls.len(), 1);
+        assert_eq!(chunk.delta_tool_calls[0].name.as_deref(), Some("search"));
+        assert_eq!(chunk.finish_reason, Some(FinishReason::ToolCalls));
     }
 }
