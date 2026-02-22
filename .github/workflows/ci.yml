@@ -64,16 +64,15 @@ jobs:
       - name: Fetch dependencies
         run: cargo fetch --locked
 
-      - name: Build
-        run: cargo build --frozen
+      - name: Build core binaries
+        run: |
+          cargo build --frozen -p lapce-app --bin ownstack-ide
+          cargo build --frozen -p ownstack-agent --bin ownstack-agent
+          cargo build --frozen -p lapce-proxy --bin lapce-proxy
 
       - name: Build as portable
         if: startsWith(matrix.os, 'windows')
-        run: cargo build --frozen --features lapce-app/portable
-
-      - name: Free space on Windows
-        if: startsWith(matrix.os, 'windows')
-        run: cargo clean
+        run: cargo build --frozen -p lapce-app --bin ownstack-ide --features lapce-app/portable
 
       - name: Run doc tests
         run: cargo test --doc --workspace
@@ -83,11 +82,15 @@ jobs:
         with:
           name: OwnStack-${{ matrix.os }}
           path: |
-            target/release/ownstack-ide*
             target/debug/ownstack-ide*
-            *.msi
-            *.zip
+            target/debug/ownstack-agent*
+            target/debug/lapce-proxy*
+          if-no-files-found: error
           retention-days: 7
+
+      - name: Free space on Windows
+        if: startsWith(matrix.os, 'windows')
+        run: cargo clean
 
   fmt:
     name: Rustfmt
