@@ -546,8 +546,10 @@ impl WindowTabData {
 
         let about_data = AboutData::new(cx, common.focus);
         let alert_data = AlertBoxData::new(cx, common.clone());
-        let ownstack_chat =
-            crate::ownstack_chat::OwnStackChatData::new((*common).clone());
+        let ownstack_chat = crate::ownstack_chat::OwnStackChatData::new(
+            (*common).clone(),
+            db.clone(),
+        );
         if let Some(mode_pref) =
             crate::ownstack_onboarding::load_saved_mode_preference()
         {

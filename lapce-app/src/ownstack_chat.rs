@@ -65,6 +65,7 @@ pub struct OwnStackChatData {
     pub current_mission: RwSignal<Option<(String, Vec<(String, String)>)>>,
     #[allow(dead_code)]
     common: CommonData,
+    db: Arc<crate::db::LapceDb>,
 }
 
 /// Agent execution mode
@@ -96,16 +97,22 @@ impl AgentMode {
 }
 
 impl OwnStackChatData {
-    pub fn new(common: CommonData) -> Self {
+    pub fn new(common: CommonData, db: Arc<crate::db::LapceDb>) -> Self {
+        let workspace = common.workspace.clone();
+        let messages = db
+            .get_ownstack_chat(&workspace)
+            .unwrap_or_else(|_| Vec::new());
+
         Self {
             input: create_rw_signal(String::new()),
             visible: create_rw_signal(false),
-            messages: create_rw_signal(Vec::new()),
+            messages: create_rw_signal(messages),
             is_loading: create_rw_signal(false),
             agent_mode: create_rw_signal(AgentMode::Ask),
             streaming_content: create_rw_signal(String::new()),
             current_mission: create_rw_signal(None),
             common,
+            db,
         }
     }
 
@@ -144,6 +151,12 @@ impl OwnStackChatData {
             msgs.push(user_msg);
         });
 
+        // Auto-save
+        self.db.save_ownstack_chat(
+            self.common.workspace.clone(),
+            self.messages.get_untracked(),
+        );
+
         // Clear input
         self.input.set(String::new());
 
@@ -168,6 +181,13 @@ impl OwnStackChatData {
         self.messages.update(|msgs| {
             msgs.push(assistant_msg);
         });
+
+        // Auto-save
+        self.db.save_ownstack_chat(
+            self.common.workspace.clone(),
+            self.messages.get_untracked(),
+        );
+
         self.is_loading.set(false);
         self.streaming_content.set(String::new());
     }
@@ -262,6 +282,10 @@ impl OwnStackChatData {
     /// Clear chat history
     pub fn clear_history(&self) {
         self.messages.set(Vec::new());
+        self.db.save_ownstack_chat(
+            self.common.workspace.clone(),
+            self.messages.get_untracked(),
+        );
     }
 
     /// Cycle through agent modes: Ask → Auto → Plan → Ask

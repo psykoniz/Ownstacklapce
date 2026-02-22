@@ -36,6 +36,7 @@ pub enum SaveEvent {
     DisabledVolts(Vec<VoltID>),
     WorkspaceDisabledVolts(Arc<LapceWorkspace>, Vec<VoltID>),
     PanelOrder(PanelOrder),
+    OwnStackChat(Arc<LapceWorkspace>, Vec<crate::ownstack_chat::ChatMessage>),
 }
 
 #[derive(Clone)]
@@ -107,6 +108,13 @@ impl LapceDb {
                         }
                         SaveEvent::PanelOrder(order) => {
                             if let Err(err) = local_db.insert_panel_orders(&order) {
+                                tracing::error!("{:?}", err);
+                            }
+                        }
+                        SaveEvent::OwnStackChat(workspace, messages) => {
+                            if let Err(err) =
+                                local_db.insert_ownstack_chat(workspace, messages)
+                            {
                                 tracing::error!("{:?}", err);
                             }
                         }
@@ -436,6 +444,46 @@ impl LapceDb {
         let info = std::fs::read_to_string(folder.join(doc_path_name(path)))?;
         let info: DocInfo = serde_json::from_str(&info)?;
         Ok(info)
+    }
+
+    pub fn save_ownstack_chat(
+        &self,
+        workspace: Arc<LapceWorkspace>,
+        messages: Vec<crate::ownstack_chat::ChatMessage>,
+    ) {
+        if let Err(err) = self
+            .save_tx
+            .send(SaveEvent::OwnStackChat(workspace, messages))
+        {
+            tracing::error!("{:?}", err);
+        }
+    }
+
+    pub fn insert_ownstack_chat(
+        &self,
+        workspace: Arc<LapceWorkspace>,
+        messages: Vec<crate::ownstack_chat::ChatMessage>,
+    ) -> Result<()> {
+        let folder = self
+            .workspace_folder
+            .join(workspace_folder_name(&workspace));
+        if let Err(err) = std::fs::create_dir_all(&folder) {
+            tracing::error!("{:?}", err);
+        }
+        let contents = serde_json::to_string_pretty(&messages)?;
+        std::fs::write(folder.join("ownstack_chat"), contents)?;
+        Ok(())
+    }
+
+    pub fn get_ownstack_chat(
+        &self,
+        workspace: &LapceWorkspace,
+    ) -> Result<Vec<crate::ownstack_chat::ChatMessage>> {
+        let folder = self.workspace_folder.join(workspace_folder_name(workspace));
+        let contents = std::fs::read_to_string(folder.join("ownstack_chat"))?;
+        let messages: Vec<crate::ownstack_chat::ChatMessage> =
+            serde_json::from_str(&contents)?;
+        Ok(messages)
     }
 }
 
