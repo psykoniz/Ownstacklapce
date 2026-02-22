@@ -10,9 +10,9 @@
 ### Current Phase: See `.ownstack/current_phase.json`
 
 **Source of truth**: `.ownstack/current_phase.json`  
-**Currently**: Phase 4 (Distribution)
+**Currently**: Phase 12 (Team Orchestration & Ecosystem)
 
-**ALLOWED**: Phase-appropriate work per `GEMINI.md` (installers/bundling/onboarding), docs, bug fixes  
+**ALLOWED**: Phase-appropriate work per `GEMINI.md` (multi-agent, model routing, WASI plugins, toolkit migration), docs, bug fixes  
 **NOT ALLOWED**: Skipping phases, touching protected files, bypassing the security flow
 
 ---

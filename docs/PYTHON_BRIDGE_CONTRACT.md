@@ -91,5 +91,5 @@ python scripts/report_python_debt.py
 ```
 
 Sortie:
-- `docs/TOP_PYTHON_DEBTS.md`
+- `docs/historical/TOP_PYTHON_DEBTS.md`
 - triée par score d'impact réel (fréquence + erreurs + latence).

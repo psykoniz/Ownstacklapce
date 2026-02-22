@@ -59,9 +59,10 @@ Utilisez le script d'automatisation pour un scan initial rapide :
 chmod +x .agent/workflows/scripts/quick-scan.sh
 ./.agent/workflows/scripts/quick-scan.sh .
 ```
-**Windows (PowerShell) :**
+**Windows :**
 ```powershell
-.agent/workflows/scripts/quick-scan.ps1 .
+# Via Git Bash (recommandé)
+"& 'C:\Program Files\Git\bin\bash.exe' -lc ""./.agent/workflows/scripts/quick-scan.sh ."""
 ```
 
 ou analysez manuellement si le script n'est pas disponible :
@@ -267,7 +268,7 @@ Utilisez les scripts dédiés pour une vérification approfondie :
 chmod +x .agent/workflows/scripts/check-rust-modules.sh
 ./.agent/workflows/scripts/check-rust-modules.sh .
 ```
-*(Windows: `.agent/workflows/scripts/check-rust-modules.ps1`)*
+*(Windows: utilisez Git Bash et lancez le script `.sh`)*
 
 **Node.js :**
 ```bash
@@ -283,7 +284,7 @@ chmod +x .agent/workflows/scripts/check-node-modules.sh
 chmod +x .agent/workflows/scripts/check-python-modules.sh
 ./.agent/workflows/scripts/check-python-modules.sh .
 ```
-*(Windows: `.agent/workflows/scripts/check-python-modules.ps1`)*
+*(Windows: utilisez Git Bash et lancez le script `.sh`)*
 
 ---
 

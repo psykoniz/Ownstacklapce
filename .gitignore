@@ -39,6 +39,8 @@ ownstack-python/dist/
 # Temporary Logs & Artifacts
 artifacts/
 *.log
+/ownstack-ide.exe
+/bin/*.exe
 runtime_log_new.txt
 build_output*.txt
 build_error*.txt

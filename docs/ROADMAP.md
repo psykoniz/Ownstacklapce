@@ -1,16 +1,16 @@
 # OwnStackLapce Roadmap (Executable)
 
-Date: 2026-02-14
+Date: 2026-02-22
 
 This roadmap is written to match `GEMINI.md` security requirements and the
 current phase in `.ownstack/current_phase.json`.
 
 ## Current State
 
-- Phase file: `.ownstack/current_phase.json` reports `current_phase = 4`.
-- Core wiring gaps were present (chat/palette prompts, OwnStack message routing,
-  Ask-mode approvals, budgets, Windows sandbox parsing). These are being closed
-  incrementally with tests.
+- Phase file: `.ownstack/current_phase.json` reports `current_phase = 12`.
+- Phases 0-11 completed and verified. Phase 12 (Team Orchestration & Ecosystem)
+  is in progress: multi-agent planner, dynamic model routing, signed WASI plugins,
+  self-healing loop, and native Rust toolkit migration are active.
 
 ## Milestone 0 (P0): End-to-End Prompt Works
 
@@ -88,8 +88,11 @@ Acceptance:
 
 - [x] Kill-Switch (stop agent + kill subprocesses) wired from UI -> proxy -> agent.
 - [x] Replace `grep | head` search tool with a Rust-native search (cross-platform).
-- [ ] OwnStack status bar integration (mode + running state) + better tool/audit panels.
-- [ ] Phase 4 distribution:
-  - bundle `ownstack-agent.exe` and optional Python backend
-  - MSI pipeline validation
-  - first-launch onboarding polish + provider key storage (no secrets in logs)
+- [x] OwnStack status bar integration (mode + running state) + better tool/audit panels.
+- [x] Phase 4 distribution (bundle agent, MSI pipeline, onboarding).
+- [x] Phase 5-11 completed (Security, Sandbox, Flow, Polish, Milestones, RAG).
+- [/] Phase 12 in progress:
+  - [x] Dynamic Model Routing
+  - [x] Native Rust Toolkit Migration (PM, QA, Security, Reviewer, Docs, Designer)
+  - [x] Self-Healing Agent Loop
+  - [ ] Final production polish & launch prep
