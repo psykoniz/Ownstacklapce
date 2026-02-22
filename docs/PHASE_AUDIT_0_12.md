@@ -5,7 +5,8 @@ Scope: phases `0 -> 12` with command + file evidence.
 
 ## 1) Governance Baseline
 
-- **Authoritative Branch**: `claude/verify-branch-functionality-dlozo` (Commit `034e92d7`)
+- **Authoritative Branch**: `claude/verify-branch-functionality-dlozo`
+- **Authoritative Commit**: `582fa083` (Bug recovery & stabilization baseline)
 - Phase definitions are now formalized in `GEMINI.md`:
   - `GEMINI.md:257` (`Phase 0`) through `GEMINI.md:527` (`Phase 12`)
   - includes explicit `Phase 9` (`GEMINI.md:499`) and `Phase 10` (`GEMINI.md:508`)

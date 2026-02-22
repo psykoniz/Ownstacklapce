@@ -90,9 +90,7 @@ enum AnthropicContentBlock {
         content: String,
     },
     #[serde(rename = "image")]
-    Image {
-        source: AnthropicImageSource,
-    },
+    Image { source: AnthropicImageSource },
 }
 
 #[derive(Serialize)]
@@ -162,31 +160,36 @@ impl LlmProvider for AnthropicProvider {
                 };
 
                 let content = match m.role {
-                    Role::Tool => {
-                        AnthropicContent::Blocks(vec![
-                            AnthropicContentBlock::ToolResult {
-                                tool_use_id: m.tool_call_id.clone().unwrap_or_default(),
-                                content: m.get_text(),
-                            },
-                        ])
-                    }
+                    Role::Tool => AnthropicContent::Blocks(vec![
+                        AnthropicContentBlock::ToolResult {
+                            tool_use_id: m.tool_call_id.clone().unwrap_or_default(),
+                            content: m.get_text(),
+                        },
+                    ]),
                     _ => match m.content {
-                        crate::provider::MessageContent::Text(s) => AnthropicContent::Text(s),
+                        crate::provider::MessageContent::Text(s) => {
+                            AnthropicContent::Text(s)
+                        }
                         crate::provider::MessageContent::Parts(parts) => {
-                            AnthropicContent::Blocks(parts.into_iter().map(|p| match p {
-                                crate::provider::ContentPart::Text { text } => {
-                                    AnthropicContentBlock::Text { text }
-                                }
-                                crate::provider::ContentPart::Image { source } => {
-                                    AnthropicContentBlock::Image {
-                                        source: AnthropicImageSource {
-                                            type_: source.type_,
-                                            media_type: source.media_type,
-                                            data: source.data,
+                            AnthropicContent::Blocks(
+                                parts
+                                    .into_iter()
+                                    .map(|p| match p {
+                                        crate::provider::ContentPart::Text {
+                                            text,
+                                        } => AnthropicContentBlock::Text { text },
+                                        crate::provider::ContentPart::Image {
+                                            source,
+                                        } => AnthropicContentBlock::Image {
+                                            source: AnthropicImageSource {
+                                                type_: source.type_,
+                                                media_type: source.media_type,
+                                                data: source.data,
+                                            },
                                         },
-                                    }
-                                }
-                            }).collect())
+                                    })
+                                    .collect(),
+                            )
                         }
                     },
                 };

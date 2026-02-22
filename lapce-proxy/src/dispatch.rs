@@ -62,6 +62,10 @@ const OWNSTACK_KEYRING_SERVICE: &str = "OwnStack IDE";
 const OPENROUTER_KEY_ENTRY: &str = "openrouter_api_key";
 const ANTHROPIC_KEY_ENTRY: &str = "anthropic_api_key";
 
+fn ownstack_executable_name(base: &str) -> String {
+    format!("{base}{}", std::env::consts::EXE_SUFFIX)
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 struct OnboardingState {
     completed: bool,
@@ -155,12 +159,10 @@ impl NativeAgent {
         workspace: Option<PathBuf>,
         core_rpc: CoreRpcHandler,
     ) -> Option<Self> {
-        let agent_path = std::env::current_exe()
-            .ok()?
-            .parent()?
-            .join("ownstack-agent.exe");
+        let agent_name = ownstack_executable_name("ownstack-agent");
+        let agent_path = std::env::current_exe().ok()?.parent()?.join(&agent_name);
         if !agent_path.exists() {
-            tracing::error!("ownstack-agent.exe not found at {:?}", agent_path);
+            tracing::error!("{} not found at {:?}", agent_name, agent_path);
             return None;
         }
 
@@ -1440,14 +1442,16 @@ impl Dispatcher {
     }
 
     pub fn start_bridge(&self) {
-        use ownstack_bridge::{BridgeLaunchConfig, BridgeRuntimeMode};
+        use ownstack_bridge::{
+            BridgeLaunchConfig, BridgeRuntimeMode, default_bundled_binary_name,
+        };
 
         let workspace = self.workspace.clone().unwrap_or_default();
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|e| e.parent().map(|p| p.to_path_buf()));
 
-        let bundled_path = exe_dir.map(|d| d.join("ownstack_backend.exe"));
+        let bundled_path = exe_dir.map(|d| d.join(default_bundled_binary_name()));
 
         let config = BridgeLaunchConfig {
             mode: BridgeRuntimeMode::Auto,

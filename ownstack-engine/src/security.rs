@@ -1,10 +1,11 @@
-//! Security Layer — Integrates Policy, Path Safety, and Audit
+//! Security Layer - Integrates Policy, Path Safety, and Audit
 //!
 //! This is the high-level API that all tools and agents should use
 //! to ensure the multi-step security flow is followed correctly.
 
 use chrono;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 use crate::{
     AuditEntry, AuditLogger, PathError, PathValidator, PolicyDecision, PolicyEngine,
@@ -13,13 +14,19 @@ use crate::{
 
 pub struct SecurityContext {
     pub workspace: PathBuf,
+    session_id: String,
 }
 
 impl SecurityContext {
     pub fn new(workspace: &Path) -> Self {
         Self {
             workspace: workspace.to_path_buf(),
+            session_id: Uuid::new_v4().to_string(),
         }
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// Evaluates a command and logs the result
@@ -33,7 +40,7 @@ impl SecurityContext {
         // Always log the evaluation
         let entry = AuditEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
-            session_id: "system".to_string(), // TODO: Pass real session ID
+            session_id: self.session_id.clone(),
             action: "evaluate".to_string(),
             command: command.to_string(),
             policy_decision: decision.clone(),
@@ -69,7 +76,7 @@ impl SecurityContext {
     ) {
         let entry = AuditEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
-            session_id: "system".to_string(),
+            session_id: self.session_id.clone(),
             action: "exec".to_string(),
             command: command.to_string(),
             policy_decision: PolicyDecision::Auto, // If we reached here, it was approved
@@ -97,6 +104,8 @@ mod tests {
 
         let decision = ctx.evaluate_and_audit("ls", "test");
         assert_eq!(decision, PolicyDecision::Auto);
+        assert_ne!(ctx.session_id(), "system");
+        assert!(Uuid::parse_str(ctx.session_id()).is_ok());
 
         // Verify audit log exists
         let audit_path = dir.path().join(".ownstack").join("audit.jsonl");

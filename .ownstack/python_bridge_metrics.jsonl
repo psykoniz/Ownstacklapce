@@ -1,0 +1,6 @@
+{"timestamp_ms":1771721352821,"method":"tools.exec","success":true,"latency_ms":88,"error":null}
+{"timestamp_ms":1771721352928,"method":"tools.exec","success":true,"latency_ms":0,"error":null}
+{"timestamp_ms":1771721353035,"method":"git.status","success":true,"latency_ms":0,"error":null}
+{"timestamp_ms":1771721353149,"method":"lsp.hover","success":true,"latency_ms":0,"error":null}
+{"timestamp_ms":1771721353261,"method":"agent.plan","success":true,"latency_ms":0,"error":null}
+{"timestamp_ms":1771721353371,"method":"fail","success":true,"latency_ms":0,"error":null}

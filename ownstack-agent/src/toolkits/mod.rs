@@ -11,9 +11,9 @@ pub mod mcp;
 pub mod multivers;
 pub mod vision;
 
-use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Serialize;
+use std::sync::Arc;
 use thiserror::Error;
 
 pub use self::core::CoreToolkit;
@@ -90,18 +90,35 @@ pub struct SignedToolkit {
 
 impl SignedToolkit {
     pub fn verify(&self) -> Result<(), ToolkitError> {
-        use ed25519_dalek::{VerifyingKey, Signature, Verifier};
-        
-        let vk = VerifyingKey::from_bytes(&self.public_key.clone().try_into().map_err(|_| ToolkitError::SecurityViolation("Invalid public key".to_string()))?)
-            .map_err(|e| ToolkitError::SecurityViolation(format!("Invalid public key: {}", e)))?;
-        
-        let sig = Signature::from_bytes(&self.signature.clone().try_into().map_err(|_| ToolkitError::SecurityViolation("Invalid signature length".to_string()))?);
-        
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+        let vk = VerifyingKey::from_bytes(
+            &self.public_key.clone().try_into().map_err(|_| {
+                ToolkitError::SecurityViolation("Invalid public key".to_string())
+            })?,
+        )
+        .map_err(|e| {
+            ToolkitError::SecurityViolation(format!("Invalid public key: {}", e))
+        })?;
+
+        let sig = Signature::from_bytes(
+            &self.signature.clone().try_into().map_err(|_| {
+                ToolkitError::SecurityViolation(
+                    "Invalid signature length".to_string(),
+                )
+            })?,
+        );
+
         // In a real implementation, we would verify a hash of the toolkit binary or manifest
         // For this demonstration, we verify the toolkit name
         vk.verify(self.toolkit.name().as_bytes(), &sig)
-            .map_err(|e| ToolkitError::SecurityViolation(format!("Signature verification failed: {}", e)))?;
-        
+            .map_err(|e| {
+                ToolkitError::SecurityViolation(format!(
+                    "Signature verification failed: {}",
+                    e
+                ))
+            })?;
+
         Ok(())
     }
 }

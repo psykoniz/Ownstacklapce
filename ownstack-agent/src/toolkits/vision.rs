@@ -2,10 +2,10 @@
 //!
 //! Tools for capturing UI state and analyzing images.
 
+use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
-use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
 
 use ownstack_engine::{AuditEntry, AuditLogger, PathValidator, PolicyDecision};
 use std::time::Instant;
@@ -80,7 +80,8 @@ impl Toolkit for VisionToolkit {
         vec![
             ToolDef {
                 name: "analyze_image".to_string(),
-                description: "Analyze an image file using the multi-modal agent".to_string(),
+                description: "Analyze an image file using the multi-modal agent"
+                    .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -98,7 +99,9 @@ impl Toolkit for VisionToolkit {
             },
             ToolDef {
                 name: "capture_ui".to_string(),
-                description: "Capture the current IDE UI state (panel or full window)".to_string(),
+                description:
+                    "Capture the current IDE UI state (panel or full window)"
+                        .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -122,48 +125,57 @@ impl Toolkit for VisionToolkit {
                 let start = Instant::now();
                 let parsed: AnalyzeImageArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                
-                let image_path = std::path::Path::new(&parsed.image_path);
-                
-                // Step 2: Path validation (GEMINI.md 6.3)
-                let validated_path = self.path_validator.validate(image_path).map_err(|e| {
-                    self.audit(
-                        "read_image",
-                        &parsed.image_path,
-                        PolicyDecision::Blocked,
-                        "vision.analyze_image",
-                        false,
-                        start.elapsed().as_millis() as u64,
-                        vec![parsed.image_path.clone()],
-                    );
-                    ToolkitError::SecurityViolation(e.to_string())
-                })?;
 
-                let data = std::fs::read(&validated_path)
-                    .map_err(|e| {
+                let image_path = std::path::Path::new(&parsed.image_path);
+
+                // Step 2: Path validation (GEMINI.md 6.3)
+                let validated_path =
+                    self.path_validator.validate(image_path).map_err(|e| {
                         self.audit(
                             "read_image",
                             &parsed.image_path,
-                            PolicyDecision::Auto,
+                            PolicyDecision::Blocked,
                             "vision.analyze_image",
                             false,
                             start.elapsed().as_millis() as u64,
-                            vec![validated_path.to_string_lossy().to_string()],
+                            vec![parsed.image_path.clone()],
                         );
-                        ToolkitError::ExecutionFailed(format!("Failed to read image: {}", e))
+                        ToolkitError::SecurityViolation(e.to_string())
                     })?;
-                
-                let b64 = base64_simd::STANDARD.encode_to_string(&data);
-                let media_type = match validated_path.extension().and_then(|s| s.to_str()) {
-                    Some("png") => "image/png",
-                    Some("jpg") | Some("jpeg") => "image/jpeg",
-                    _ => "image/png",
-                };
 
-                let mut result = ToolResult::success(format!("Image loaded: {}. Prompt: {}", parsed.image_path, parsed.prompt));
+                let data = std::fs::read(&validated_path).map_err(|e| {
+                    self.audit(
+                        "read_image",
+                        &parsed.image_path,
+                        PolicyDecision::Auto,
+                        "vision.analyze_image",
+                        false,
+                        start.elapsed().as_millis() as u64,
+                        vec![validated_path.to_string_lossy().to_string()],
+                    );
+                    ToolkitError::ExecutionFailed(format!(
+                        "Failed to read image: {}",
+                        e
+                    ))
+                })?;
+
+                let b64 = base64_simd::STANDARD.encode_to_string(&data);
+                let media_type =
+                    match validated_path.extension().and_then(|s| s.to_str()) {
+                        Some("png") => "image/png",
+                        Some("jpg") | Some("jpeg") => "image/jpeg",
+                        _ => "image/png",
+                    };
+
+                let mut result = ToolResult::success(format!(
+                    "Image loaded: {}. Prompt: {}",
+                    parsed.image_path, parsed.prompt
+                ));
                 result.metadata.insert("image_data".to_string(), b64);
-                result.metadata.insert("media_type".to_string(), media_type.to_string());
-                
+                result
+                    .metadata
+                    .insert("media_type".to_string(), media_type.to_string());
+
                 self.audit(
                     "read_image",
                     &parsed.image_path,
@@ -179,9 +191,11 @@ impl Toolkit for VisionToolkit {
             "capture_ui" => {
                 let _parsed: CaptureUiArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                
+
                 // Return a placeholder or trigger an RPC (to be implemented in orchestrator)
-                Ok(ToolResult::success("UI state captured and added to context.".to_string()))
+                Ok(ToolResult::success(
+                    "UI state captured and added to context.".to_string(),
+                ))
             }
             _ => Err(ToolkitError::ToolNotFound(tool_name.to_string())),
         }

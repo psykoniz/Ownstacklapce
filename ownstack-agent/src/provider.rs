@@ -89,12 +89,14 @@ impl MessageContent {
     pub fn get_text(&self) -> String {
         match self {
             MessageContent::Text(s) => s.clone(),
-            MessageContent::Parts(parts) => {
-                parts.iter().filter_map(|p| match p {
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
                     ContentPart::Text { text } => Some(text.clone()),
                     _ => None,
-                }).collect::<Vec<_>>().join(" ")
-            }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
         }
     }
 
@@ -140,12 +142,8 @@ impl From<&String> for MessageContent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
-    Text { 
-        text: String 
-    },
-    Image { 
-        source: ImageSource 
-    },
+    Text { text: String },
+    Image { source: ImageSource },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -201,7 +199,7 @@ impl LlmMessage {
             tool_calls: None,
         }
     }
-    
+
     pub fn get_text(&self) -> String {
         self.content.get_text()
     }
@@ -218,6 +216,7 @@ pub struct ToolCall {
 /// Tool definition for the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
+    /// Canonical tool identifier in `toolkit:tool` format.
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
@@ -482,8 +481,12 @@ mod tests {
     #[test]
     fn test_llm_message_get_text_parts_content_only_text() {
         let m = LlmMessage::user(MessageContent::Parts(vec![
-            ContentPart::Text { text: "Part 1".to_string() },
-            ContentPart::Text { text: "Part 2".to_string() },
+            ContentPart::Text {
+                text: "Part 1".to_string(),
+            },
+            ContentPart::Text {
+                text: "Part 2".to_string(),
+            },
         ]));
         assert_eq!(m.get_text(), "Part 1 Part 2");
     }
@@ -491,7 +494,9 @@ mod tests {
     #[test]
     fn test_llm_message_get_text_parts_content_with_image() {
         let m = LlmMessage::user(MessageContent::Parts(vec![
-            ContentPart::Text { text: "Description:".to_string() },
+            ContentPart::Text {
+                text: "Description:".to_string(),
+            },
             ContentPart::Image {
                 source: ImageSource {
                     type_: "base64".to_string(),
@@ -499,7 +504,9 @@ mod tests {
                     data: "base64_data".to_string(),
                 },
             },
-            ContentPart::Text { text: "End.".to_string() },
+            ContentPart::Text {
+                text: "End.".to_string(),
+            },
         ]));
         // get_text should only return text parts, ignoring images
         assert_eq!(m.get_text(), "Description: End.");
@@ -521,8 +528,12 @@ mod tests {
     #[test]
     fn test_message_content_get_text_parts_content_only_text() {
         let mc = MessageContent::Parts(vec![
-            ContentPart::Text { text: "Part 1".to_string() },
-            ContentPart::Text { text: "Part 2".to_string() },
+            ContentPart::Text {
+                text: "Part 1".to_string(),
+            },
+            ContentPart::Text {
+                text: "Part 2".to_string(),
+            },
         ]);
         assert_eq!(mc.get_text(), "Part 1 Part 2");
     }
@@ -530,7 +541,9 @@ mod tests {
     #[test]
     fn test_message_content_get_text_parts_content_with_image() {
         let mc = MessageContent::Parts(vec![
-            ContentPart::Text { text: "Description:".to_string() },
+            ContentPart::Text {
+                text: "Description:".to_string(),
+            },
             ContentPart::Image {
                 source: ImageSource {
                     type_: "base64".to_string(),
@@ -538,7 +551,9 @@ mod tests {
                     data: "base64_data".to_string(),
                 },
             },
-            ContentPart::Text { text: "End.".to_string() },
+            ContentPart::Text {
+                text: "End.".to_string(),
+            },
         ]);
         assert_eq!(mc.get_text(), "Description: End.");
     }

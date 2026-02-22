@@ -422,8 +422,12 @@ fn search_workspace(
             };
             return matches!(
                 name,
-                "Makefile" | "Dockerfile" | "Jenkinsfile" | "Procfile"
-                    | ".gitignore" | ".env.example"
+                "Makefile"
+                    | "Dockerfile"
+                    | "Jenkinsfile"
+                    | "Procfile"
+                    | ".gitignore"
+                    | ".env.example"
             );
         };
         matches!(
@@ -919,11 +923,7 @@ mod tests {
         let tk =
             CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
 
-        std::fs::write(
-            dir.path().join("edit_dup.txt"),
-            "foo\nfoo\nbar\n",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("edit_dup.txt"), "foo\nfoo\nbar\n").unwrap();
 
         let args = serde_json::json!({
             "path": "edit_dup.txt",

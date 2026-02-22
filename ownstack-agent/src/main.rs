@@ -238,17 +238,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lsp_toolkit = Arc::new(ownstack_agent::toolkits::lsp::LspToolkit::new(
         workspace.clone(),
     ));
-    let healer_toolkit = Arc::new(
-        ownstack_agent::toolkits::healer::HealerToolkit::new(workspace.clone()),
-    );
+    let healer_toolkit =
+        Arc::new(ownstack_agent::toolkits::healer::HealerToolkit::new(
+            workspace.clone(),
+            Some(provider.clone()),
+        ));
     let multivers_toolkit =
         Arc::new(ownstack_agent::toolkits::multivers::MultiversToolkit::new(
             workspace.clone(),
         ));
-    let vision_toolkit = Arc::new(ownstack_agent::toolkits::vision::VisionToolkit::new(
-        workspace.clone(),
-        session_id.clone(),
-    ));
+    let vision_toolkit =
+        Arc::new(ownstack_agent::toolkits::vision::VisionToolkit::new(
+            workspace.clone(),
+            session_id.clone(),
+        ));
 
     // Register default toolkits
     orchestrator.register_toolkit(core_toolkit.clone());
@@ -407,7 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Executing requested tool: {} with args: {}",
                         tool_name, command
                     );
-                    let args = if tool_name == "exec" {
+                    let args = if tool_name == "exec" || tool_name == "core:exec" {
                         serde_json::json!({ "command": command })
                     } else {
                         serde_json::from_str(&command)

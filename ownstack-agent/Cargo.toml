@@ -59,6 +59,7 @@ candle-nn = "0.3"
 candle-transformers = "0.3"
 hnsw_rs = "0.3"
 tokenizers = "0.15"
+sha2 = "0.10"
 
 # CLI (Phase 3)
 clap = { version = "4.4", features = ["derive"] }

@@ -23,6 +23,7 @@ This directory contains interactive/regression scripts used to validate the full
 - Windows:
   - `OWNSTACK_WINDOWS_PORTABLE_ZIP`
   - `OWNSTACK_WINDOWS_MSI`
+  - `OWNSTACK_WINDOWS_PYTHON_BUNDLE` (optional, `python_bundle.zip` or extracted dir)
 - macOS:
   - `OWNSTACK_MACOS_DMG`
   - `OWNSTACK_MACOS_APP_BIN`

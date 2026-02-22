@@ -85,6 +85,41 @@ def check_windows():
         print(f"[PASS] MSI artifact presence check: {msi}")
         performed = True
 
+    python_bundle = os.getenv("OWNSTACK_WINDOWS_PYTHON_BUNDLE")
+    if python_bundle:
+        bundle_path = Path(python_bundle)
+        if not bundle_path.exists():
+            raise FileNotFoundError(
+                f"Python runtime bundle not found: {bundle_path}"
+            )
+
+        if bundle_path.suffix.lower() == ".zip":
+            with zipfile.ZipFile(bundle_path) as zf:
+                names = set(zf.namelist())
+                required = {
+                    "start_bridge.py",
+                    "ownstack-python/app/bridge_rpc.py",
+                }
+                missing = [name for name in required if name not in names]
+                if missing:
+                    raise FileNotFoundError(
+                        f"Python bundle missing required files: {missing}"
+                    )
+        else:
+            launch = bundle_path / "start_bridge.py"
+            bridge_rpc = bundle_path / "ownstack-python" / "app" / "bridge_rpc.py"
+            if not launch.exists():
+                raise FileNotFoundError(
+                    f"Python bundle launch script missing: {launch}"
+                )
+            if not bridge_rpc.exists():
+                raise FileNotFoundError(
+                    f"Python bundle bridge entrypoint missing: {bridge_rpc}"
+                )
+
+        print(f"[PASS] Python runtime bundle check: {bundle_path}")
+        performed = True
+
     return performed
 
 

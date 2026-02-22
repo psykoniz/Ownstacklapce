@@ -8,11 +8,14 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use ownstack_engine::{
     PolicyDecision, PolicyEngine, ProcessSandbox, Sandbox, SandboxLevel,
 };
+
+use crate::provider::{LlmMessage, LlmProvider};
 
 use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
 
@@ -148,20 +151,31 @@ impl FailureAnalyzer {
 
             let mut suggested = Vec::new();
             // Missing crate → suggest adding to Cargo.toml
-            if output.contains("unresolved import") || output.contains("can't find crate") {
+            if output.contains("unresolved import")
+                || output.contains("can't find crate")
+            {
                 if let Some(crate_name) = Self::extract_rust_crate_name(output) {
                     suggested.push(format!("cargo add {}", crate_name));
                 }
             }
             // Missing derive or trait
-            if output.contains("doesn't implement") || output.contains("not implemented") {
-                suggested.push("# Implement the required trait or add a derive macro".to_string());
+            if output.contains("doesn't implement")
+                || output.contains("not implemented")
+            {
+                suggested.push(
+                    "# Implement the required trait or add a derive macro"
+                        .to_string(),
+                );
             }
 
             failures.push(Failure {
-                failure_type: if error_code.as_deref() == Some("E0433") || error_code.as_deref() == Some("E0432") {
+                failure_type: if error_code.as_deref() == Some("E0433")
+                    || error_code.as_deref() == Some("E0432")
+                {
                     FailureType::ImportError
-                } else if error_code.as_deref() == Some("E0308") || error_code.as_deref() == Some("E0277") {
+                } else if error_code.as_deref() == Some("E0308")
+                    || error_code.as_deref() == Some("E0277")
+                {
                     FailureType::TypeError
                 } else {
                     FailureType::SyntaxError
@@ -213,7 +227,9 @@ impl FailureAnalyzer {
         }
 
         // Node.js MODULE_NOT_FOUND
-        if output.contains("MODULE_NOT_FOUND") || output.contains("Cannot find module") {
+        if output.contains("MODULE_NOT_FOUND")
+            || output.contains("Cannot find module")
+        {
             let module = Self::extract_quoted(output, "Cannot find module");
             failures.push(Failure {
                 failure_type: FailureType::DependencyMissing,
@@ -420,7 +436,10 @@ impl FailureAnalyzer {
                 let rest = &trimmed[paren_start + 1..];
                 if let Some(colon) = rest.find(':') {
                     let path = &rest[..colon];
-                    if path.ends_with(".js") || path.ends_with(".ts") || path.ends_with(".mjs") {
+                    if path.ends_with(".js")
+                        || path.ends_with(".ts")
+                        || path.ends_with(".mjs")
+                    {
                         return Some(path.to_string());
                     }
                 }
@@ -462,7 +481,8 @@ impl FailureAnalyzer {
             if trimmed.contains("error TS") {
                 if let Some(paren) = trimmed.find('(') {
                     let rest = &trimmed[paren + 1..];
-                    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    let num: String =
+                        rest.chars().take_while(|c| c.is_ascii_digit()).collect();
                     return num.parse().ok();
                 }
             }
@@ -490,7 +510,8 @@ impl FailureAnalyzer {
             let trimmed = line.trim();
             if let Some(go_ext) = trimmed.find(".go:") {
                 let rest = &trimmed[go_ext + 4..]; // skip ".go:"
-                let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                let num: String =
+                    rest.chars().take_while(|c| c.is_ascii_digit()).collect();
                 return num.parse().ok();
             }
         }
@@ -502,15 +523,79 @@ impl FailureAnalyzer {
 
 pub struct HealerToolkit {
     workspace: PathBuf,
+    provider: Option<Arc<dyn LlmProvider + Send + Sync>>,
 }
 
 impl HealerToolkit {
-    pub fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+    pub fn new(
+        workspace: PathBuf,
+        provider: Option<Arc<dyn LlmProvider + Send + Sync>>,
+    ) -> Self {
+        Self {
+            workspace,
+            provider,
+        }
+    }
+
+    async fn llm_suggest_fixes(
+        &self,
+        command: &str,
+        failure: &Failure,
+        output: &str,
+    ) -> Vec<String> {
+        let Some(provider) = self.provider.as_ref() else {
+            return Vec::new();
+        };
+
+        let prompt = format!(
+            "You are a remediation assistant. Suggest safe shell commands to fix a failing development command.\n\
+Return ONLY JSON: {{\"suggested_fixes\": [\"cmd1\", \"cmd2\"]}}.\n\
+Do not include prose.\n\
+The commands must stay in the current workspace and avoid privileged/system operations.\n\n\
+Original command:\n{}\n\n\
+Failure type:\n{}\n\n\
+Failure message:\n{}\n\n\
+Output snippet:\n{}",
+            command,
+            failure.failure_type,
+            failure.error_message,
+            output.chars().take(4000).collect::<String>()
+        );
+
+        let messages = vec![
+            LlmMessage::system(
+                "Return strict JSON with key 'suggested_fixes' only.",
+            ),
+            LlmMessage::user(prompt),
+        ];
+
+        let response = match provider.complete(messages, None, None).await {
+            Ok(resp) => resp,
+            Err(err) => {
+                warn!("Healer LLM fallback failed: {}", err);
+                return Vec::new();
+            }
+        };
+
+        let content = response.content.unwrap_or_default();
+        let parsed = serde_json::from_str::<LlmFixResponse>(&content);
+        match parsed {
+            Ok(payload) => payload
+                .suggested_fixes
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .take(8)
+                .collect(),
+            Err(err) => {
+                warn!("Healer LLM fallback returned invalid JSON: {}", err);
+                Vec::new()
+            }
+        }
     }
 
     /// Run the self-healing loop for a failing command
-    pub fn heal(&self, command: &str, max_attempts: u32) -> HealingSession {
+    pub async fn heal(&self, command: &str, max_attempts: u32) -> HealingSession {
         let session_id = format!(
             "heal-{}",
             std::time::SystemTime::now()
@@ -561,8 +646,20 @@ impl HealerToolkit {
             }
 
             let failure = session.failures_detected[0].clone();
-            let fix = failure
-                .suggested_fixes
+            let mut candidate_fixes = failure.suggested_fixes.clone();
+            if candidate_fixes.is_empty()
+                || matches!(
+                    failure.failure_type,
+                    FailureType::Unknown | FailureType::TestFailure
+                )
+            {
+                let llm_fixes = self
+                    .llm_suggest_fixes(command, &failure, &session.original_output)
+                    .await;
+                candidate_fixes.extend(llm_fixes);
+            }
+
+            let fix = candidate_fixes
                 .iter()
                 .find(|f| !applied_fixes.contains(*f))
                 .cloned();
@@ -575,11 +672,21 @@ impl HealerToolkit {
                 }
             };
 
-            // Check policy for the fix command
+            // Check policy for the fix command.
             let decision = PolicyEngine::evaluate(&fix);
-            if decision == PolicyDecision::Blocked {
-                warn!("Healer: fix blocked by policy: {}", fix);
-                break;
+            match decision {
+                PolicyDecision::Blocked => {
+                    warn!("Healer: fix blocked by policy: {}", fix);
+                    break;
+                }
+                PolicyDecision::Ask => {
+                    warn!(
+                        "Healer: fix requires approval and will not be auto-executed: {}",
+                        fix
+                    );
+                    break;
+                }
+                PolicyDecision::Auto => {}
             }
 
             applied_fixes.insert(fix.clone());
@@ -628,6 +735,12 @@ struct HealArgs {
     max_attempts: u32,
 }
 
+#[derive(Deserialize)]
+struct LlmFixResponse {
+    #[serde(default)]
+    suggested_fixes: Vec<String>,
+}
+
 fn default_max_attempts() -> u32 {
     5
 }
@@ -669,7 +782,7 @@ impl Toolkit for HealerToolkit {
             "heal" => {
                 let parsed: HealArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                let session = self.heal(&parsed.command, parsed.max_attempts);
+                let session = self.heal(&parsed.command, parsed.max_attempts).await;
                 let summary = serde_json::to_string_pretty(&session)
                     .unwrap_or_else(|_| format!("healed: {}", session.healed));
                 Ok(ToolResult::success(summary))
@@ -682,6 +795,12 @@ impl Toolkit for HealerToolkit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::{
+        FinishReason, LlmProvider, LlmResponse, ProviderError, ToolDefinition,
+    };
+    use async_trait::async_trait;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
     // ─── Python errors (existing behavior) ──────────────────────
     #[test]
@@ -697,14 +816,18 @@ mod tests {
     fn test_python_syntax_error() {
         let output = "  File \"app.py\", line 10\n    def broken(\nSyntaxError: unexpected EOF while parsing";
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::SyntaxError));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::SyntaxError));
     }
 
     #[test]
     fn test_python_type_error() {
         let output = "TypeError: unsupported operand type(s) for +: 'int' and 'str'";
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::TypeError));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::TypeError));
     }
 
     // ─── Rust errors ────────────────────────────────────────────
@@ -716,7 +839,9 @@ mod tests {
 15 |     foo(x)
   |     ^^^^^^ expected `u32`, found `&str`"#;
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::TypeError));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::TypeError));
         assert_eq!(failures[0].file_path.as_deref(), Some("src/main.rs"));
         assert_eq!(failures[0].line_number, Some(15));
     }
@@ -729,21 +854,30 @@ mod tests {
 1 | use tokio::runtime;
   |     ^^^^^ could not find `tokio` in the crate root"#;
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::ImportError));
-        assert!(failures[0].suggested_fixes.iter().any(|f| f.contains("cargo add")));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::ImportError));
+        assert!(failures[0]
+            .suggested_fixes
+            .iter()
+            .any(|f| f.contains("cargo add")));
     }
 
     #[test]
     fn test_rust_missing_crate() {
         let output = "error: no matching package named `serde_yaml` found";
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::DependencyMissing));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::DependencyMissing));
     }
 
     #[test]
     fn test_rust_error_code_extraction() {
         assert_eq!(
-            FailureAnalyzer::extract_rust_error_code("error[E0308]: mismatched types"),
+            FailureAnalyzer::extract_rust_error_code(
+                "error[E0308]: mismatched types"
+            ),
             Some("E0308".to_string())
         );
         assert_eq!(
@@ -766,14 +900,18 @@ mod tests {
     fn test_js_reference_error() {
         let output = "ReferenceError: foo is not defined\n    at Object.<anonymous> (/app/index.js:5:1)";
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::RuntimeError));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::RuntimeError));
     }
 
     #[test]
     fn test_ts_compilation_error() {
         let output = "src/app.ts(15,3): error TS2304: Cannot find name 'foo'.";
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::SyntaxError));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::SyntaxError));
         assert_eq!(failures[0].file_path.as_deref(), Some("src/app.ts"));
         assert_eq!(failures[0].line_number, Some(15));
     }
@@ -782,8 +920,12 @@ mod tests {
     fn test_node_module_not_found() {
         let output = "Error: Cannot find module 'express'\nRequire stack:\n- /app/index.js\ncode: 'MODULE_NOT_FOUND'";
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::DependencyMissing));
-        assert!(failures.iter().any(|f| f.suggested_fixes.iter().any(|s| s.contains("npm install"))));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::DependencyMissing));
+        assert!(failures
+            .iter()
+            .any(|f| f.suggested_fixes.iter().any(|s| s.contains("npm install"))));
     }
 
     // ─── Go errors ──────────────────────────────────────────────
@@ -791,7 +933,9 @@ mod tests {
     fn test_go_undefined_error() {
         let output = "./main.go:15:5: undefined: handleRequest";
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::SyntaxError));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::SyntaxError));
         assert_eq!(failures[0].file_path.as_deref(), Some("./main.go"));
         assert_eq!(failures[0].line_number, Some(15));
     }
@@ -800,7 +944,9 @@ mod tests {
     fn test_go_missing_package() {
         let output = "cannot find package 'github.com/gin-gonic/gin' in any of:";
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::DependencyMissing));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::DependencyMissing));
     }
 
     // ─── Test failures ──────────────────────────────────────────
@@ -808,7 +954,9 @@ mod tests {
     fn test_cargo_test_failure() {
         let output = "test result: FAILED. 3 passed; 1 failed; 0 ignored";
         let failures = FailureAnalyzer::analyze(output, 1);
-        assert!(failures.iter().any(|f| f.failure_type == FailureType::TestFailure));
+        assert!(failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::TestFailure));
     }
 
     // ─── Successful command returns no failures ─────────────────
@@ -825,5 +973,51 @@ mod tests {
         let failures = FailureAnalyzer::analyze(output, 1);
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].failure_type, FailureType::Unknown);
+    }
+
+    struct JsonFixProvider;
+
+    #[async_trait]
+    impl LlmProvider for JsonFixProvider {
+        async fn complete(
+            &self,
+            _messages: Vec<crate::provider::LlmMessage>,
+            _tools: Option<Vec<ToolDefinition>>,
+            _model_override: Option<String>,
+        ) -> Result<LlmResponse, ProviderError> {
+            Ok(LlmResponse {
+                content: Some(
+                    r#"{"suggested_fixes":["cargo fmt --all","cargo check --workspace"]}"#
+                        .to_string(),
+                ),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            })
+        }
+
+        fn name(&self) -> &str {
+            "json-fix-provider"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_llm_suggest_fixes_parses_json_payload() {
+        let toolkit =
+            HealerToolkit::new(PathBuf::from("."), Some(Arc::new(JsonFixProvider)));
+        let failure = Failure {
+            failure_type: FailureType::Unknown,
+            file_path: None,
+            line_number: None,
+            error_message: "unknown".to_string(),
+            suggested_fixes: Vec::new(),
+        };
+
+        let fixes = toolkit
+            .llm_suggest_fixes("cargo test", &failure, "test output")
+            .await;
+        assert_eq!(fixes.len(), 2);
+        assert_eq!(fixes[0], "cargo fmt --all");
+        assert_eq!(fixes[1], "cargo check --workspace");
     }
 }

@@ -9,6 +9,9 @@ import time
 from pathlib import Path
 from typing import Optional
 
+IS_WINDOWS = os.name == "nt"
+EXE_SUFFIX = ".exe" if IS_WINDOWS else ""
+
 
 def _pipe_reader(pipe, out_queue: queue.Queue, source: str) -> None:
     try:
@@ -19,8 +22,7 @@ def _pipe_reader(pipe, out_queue: queue.Queue, source: str) -> None:
 
 
 def _start_agent(api_key: str, model: str, workspace: str) -> subprocess.Popen:
-    is_windows = os.name == "nt"
-    agent_bin = Path("target/debug/ownstack-agent.exe") if is_windows else Path("target/debug/ownstack-agent")
+    agent_bin = Path(f"target/debug/ownstack-agent{EXE_SUFFIX}")
 
     env = os.environ.copy()
     env["OPENROUTER_API_KEY"] = api_key

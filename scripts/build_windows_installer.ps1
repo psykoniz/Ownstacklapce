@@ -1,6 +1,7 @@
 param(
     [switch]$InstallMissingTools,
     [switch]$SkipPythonBuild,
+    [switch]$SkipPythonRuntimeBundle,
     [switch]$SkipRustBuild,
     [switch]$SignArtifacts,
     [string]$CodeSignCertPath = "",
@@ -152,14 +153,22 @@ $repoRoot = Split-Path -Parent $scriptDir
 $pythonProjectDir = Join-Path $repoRoot "ownstack-python"
 $pythonSpec = Join-Path $pythonProjectDir "ownstack_backend.spec"
 $pythonDistExe = Join-Path $pythonProjectDir "dist\ownstack_backend.exe"
+$pythonBundleScript = Join-Path $repoRoot "scripts\bundle_python.py"
 $releaseDir = Join-Path $repoRoot "target\release"
 $releaseBackendExe = Join-Path $releaseDir "ownstack_backend.exe"
 $releaseIdeExe = Join-Path $releaseDir "ownstack-ide.exe"
 $releaseAgentExe = Join-Path $releaseDir "ownstack-agent.exe"
+$releasePythonBundleDir = Join-Path $releaseDir "python_bundle"
+$releasePythonBundleZip = Join-Path $releaseDir "python_bundle.zip"
+$releasePythonBundleLaunch = Join-Path $releasePythonBundleDir "start_bridge.py"
+$releasePythonBundleBridgeRpc = Join-Path $releasePythonBundleDir "ownstack-python\app\bridge_rpc.py"
 $wixTargetDir = Join-Path $repoRoot "target\wix"
 
 if (-not (Test-Path $pythonSpec)) {
     Fail "Spec file not found: $pythonSpec"
+}
+if (-not (Test-Path $pythonBundleScript)) {
+    Fail "Python bundling script not found: $pythonBundleScript"
 }
 
 Write-Step "Resolving required executables"
@@ -300,6 +309,35 @@ Write-Step "Copying bundled backend next to release binaries"
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 Copy-Item -Force $pythonDistExe $releaseBackendExe
 Write-Ok "Backend copied to: $releaseBackendExe"
+
+if (-not $SkipPythonRuntimeBundle) {
+    Write-Step "Building Python runtime fallback bundle"
+    if (Test-Path $releasePythonBundleDir) {
+        Remove-Item -Recurse -Force $releasePythonBundleDir
+    }
+
+    Invoke-Checked -Exe $pythonExe -Arguments @($pythonBundleScript, "--output", $releasePythonBundleDir) -WorkingDirectory $repoRoot
+
+    if (-not (Test-Path $releasePythonBundleLaunch)) {
+        Fail "Python runtime bundle launch script missing: $releasePythonBundleLaunch"
+    }
+    if (-not (Test-Path $releasePythonBundleBridgeRpc)) {
+        Fail "Python runtime bundle bridge entrypoint missing: $releasePythonBundleBridgeRpc"
+    }
+
+    if (Test-Path $releasePythonBundleZip) {
+        Remove-Item -Force $releasePythonBundleZip
+    }
+    Compress-Archive -Path (Join-Path $releasePythonBundleDir "*") -DestinationPath $releasePythonBundleZip -Force
+
+    Write-Ok "Python runtime bundle created: $releasePythonBundleZip"
+}
+else {
+    Write-Step "Skipping Python runtime fallback bundle"
+    if (-not (Test-Path $releasePythonBundleZip)) {
+        Fail "SkipPythonRuntimeBundle is set but runtime bundle archive is missing: $releasePythonBundleZip"
+    }
+}
 
 if ($SignArtifacts) {
     Write-Step "Signing release binaries"

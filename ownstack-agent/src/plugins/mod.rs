@@ -15,8 +15,7 @@ use wasmtime_wasi::WasiCtxBuilder;
 
 use crate::toolkits::{ToolDef, ToolResult, Toolkit, ToolkitError};
 
-const TRUSTED_PLUGIN_PUBKEY_HEX_ENV: &str =
-    "OWNSTACK_PLUGIN_TRUSTED_PUBLIC_KEY_HEX";
+const TRUSTED_PLUGIN_PUBKEY_HEX_ENV: &str = "OWNSTACK_PLUGIN_TRUSTED_PUBLIC_KEY_HEX";
 
 fn decode_hex(input: &str) -> Result<Vec<u8>, ToolkitError> {
     let trimmed = input.trim();
@@ -128,7 +127,10 @@ impl WasiPluginHost {
         }
 
         let signature = fs::read(&sig_path).await.map_err(|e| {
-            ToolkitError::SecurityViolation(format!("Failed to read signature: {}", e))
+            ToolkitError::SecurityViolation(format!(
+                "Failed to read signature: {}",
+                e
+            ))
         })?;
 
         // In production this should come from a trusted store.

@@ -537,6 +537,9 @@ pub fn extract(src: &Path, process_path: &Path) -> Result<PathBuf> {
 
 #[cfg(all(target_os = "windows", feature = "portable"))]
 pub fn extract(src: &Path, process_path: &Path) -> Result<PathBuf> {
+    let ownstack_ide_name = format!("ownstack-ide{}", std::env::consts::EXE_SUFFIX);
+    let lapce_name = format!("lapce{}", std::env::consts::EXE_SUFFIX);
+
     let parent = src
         .parent()
         .ok_or_else(|| anyhow::anyhow!("src has no parent"))?;
@@ -552,12 +555,12 @@ pub fn extract(src: &Path, process_path: &Path) -> Result<PathBuf> {
     let current_name = process_path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("ownstack-ide.exe");
+        .unwrap_or(&ownstack_ide_name);
     let backup_name = format!("{current_name}.bak");
 
     std::fs::rename(process_path, dst_parent.join(backup_name))?;
 
-    let extracted = [parent.join("ownstack-ide.exe"), parent.join("lapce.exe")]
+    let extracted = [parent.join(&ownstack_ide_name), parent.join(&lapce_name)]
         .into_iter()
         .find(|p| p.exists())
         .ok_or_else(|| anyhow!("cannot locate extracted windows portable binary"))?;

@@ -1,8 +1,8 @@
-use ownstack_agent::plugins::WasiPluginHost;
 use ed25519_dalek::{Signer, SigningKey};
+use ownstack_agent::plugins::WasiPluginHost;
 use serde_json::json;
-use tempfile::tempdir;
 use std::path::Path;
+use tempfile::tempdir;
 
 fn to_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";

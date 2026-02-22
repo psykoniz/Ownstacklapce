@@ -82,7 +82,16 @@ impl McpServer {
 
     /// Get all tool definitions
     fn get_all_tools(&self) -> Vec<ToolDef> {
-        self.toolkits.iter().flat_map(|tk| tk.tools()).collect()
+        self.toolkits
+            .iter()
+            .flat_map(|tk| {
+                let toolkit_name = tk.name().to_string();
+                tk.tools().into_iter().map(move |mut t| {
+                    t.name = format!("{}:{}", toolkit_name, t.name);
+                    t
+                })
+            })
+            .collect()
     }
 
     /// Execute a tool by name
@@ -91,6 +100,66 @@ impl McpServer {
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        if let Some((namespace, local_name)) = tool_name.split_once(':') {
+            for toolkit in &self.toolkits {
+                if toolkit.name() != namespace {
+                    continue;
+                }
+                return match toolkit.execute(local_name, arguments).await {
+                    Ok(result) => {
+                        let content = serde_json::json!({
+                            "content": [{
+                                "type": "text",
+                                "text": if result.success { result.stdout } else { result.stderr }
+                            }],
+                            "isError": !result.success
+                        });
+                        Ok(content)
+                    }
+                    Err(e) => Err(e.to_string()),
+                };
+            }
+            return Err(format!(
+                "Toolkit not found for namespaced tool: {}",
+                tool_name
+            ));
+        }
+
+        let mut alias_matches = Vec::new();
+        for toolkit in &self.toolkits {
+            if toolkit.tools().iter().any(|def| def.name == tool_name) {
+                alias_matches.push(toolkit.clone());
+            }
+        }
+
+        if alias_matches.len() > 1 {
+            let suggestions = alias_matches
+                .iter()
+                .map(|tk| format!("{}:{}", tk.name(), tool_name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "Ambiguous legacy tool alias '{}'. Use namespaced tool id: {}",
+                tool_name, suggestions
+            ));
+        }
+
+        if let Some(toolkit) = alias_matches.into_iter().next() {
+            return match toolkit.execute(tool_name, arguments).await {
+                Ok(result) => {
+                    let content = serde_json::json!({
+                        "content": [{
+                            "type": "text",
+                            "text": if result.success { result.stdout } else { result.stderr }
+                        }],
+                        "isError": !result.success
+                    });
+                    Ok(content)
+                }
+                Err(e) => Err(e.to_string()),
+            };
+        }
+
         for toolkit in &self.toolkits {
             match toolkit.execute(tool_name, arguments.clone()).await {
                 Ok(result) => {
@@ -324,7 +393,7 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].get("name").unwrap(), "mock_tool");
+        assert_eq!(tools[0].get("name").unwrap(), "mock:mock_tool");
     }
 
     #[tokio::test]
@@ -337,7 +406,7 @@ mod tests {
             id: Some(3),
             method: "tools/call".to_string(),
             params: Some(serde_json::json!({
-                "name": "mock_tool",
+                "name": "mock:mock_tool",
                 "arguments": {}
             })),
         };

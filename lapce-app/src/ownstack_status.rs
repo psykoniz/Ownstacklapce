@@ -51,6 +51,16 @@ impl OwnStackStatusData {
         )
     }
 
+    /// Build the state/detail section (without mode), used by status bar badges.
+    pub fn detail_label(&self) -> String {
+        compose_detail_label(
+            self.is_active.get(),
+            self.bridge_connected.get(),
+            &self.status_text.get(),
+            self.pending_ops.get(),
+        )
+    }
+
     pub fn mode_label(&self) -> &'static str {
         mode_label(&self.mode.get())
     }
@@ -128,6 +138,17 @@ pub(crate) fn compose_display_label(
     detail: &str,
     pending_ops: u32,
 ) -> String {
+    let mode_label = mode_label(mode);
+    let detail_label = compose_detail_label(active, connected, detail, pending_ops);
+    format!("OwnStack {mode_label} | {detail_label}")
+}
+
+pub(crate) fn compose_detail_label(
+    active: bool,
+    connected: bool,
+    detail: &str,
+    pending_ops: u32,
+) -> String {
     let state = if active {
         OwnStackRunState::Running
     } else if !connected {
@@ -136,13 +157,12 @@ pub(crate) fn compose_display_label(
         OwnStackRunState::Idle
     };
     let state_label = run_state_label(state);
-    let mode_label = mode_label(mode);
     let detail = detail.trim();
 
     let mut label = if detail.is_empty() || detail == state_label {
-        format!("OwnStack {mode_label} | {state_label}")
+        state_label.to_string()
     } else {
-        format!("OwnStack {mode_label} | {state_label} ({detail})")
+        format!("{state_label} ({detail})")
     };
 
     if pending_ops > 0 {
@@ -154,7 +174,7 @@ pub(crate) fn compose_display_label(
 
 #[cfg(test)]
 mod tests {
-    use super::compose_display_label;
+    use super::{compose_detail_label, compose_display_label};
     use crate::ownstack_chat::AgentMode;
 
     #[test]
@@ -180,5 +200,11 @@ mod tests {
         let label =
             compose_display_label(&AgentMode::Plan, true, true, "running", 2);
         assert_eq!(label, "OwnStack Plan | running | ops:2");
+    }
+
+    #[test]
+    fn compose_detail_without_mode() {
+        let label = compose_detail_label(false, true, "idle", 1);
+        assert_eq!(label, "idle | ops:1");
     }
 }

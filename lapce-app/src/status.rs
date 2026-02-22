@@ -230,7 +230,42 @@ pub fn status(
             {
                 let panel = panel.clone();
                 let ownstack_style = ownstack_status.clone();
-                label(move || ownstack_status.display_label())
+                stack((
+                    {
+                        let ownstack_mode_label = ownstack_style.clone();
+                        let ownstack_mode_color = ownstack_style.clone();
+                        label(move || ownstack_mode_label.mode_label().to_uppercase())
+                            .style(move |s| {
+                                let config = config.get();
+                                let badge_bg = match ownstack_mode_color.mode.get() {
+                                    crate::ownstack_chat::AgentMode::Ask => {
+                                        config.color(LapceColor::LAPCE_WARN)
+                                    }
+                                    crate::ownstack_chat::AgentMode::Auto => {
+                                        config.color(LapceColor::SOURCE_CONTROL_ADDED)
+                                    }
+                                    crate::ownstack_chat::AgentMode::Plan => {
+                                        config.color(
+                                            LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE,
+                                        )
+                                    }
+                                };
+
+                                s.padding_horiz(7.0)
+                                    .padding_vert(2.0)
+                                    .margin_right(8.0)
+                                    .border_radius(999.0)
+                                    .background(badge_bg.multiply_alpha(0.9))
+                                    .color(config.color(LapceColor::STATUS_BACKGROUND))
+                                    .font_size(10.0)
+                                    .selectable(false)
+                            })
+                    },
+                    label(move || ownstack_status.detail_label()).style(move |s| {
+                        s.color(config.get().color(LapceColor::STATUS_FOREGROUND))
+                            .selectable(false)
+                    }),
+                ))
                     .on_click_stop(move |_| {
                         panel.show_panel(&PanelKind::OwnStackChat);
                     })

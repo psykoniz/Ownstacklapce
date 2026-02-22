@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Confirm mandatory gates
-        run: echo "Mandatory gates passed: workspace check, crate tests, healthcheck."
+        run: echo Mandatory gates passed
 
   build:
     name: Rust on ${{ matrix.os }}
@@ -75,6 +75,17 @@ jobs:
 
       - name: Run doc tests
         run: cargo test --doc --workspace
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OwnStack-${{ matrix.os }}
+          path: |
+            target/release/ownstack-ide*
+            target/debug/ownstack-ide*
+            *.msi
+            *.zip
+          retention-days: 7
 
   fmt:
     name: Rustfmt

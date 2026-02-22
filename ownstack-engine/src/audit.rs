@@ -1,5 +1,6 @@
 use crate::policy::PolicyDecision;
 use chrono::Utc;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -29,7 +30,6 @@ impl AuditLogger {
         log_path.push(".ownstack");
         log_path.push("audit.jsonl");
 
-        // Ensure .ownstack directory exists
         if let Some(parent) = log_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -38,17 +38,35 @@ impl AuditLogger {
     }
 
     /// Logs an entry to the audit file in JSONL format.
+    ///
+    /// Writes are protected by an OS-level exclusive lock so multiple
+    /// processes/threads cannot interleave JSON lines.
     pub fn log(&self, mut entry: AuditEntry) -> std::io::Result<()> {
         entry.timestamp = Utc::now().to_rfc3339();
 
-        let json = serde_json::to_string(&entry)?;
+        let json = serde_json::to_string(&entry).map_err(std::io::Error::other)?;
+
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
+            .read(true)
             .open(&self.log_path)?;
 
-        writeln!(file, "{}", json)?;
-        Ok(())
+        file.lock_exclusive()?;
+
+        let write_result = (|| -> std::io::Result<()> {
+            writeln!(file, "{}", json)?;
+            file.flush()?;
+            Ok(())
+        })();
+
+        let unlock_result = file.unlock();
+
+        match (write_result, unlock_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(write_err), _) => Err(write_err),
+            (Ok(()), Err(unlock_err)) => Err(unlock_err),
+        }
     }
 }
 
@@ -79,7 +97,6 @@ mod tests {
         }
     }
 
-    // ─── Basic Logging ───────────────────────────────────────────
     #[test]
     fn test_log_creates_file() {
         let ws = temp_workspace("create");
@@ -157,7 +174,6 @@ mod tests {
         let _ = fs::remove_dir_all(ws);
     }
 
-    // ─── AuditEntry Serialization ────────────────────────────────
     #[test]
     fn test_audit_entry_serialization_roundtrip() {
         let entry = AuditEntry {
@@ -237,18 +253,15 @@ mod tests {
         assert!(json.contains("\"success\":false"));
     }
 
-    // ─── AuditLogger Constructor ─────────────────────────────────
     #[test]
     fn test_logger_creates_directory() {
         let ws = temp_workspace("mkdir");
         let _ = fs::remove_dir_all(&ws);
-        // Directory doesn't exist yet
         let _logger = AuditLogger::new(ws.clone());
         assert!(ws.join(".ownstack").exists());
         let _ = fs::remove_dir_all(ws);
     }
 
-    // ─── Stress Tests ────────────────────────────────────────────
     #[test]
     fn stress_test_500_entries() {
         let ws = temp_workspace("stress500");
@@ -306,7 +319,7 @@ mod tests {
                             &format!("thread_{}_{}", i, j),
                             PolicyDecision::Auto,
                         );
-                        let _ = logger.log(entry);
+                        logger.log(entry).unwrap();
                     }
                 })
             })
@@ -318,8 +331,13 @@ mod tests {
 
         let content = fs::read_to_string(&log_path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
-        // At least some entries should have been written (concurrent append)
-        assert!(lines.len() > 0, "Should have written entries");
+        assert_eq!(lines.len(), 200, "concurrent writes must keep all entries");
+
+        for line in lines {
+            let _: AuditEntry = serde_json::from_str(line)
+                .expect("each audit line must remain valid JSON");
+        }
+
         let _ = fs::remove_dir_all(ws);
     }
 }

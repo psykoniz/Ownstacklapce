@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 E2E_DIR = REPO_ROOT / "tests" / "e2e"
 
 
-def run_script(script_name):
+def run_script(script_name, timeout_seconds=120):
     print(f"\n[HEALTHCHECK] Running {script_name}...")
     try:
         start_time = time.time()
@@ -18,7 +18,7 @@ def run_script(script_name):
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
-            timeout=120,
+            timeout=timeout_seconds,
         )
         duration = time.time() - start_time
 
@@ -33,7 +33,7 @@ def run_script(script_name):
         print(result.stderr)
         return False
     except subprocess.TimeoutExpired:
-        print(f"[FAIL] {script_name} (Timed out after 120s)")
+        print(f"[FAIL] {script_name} (Timed out after {timeout_seconds}s)")
         return False
     except Exception as err:
         print(f"[ERROR] Failed to run {script_name}: {err}")
@@ -46,6 +46,7 @@ def main():
     scripts = [
         "verify_agent_spawn.py",
         "verify_sandbox_exec.py",
+        "verify_escape_mitigation.py",
         "test_wasi_plugin.py",
         "test_policy_approval.py",
         "test_agent_rpc.py",
@@ -53,6 +54,10 @@ def main():
         "test_packaging_install_run.py",
         "verify_llm_e2e.py",
     ]
+    script_timeouts = {
+        # WASI plugin test can occasionally take longer on cold builds.
+        "test_wasi_plugin.py": 240,
+    }
 
     llm_api_scripts = {"verify_llm_e2e.py", "test_agent_rpc.py"}
     has_keys = any(os.getenv(k) for k in ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"])
@@ -63,7 +68,8 @@ def main():
             print(f"\n[SKIP] {script} (No API keys found in environment)")
             continue
 
-        if not run_script(script):
+        timeout_seconds = script_timeouts.get(script, 120)
+        if not run_script(script, timeout_seconds=timeout_seconds):
             all_passed = False
 
     print("\n=== SUMMARY ===")
