@@ -62,3 +62,4 @@ ownstack-engine/test_*.txt
 scripts/test_*.ps1
 scripts/scan_event_logs.ps1
 scripts/troubleshoot_crash.ps1
+build_ownstack.ps1
