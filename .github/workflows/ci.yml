@@ -26,6 +26,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   required-gates:
@@ -143,6 +144,8 @@ jobs:
         run: sudo make ubuntu-deps
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+      - name: Fetch dependencies
+        run: cargo fetch --locked
       - name: Cargo Check
         run: cargo check --workspace --all-targets --frozen
 
@@ -157,6 +160,8 @@ jobs:
         run: sudo make ubuntu-deps
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+      - name: Fetch dependencies
+        run: cargo fetch --locked
       - name: Test ownstack-engine
         run: cargo test -p ownstack-engine --frozen
       - name: Test ownstack-bridge
@@ -179,6 +184,8 @@ jobs:
         run: sudo make ubuntu-deps
       - name: Update toolchain
         run: rustup update --no-self-update
+      - name: Fetch dependencies
+        run: cargo fetch --locked
       - name: Build Agent for Healthcheck
         run: cargo build -p ownstack-agent -p lapce-proxy --frozen
       - name: Run healthcheck.py
