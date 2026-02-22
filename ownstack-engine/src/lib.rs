@@ -9,6 +9,7 @@ pub mod policy;
 pub mod sandbox;
 pub mod security;
 pub mod tool_result;
+pub mod vision;
 
 pub use audit::{AuditEntry, AuditLogger};
 pub use path_safety::{PathError, PathValidator};

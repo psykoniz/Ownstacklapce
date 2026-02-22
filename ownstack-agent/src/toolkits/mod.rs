@@ -4,11 +4,13 @@
 //! and development environment.
 
 pub mod core;
+pub mod extra;
 pub mod git;
 pub mod healer;
 pub mod lsp;
 pub mod mcp;
 pub mod multivers;
+pub mod specialists;
 pub mod vision;
 
 use async_trait::async_trait;
@@ -17,11 +19,16 @@ use std::sync::Arc;
 use thiserror::Error;
 
 pub use self::core::CoreToolkit;
+pub use extra::ExtraToolkit;
 pub use git::GitToolkit;
 pub use healer::HealerToolkit;
 pub use lsp::LspToolkit;
 pub use mcp::McpToolkit;
 pub use multivers::MultiversToolkit;
+pub use specialists::{
+    DesignerToolkit, DocsToolkit, PMToolkit, QAToolkit, ReviewerToolkit,
+    SecurityToolkit,
+};
 pub use vision::VisionToolkit;
 
 /// Errors from toolkit operations

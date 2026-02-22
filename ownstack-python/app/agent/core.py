@@ -66,6 +66,7 @@ class AgentConfig:
     enable_parallel_tools: bool = True  # Execute independent tools in parallel
     context_window_warning: int = 100000  # Warn when context approaches this limit
     enable_structured_output: bool = False  # Force Pydantic validation on responses
+    model_routing: Dict[str, Any] = field(default_factory=dict) # New: Role/Task -> Model mapping
 
     def __post_init__(self) -> None:
         """
@@ -345,8 +346,61 @@ class BaseAgent:
         
         return None
 
+    def _infer_task_type_for_routing(self, messages: List[Message]) -> Optional[str]:
+        """Infer a task category from recent user messages for model routing."""
+        prompt = ""
+        for msg in reversed(messages):
+            if getattr(msg, "role", None) == Role.USER:
+                prompt = str(getattr(msg, "content", "") or "")
+                break
+
+        if not prompt and messages:
+            prompt = str(getattr(messages[-1], "content", "") or "")
+
+        lower = prompt.lower()
+
+        def has_any(words: List[str]) -> bool:
+            return any(word in lower for word in words)
+
+        if has_any(["refactor", "cleanup", "restructure", "rename"]):
+            return "refactoring"
+        if has_any(["document", "documentation", "readme", "comment", "explain"]):
+            return "documentation"
+        if has_any(["research", "investigate", "analyze", "compare", "study"]):
+            return "research"
+        if has_any(["ui", "interface", "layout", "screen", "frontend", "visual"]):
+            return "ui_debugging"
+        return None
+
     def _get_model_for_step(self, step: int, messages: List[Message]) -> str:
         """Determine which model to use for the current step."""
+        # 1. Check granular routing first
+        routing = self.config.model_routing or {}
+        if routing:
+            # Nested format: {default, roles, tasks}
+            tasks = routing.get("tasks")
+            if isinstance(tasks, dict):
+                task_type = self._infer_task_type_for_routing(messages)
+                if task_type:
+                    task_model = tasks.get(task_type)
+                    if isinstance(task_model, str):
+                        return task_model
+
+            roles = routing.get("roles")
+            if isinstance(roles, dict):
+                role_model = roles.get(self.config.role)
+                if isinstance(role_model, str):
+                    return role_model
+
+            # Flat backward-compatible format: {"worker": "..."}
+            role_model = routing.get(self.config.role)
+            if isinstance(role_model, str):
+                return role_model
+
+            default_model = routing.get("default")
+            if isinstance(default_model, str):
+                return default_model
+
         if not self.config.model_tiering:
             return self.config.model
         

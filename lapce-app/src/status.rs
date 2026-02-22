@@ -72,7 +72,8 @@ pub fn status(
     };
 
     let progresses = window_tab_data.progresses;
-    let mode = create_memo(move |_| window_tab_data.mode());
+    let window_tab_data_for_mode = window_tab_data.clone();
+    let mode = create_memo(move |_| window_tab_data_for_mode.mode());
     let pointer_down = floem::reactive::create_rw_signal(false);
 
     stack((
@@ -231,6 +232,20 @@ pub fn status(
                 let panel = panel.clone();
                 let ownstack_style = ownstack_status.clone();
                 stack((
+                    {
+                        let window_tab_data = window_tab_data.clone();
+                        clickable_icon(
+                            || LapceIcons::DEBUG_CONSOLE,
+                            move || {
+                                window_tab_data.take_ui_snapshot();
+                            },
+                            || false,
+                            || false,
+                            || "Take UI Snapshot (Vision Bridge)",
+                            config,
+                        )
+                        .style(|s| s.margin_right(10.0))
+                    },
                     {
                         let ownstack_mode_label = ownstack_style.clone();
                         let ownstack_mode_color = ownstack_style.clone();

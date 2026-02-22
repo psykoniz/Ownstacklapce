@@ -450,6 +450,10 @@ pub enum LapceWorkbenchCommand {
     #[strum(serialize = "ownstack.focus_chat_panel")]
     OwnStackFocusChatPanel,
 
+    #[strum(message = "OwnStack: Capture UI Snapshot")]
+    #[strum(serialize = "ownstack.capture_ui_snapshot")]
+    OwnStackCaptureUiSnapshot,
+
     // Focus toggle commands
     #[strum(message = "Toggle Terminal Focus")]
     #[strum(serialize = "toggle_terminal_focus")]

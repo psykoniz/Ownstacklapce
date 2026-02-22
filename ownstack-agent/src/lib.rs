@@ -19,6 +19,7 @@ pub mod project_memory;
 pub mod provider;
 pub mod providers;
 pub mod resilience;
+pub mod routing;
 pub mod secret_store;
 pub mod toolkits;
 

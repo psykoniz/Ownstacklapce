@@ -1310,6 +1310,9 @@ impl WindowTabData {
             OwnStackFocusChatPanel => {
                 self.toggle_panel_focus(PanelKind::OwnStackChat);
             }
+            OwnStackCaptureUiSnapshot => {
+                self.take_ui_snapshot();
+            }
             ToggleTerminalFocus => {
                 self.toggle_panel_focus(PanelKind::Terminal);
             }
@@ -3156,6 +3159,71 @@ impl WindowTabData {
             item.get_untracked().item.as_ref().clone(),
             send,
         );
+    }
+    pub fn take_ui_snapshot(&self) {
+        let workspace_root = self.common.workspace.path.clone();
+        let active_editor = self.main_split.active_editor.get_untracked();
+        let all_panels = self
+            .panel
+            .panels
+            .get_untracked()
+            .iter()
+            .map(|(pos, section)| {
+                (
+                    format!("{:?}", pos),
+                    section
+                        .iter()
+                        .map(|k| format!("{:?}", k))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let visible_panels = self
+            .panel
+            .panels
+            .get_untracked()
+            .iter()
+            .map(|(pos, section)| {
+                (
+                    format!("{:?}", pos),
+                    section
+                        .iter()
+                        .filter(|kind| self.panel.is_panel_visible(kind))
+                        .map(|k| format!("{:?}", k))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let snapshot = serde_json::json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "workspace": workspace_root,
+            "active_file": active_editor
+                .as_ref()
+                .and_then(|e| e.doc().content.with_untracked(|c| c.path().cloned())),
+            "cursor": active_editor
+                .as_ref()
+                .map(|e| e.cursor().get_untracked().offset()),
+            "panels": all_panels,
+            "visible_panels": visible_panels,
+        });
+
+        if let Some(workspace_root) = workspace_root {
+            let ownstack_dir = workspace_root.join(".ownstack");
+            if !ownstack_dir.exists() {
+                let _ = std::fs::create_dir_all(&ownstack_dir);
+            }
+            let snapshot_path = ownstack_dir.join("ui_snapshot.json");
+            if let Ok(content) = serde_json::to_string_pretty(&snapshot) {
+                let _ = std::fs::write(snapshot_path, content);
+                tracing::info!("UI Snapshot saved to .ownstack/ui_snapshot.json");
+            }
+        }
+
+        // Also send notification to agent
+        self.common.proxy.ownstack(OwnStackRpc::UiSnapshot {
+            metadata: serde_json::to_string(&snapshot).unwrap_or_default(),
+        });
     }
 }
 

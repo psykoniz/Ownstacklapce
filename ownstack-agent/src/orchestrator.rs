@@ -128,6 +128,7 @@ pub struct AgentOrchestrator {
     index: crate::index::SemanticIndex,
     current_mission: Option<Mission>,
     started_at: Option<Instant>,
+    router: crate::routing::ModelRouter,
 }
 
 impl AgentOrchestrator {
@@ -156,6 +157,7 @@ impl AgentOrchestrator {
     ) -> Self {
         let memory = crate::project_memory::ProjectMemory::new(workspace.clone());
         let index = crate::index::SemanticIndex::new(workspace.clone());
+        let router = crate::routing::ModelRouter::new(&workspace);
         Self {
             provider,
             toolkits: Vec::new(),
@@ -167,7 +169,12 @@ impl AgentOrchestrator {
             index,
             current_mission: None,
             started_at: None,
+            router,
         }
+    }
+
+    pub fn register_toolkit(&mut self, toolkit: Arc<dyn Toolkit>) {
+        self.toolkits.push(toolkit);
     }
 
     pub fn set_system_prompt(&mut self, prompt: impl Into<String>) {
@@ -176,10 +183,6 @@ impl AgentOrchestrator {
 
     pub fn set_budget(&mut self, budget: AgentBudget) {
         self.budget = budget;
-    }
-
-    pub fn register_toolkit(&mut self, toolkit: Arc<dyn Toolkit>) {
-        self.toolkits.push(toolkit);
     }
 
     pub fn current_mission(&self) -> Option<&Mission> {
@@ -291,19 +294,63 @@ impl AgentOrchestrator {
         Self::execute_tool_shared(&self.toolkits, name, args).await
     }
 
-    fn route_model(&self, task_type: &str) -> Option<String> {
-        let provider_name = self.provider.name();
-        match (provider_name, task_type) {
-            ("anthropic", "planning") => Some("claude-sonnet-4-6".to_string()),
-            ("anthropic", "critique") => Some("claude-sonnet-4-6".to_string()),
-            ("anthropic", "fast") => Some("claude-haiku-4-5-20251001".to_string()),
-            ("openrouter", "planning") => {
+    fn route_model(&self, role: &str, task_type: Option<&str>) -> Option<String> {
+        if let Some(routed) = self.router.route(role, task_type) {
+            return Some(routed);
+        }
+
+        match (self.provider.name(), role, task_type) {
+            ("anthropic", "planner", _) | ("anthropic", "critic", _) => {
+                Some("claude-sonnet-4-6".to_string())
+            }
+            ("anthropic", "worker", Some("fast")) => {
+                Some("claude-haiku-4-5-20251001".to_string())
+            }
+            ("openrouter", "planner", _) | ("openrouter", "critic", _) => {
                 Some("anthropic/claude-sonnet-4-6".to_string())
             }
-            ("openrouter", "fast") => {
+            ("openrouter", "worker", Some("fast")) => {
                 Some("anthropic/claude-haiku-4-5-20251001".to_string())
             }
-            _ => None, // use default from config
+            _ => None,
+        }
+    }
+
+    fn infer_task_type(prompt: &str) -> Option<String> {
+        let lower = prompt.to_ascii_lowercase();
+        let matches_any = |keywords: &[&str]| {
+            keywords.iter().any(|keyword| lower.contains(keyword))
+        };
+
+        if matches_any(&["refactor", "cleanup", "restructure", "rename"]) {
+            Some("refactoring".to_string())
+        } else if matches_any(&[
+            "document",
+            "documentation",
+            "readme",
+            "comment",
+            "explain",
+        ]) {
+            Some("documentation".to_string())
+        } else if matches_any(&[
+            "research",
+            "investigate",
+            "analyze",
+            "compare",
+            "study",
+        ]) {
+            Some("research".to_string())
+        } else if matches_any(&[
+            "ui",
+            "interface",
+            "layout",
+            "screen",
+            "frontend",
+            "visual",
+        ]) {
+            Some("ui_debugging".to_string())
+        } else {
+            None
         }
     }
 
@@ -357,7 +404,7 @@ impl AgentOrchestrator {
             LlmMessage::user(user_goal),
         ];
 
-        let model = self.route_model("planning");
+        let model = self.route_model("planner", Some("planning"));
         let response = self
             .provider
             .complete(messages, None, model)
@@ -405,7 +452,7 @@ impl AgentOrchestrator {
         let messages =
             vec![LlmMessage::system(CRITIC_PROMPT), LlmMessage::user(prompt)];
 
-        let model = self.route_model("critique");
+        let model = self.route_model("critic", Some("critique"));
         let response = self
             .provider
             .complete(messages, None, model)
@@ -482,6 +529,11 @@ impl AgentOrchestrator {
             on_mission(mission);
         }
 
+        let inferred_worker_task = Self::infer_task_type(user_prompt);
+        if let Some(task) = inferred_worker_task.as_ref() {
+            debug!("Worker routing task inferred as '{}'", task);
+        }
+
         loop {
             self.counters.steps += 1;
 
@@ -507,7 +559,10 @@ impl AgentOrchestrator {
             let mut final_finish_reason = None;
             let mut _final_usage = None;
 
-            let model = self.route_model("worker");
+            let model = self.route_model(
+                "worker",
+                inferred_worker_task.as_deref().or(Some("worker")),
+            );
             let mut stream = self
                 .provider
                 .stream(messages.clone(), tools, model)
@@ -671,6 +726,11 @@ impl AgentOrchestrator {
         self.started_at = Some(Instant::now());
         self.context.add_message(LlmMessage::user(user_prompt));
 
+        let inferred_worker_task = Self::infer_task_type(user_prompt);
+        if let Some(task) = inferred_worker_task.as_ref() {
+            debug!("Worker routing task inferred as '{}'", task);
+        }
+
         loop {
             self.counters.steps += 1;
 
@@ -688,7 +748,10 @@ impl AgentOrchestrator {
                 self.counters.steps, self.counters.llm_calls
             );
 
-            let model = self.route_model("worker");
+            let model = self.route_model(
+                "worker",
+                inferred_worker_task.as_deref().or(Some("worker")),
+            );
             let response = self
                 .provider
                 .complete(messages, tools, model)
@@ -860,7 +923,6 @@ impl AgentOrchestrator {
                 step.description,
                 step_output
             ));
-
             self.context.clear();
         }
 

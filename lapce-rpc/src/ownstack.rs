@@ -36,4 +36,8 @@ pub enum OwnStackRpc {
         decision: String, // "accept", "reject", "discuss"
         message_id: String,
     },
+    /// Export UI metadata for agent vision
+    UiSnapshot { metadata: String },
+    /// Trigger a physical screenshot
+    CaptureScreenshot,
 }

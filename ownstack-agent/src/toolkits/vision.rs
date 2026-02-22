@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
 
-use ownstack_engine::{AuditEntry, AuditLogger, PathValidator, PolicyDecision};
+use ownstack_engine::{
+    vision, AuditEntry, AuditLogger, PathValidator, PolicyDecision,
+};
 use std::time::Instant;
 use tracing::warn;
 
@@ -189,13 +191,78 @@ impl Toolkit for VisionToolkit {
                 Ok(result)
             }
             "capture_ui" => {
+                let start = Instant::now();
                 let _parsed: CaptureUiArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
 
-                // Return a placeholder or trigger an RPC (to be implemented in orchestrator)
-                Ok(ToolResult::success(
-                    "UI state captured and added to context.".to_string(),
-                ))
+                let rel_path = std::path::Path::new(".ownstack/ui_screenshot.png");
+                let validated_path =
+                    self.path_validator.validate(rel_path).map_err(|e| {
+                        self.audit(
+                            "capture_ui",
+                            rel_path.to_string_lossy().as_ref(),
+                            PolicyDecision::Blocked,
+                            "vision.capture_ui",
+                            false,
+                            start.elapsed().as_millis() as u64,
+                            vec![rel_path.to_string_lossy().to_string()],
+                        );
+                        ToolkitError::SecurityViolation(e.to_string())
+                    })?;
+
+                if let Some(parent) = validated_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        self.audit(
+                            "capture_ui",
+                            rel_path.to_string_lossy().as_ref(),
+                            PolicyDecision::Auto,
+                            "vision.capture_ui",
+                            false,
+                            start.elapsed().as_millis() as u64,
+                            vec![validated_path.to_string_lossy().to_string()],
+                        );
+                        ToolkitError::ExecutionFailed(format!(
+                            "Failed to create screenshot directory: {}",
+                            e
+                        ))
+                    })?;
+                }
+
+                vision::capture_active_window(&validated_path).map_err(|e| {
+                    self.audit(
+                        "capture_ui",
+                        rel_path.to_string_lossy().as_ref(),
+                        PolicyDecision::Auto,
+                        "vision.capture_ui",
+                        false,
+                        start.elapsed().as_millis() as u64,
+                        vec![validated_path.to_string_lossy().to_string()],
+                    );
+                    ToolkitError::ExecutionFailed(format!(
+                        "Failed to capture UI screenshot: {}",
+                        e
+                    ))
+                })?;
+
+                self.audit(
+                    "capture_ui",
+                    rel_path.to_string_lossy().as_ref(),
+                    PolicyDecision::Auto,
+                    "vision.capture_ui",
+                    true,
+                    start.elapsed().as_millis() as u64,
+                    vec![validated_path.to_string_lossy().to_string()],
+                );
+
+                let mut result = ToolResult::success(format!(
+                    "UI screenshot captured to {}",
+                    validated_path.display()
+                ));
+                result.metadata.insert(
+                    "image_path".to_string(),
+                    validated_path.to_string_lossy().to_string(),
+                );
+                Ok(result)
             }
             _ => Err(ToolkitError::ToolNotFound(tool_name.to_string())),
         }

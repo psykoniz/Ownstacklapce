@@ -265,6 +265,10 @@ command = "toggle_plugin_focus"
 key = "ctrl+shift+m"
 command = "toggle_problem_focus"
 
+[[keymaps]]
+key = "ctrl+alt+m"
+command = "ownstack.capture_ui_snapshot"
+
 # ------------------------------------ Navigation -------------------------------------
 
 [[keymaps]]

@@ -5325,6 +5325,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "fs2",
+ "png 0.17.16",
  "regex",
  "serde",
  "serde_json",

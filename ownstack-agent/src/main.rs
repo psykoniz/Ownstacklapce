@@ -260,6 +260,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     orchestrator.register_toolkit(healer_toolkit.clone());
     orchestrator.register_toolkit(multivers_toolkit.clone());
     orchestrator.register_toolkit(vision_toolkit.clone());
+    orchestrator
+        .register_toolkit(Arc::new(ownstack_agent::toolkits::extra::ExtraToolkit));
+    orchestrator.register_toolkit(Arc::new(
+        ownstack_agent::toolkits::specialists::PMToolkit,
+    ));
+    orchestrator.register_toolkit(Arc::new(
+        ownstack_agent::toolkits::specialists::QAToolkit,
+    ));
+    orchestrator.register_toolkit(Arc::new(
+        ownstack_agent::toolkits::specialists::SecurityToolkit,
+    ));
+    orchestrator.register_toolkit(Arc::new(
+        ownstack_agent::toolkits::specialists::ReviewerToolkit,
+    ));
+    orchestrator.register_toolkit(Arc::new(
+        ownstack_agent::toolkits::specialists::DocsToolkit,
+    ));
+    orchestrator.register_toolkit(Arc::new(
+        ownstack_agent::toolkits::specialists::DesignerToolkit,
+    ));
 
     // Connect configured MCP servers and expose their tools as part of the toolkit set.
     let mut mcp_toolkit = McpToolkit::new();
@@ -335,7 +355,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 OwnStackRpc::AiPrompt { .. }
                                 | OwnStackRpc::ToolExec { .. }
-                                | OwnStackRpc::SuggestionDecision { .. } => {
+                                | OwnStackRpc::SuggestionDecision { .. }
+                                | OwnStackRpc::UiSnapshot { .. }
+                                | OwnStackRpc::CaptureScreenshot => {
                                     let _ = work_tx_reader.send(rpc);
                                 }
                                 _ => {
@@ -433,6 +455,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Suggestion decision received: {} ({})",
                         decision, message_id
                     );
+                }
+                OwnStackRpc::UiSnapshot { metadata } => {
+                    let ownstack_dir = workspace.join(".ownstack");
+                    let snapshot_path = ownstack_dir.join("ui_snapshot.json");
+                    if let Err(err) = std::fs::create_dir_all(&ownstack_dir) {
+                        warn!(
+                            "Failed to create .ownstack directory for UI snapshot: {}",
+                            err
+                        );
+                    } else if let Err(err) =
+                        std::fs::write(&snapshot_path, metadata.as_bytes())
+                    {
+                        warn!(
+                            "Failed to persist UI snapshot metadata at {:?}: {}",
+                            snapshot_path, err
+                        );
+                    } else {
+                        info!(
+                            "UI snapshot metadata received and stored at {:?}",
+                            snapshot_path
+                        );
+                    }
+                }
+                OwnStackRpc::CaptureScreenshot => {
+                    let ownstack_dir = workspace.join(".ownstack");
+                    let screenshot_path = ownstack_dir.join("ui_screenshot.png");
+                    let response = match std::fs::create_dir_all(&ownstack_dir) {
+                        Ok(()) => {
+                            match ownstack_engine::vision::capture_active_window(
+                                &screenshot_path,
+                            ) {
+                                Ok(()) => serde_json::json!({
+                                    "success": true,
+                                    "path": screenshot_path.to_string_lossy(),
+                                }),
+                                Err(err) => serde_json::json!({
+                                    "success": false,
+                                    "error": err,
+                                    "path": screenshot_path.to_string_lossy(),
+                                }),
+                            }
+                        }
+                        Err(err) => serde_json::json!({
+                            "success": false,
+                            "error": format!("Failed to create .ownstack directory: {}", err),
+                            "path": screenshot_path.to_string_lossy(),
+                        }),
+                    };
+
+                    send_rpc_notification(OwnStackRpc::ToolResultMsg {
+                        json_result: response.to_string(),
+                    });
                 }
                 _ => {
                     debug!("Unhandled RPC (work queue): {:?}", rpc);
