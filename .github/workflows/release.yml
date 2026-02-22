@@ -25,7 +25,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -116,7 +115,7 @@ jobs:
           Compress-Archive ./target/release-lto/ownstack-ide.exe ./OwnStack-windows-portable.zip
 
       - name: Verify signatures (optional)
-        if: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PWD != '' }}
+        if: secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PWD != ''
         shell: pwsh
         run: |
           $msiSig = Get-AuthenticodeSignature .\OwnStack-windows.msi
