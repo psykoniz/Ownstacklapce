@@ -227,8 +227,8 @@ fn test_load_volt() {
             icon: Some("icon.svg".to_string()),
             repository: Some("https://github.com/lapce".to_string()),
             wasm: None,
-            color_themes: Some(Vec::new()),
-            icon_themes: Some(Vec::new()),
+            color_themes: None,
+            icon_themes: None,
             dir: parent_path.canonicalize().ok(),
             activation: None,
             config: None

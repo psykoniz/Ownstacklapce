@@ -377,25 +377,23 @@ pub fn load_volt(path: &Path) -> Result<VoltMetadata> {
     meta.wasm = meta.wasm.as_ref().and_then(|wasm| {
         Some(path.join(wasm).canonicalize().ok()?.to_str()?.to_string())
     });
-    // FIXME: This does `meta.color_themes = Some([])` in case, for example,
-    // it cannot find matching files, but in that case it should do `meta.color_themes = None`
-    meta.color_themes = meta.color_themes.as_ref().map(|themes| {
-        themes
+    meta.color_themes = meta.color_themes.as_ref().and_then(|themes| {
+        let resolved: Vec<String> = themes
             .iter()
             .filter_map(|theme| {
                 Some(path.join(theme).canonicalize().ok()?.to_str()?.to_string())
             })
-            .collect()
+            .collect();
+        if resolved.is_empty() { None } else { Some(resolved) }
     });
-    // FIXME: This does `meta.icon_themes = Some([])` in case, for example,
-    // it cannot find matching files, but in that case it should do `meta.icon_themes = None`
-    meta.icon_themes = meta.icon_themes.as_ref().map(|themes| {
-        themes
+    meta.icon_themes = meta.icon_themes.as_ref().and_then(|themes| {
+        let resolved: Vec<String> = themes
             .iter()
             .filter_map(|theme| {
                 Some(path.join(theme).canonicalize().ok()?.to_str()?.to_string())
             })
-            .collect()
+            .collect();
+        if resolved.is_empty() { None } else { Some(resolved) }
     });
 
     Ok(meta)

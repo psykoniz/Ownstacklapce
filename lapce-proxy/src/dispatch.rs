@@ -259,6 +259,10 @@ impl ProxyHandler for Dispatcher {
                     status: lapce_rpc::proxy::ProxyStatus::Connected,
                 });
 
+                // Pre-start the native agent so the status bar shows "connected"
+                // immediately rather than waiting for the first prompt.
+                self.start_native_agent();
+
                 // send home directory for initinal filepicker dir
                 let dirs = directories::UserDirs::new();
 
@@ -583,15 +587,55 @@ impl ProxyHandler for Dispatcher {
                 }
 
                 let mut bridge_guard = self.bridge.lock();
-                if bridge_guard.as_mut().is_some() {
-                    // Note: PythonBridge is async, so we need to handle it or spawn a task
-                    // For now, let's assume we want to send it.
-                    // Actually, PythonBridge::send_request is async.
-                    // This might require a bridge wrapper that handles the threading.
-                    // But for now, we'll just focus on starting it.
-                    tracing::info!(
-                        "Python bridge is active but not yet fully wired for async sends in dispatcher"
-                    );
+                if bridge_guard.is_some() {
+                    // PythonBridge::send_request is async — take the bridge out
+                    // of the mutex, send in a tokio task, then put it back.
+                    let mut bridge = bridge_guard.take().unwrap();
+                    drop(bridge_guard);
+
+                    let bridge_mutex = self.bridge.clone();
+                    let core_rpc = self.core_rpc.clone();
+                    let method = match &message {
+                        lapce_rpc::ownstack::OwnStackRpc::AiPrompt { .. } => {
+                            "ai.prompt"
+                        }
+                        lapce_rpc::ownstack::OwnStackRpc::ToolExec { .. } => {
+                            "tools.exec"
+                        }
+                        _ => "rpc.forward",
+                    }
+                    .to_string();
+                    let params = serde_json::to_value(&message)
+                        .unwrap_or(serde_json::Value::Null);
+
+                    tokio::spawn(async move {
+                        match bridge.send_request(&method, params).await {
+                            Ok(result) => {
+                                if let Some(json_str) =
+                                    result.get("response").and_then(|v| v.as_str())
+                                {
+                                    if let Ok(rpc) = serde_json::from_str::<
+                                        lapce_rpc::ownstack::OwnStackRpc,
+                                    >(json_str)
+                                    {
+                                        core_rpc.notification(
+                                            CoreNotification::OwnStack {
+                                                message: rpc,
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Python bridge send failed: {}",
+                                    e
+                                );
+                            }
+                        }
+                        // Return bridge to the mutex so it can be reused
+                        *bridge_mutex.lock() = Some(bridge);
+                    });
                     return;
                 }
 
