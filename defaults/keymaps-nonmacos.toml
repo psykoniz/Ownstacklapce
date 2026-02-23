@@ -269,6 +269,14 @@ command = "toggle_problem_focus"
 key = "ctrl+alt+m"
 command = "ownstack.capture_ui_snapshot"
 
+[[keymaps]]
+key = "ctrl+alt+p"
+command = "ownstack.toggle_palette"
+
+[[keymaps]]
+key = "ctrl+alt+a"
+command = "ownstack.toggle_audit"
+
 # ------------------------------------ Navigation -------------------------------------
 
 [[keymaps]]

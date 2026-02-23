@@ -7,18 +7,22 @@ fn cwd() -> PathBuf {
     std::env::current_dir().expect("current_dir")
 }
 
-#[test]
-fn linux_light_exec_echo() {
+#[tokio::test]
+async fn linux_light_exec_echo() {
     let sandbox = ProcessSandbox;
-    let result = sandbox.exec("echo hello", &cwd(), SandboxLevel::Light);
+    let result = sandbox
+        .exec("echo hello", &cwd(), SandboxLevel::Light)
+        .await;
     assert!(result.success, "stderr={}", result.stderr);
     assert!(result.stdout.contains("hello"));
 }
 
-#[test]
-fn linux_strict_exec_returns_result() {
+#[tokio::test]
+async fn linux_strict_exec_returns_result() {
     let sandbox = ProcessSandbox;
-    let result = sandbox.exec("echo strict", &cwd(), SandboxLevel::Strict);
+    let result = sandbox
+        .exec("echo strict", &cwd(), SandboxLevel::Strict)
+        .await;
 
     // Depending on host capabilities, strict mode can either:
     // - succeed (namespace/sandbox available), or
@@ -33,9 +37,9 @@ fn linux_strict_exec_returns_result() {
     }
 }
 
-#[test]
-fn linux_timeout_path_still_works() {
+#[tokio::test]
+async fn linux_timeout_path_still_works() {
     let sandbox = ProcessSandbox;
-    let result = sandbox.exec("sleep 1", &cwd(), SandboxLevel::Light);
+    let result = sandbox.exec("sleep 1", &cwd(), SandboxLevel::Light).await;
     assert!(result.success, "stderr={}", result.stderr);
 }

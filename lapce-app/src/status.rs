@@ -40,6 +40,8 @@ pub fn status(
     let editor = window_tab_data.main_split.active_editor;
     let panel = window_tab_data.panel.clone();
     let palette = window_tab_data.palette.clone();
+    let ownstack_palette = window_tab_data.ownstack_palette.clone();
+    let ownstack_audit = window_tab_data.ownstack_audit.clone();
     let ownstack_status = window_tab_data.ownstack_status.clone();
     let diagnostic_count = create_memo(move |_| {
         let mut errors = 0;
@@ -246,6 +248,55 @@ pub fn status(
                         )
                         .style(|s| s.margin_right(10.0))
                     },
+                    label(|| "AI Cmd".to_string())
+                        .on_click_stop({
+                            let ownstack_palette = ownstack_palette.clone();
+                            move |_| {
+                                if ownstack_palette.active.get_untracked() {
+                                    ownstack_palette.hide();
+                                } else {
+                                    ownstack_palette.show();
+                                }
+                            }
+                        })
+                        .style(move |s| {
+                            s.padding_horiz(8.0)
+                                .padding_vert(2.0)
+                                .margin_right(8.0)
+                                .border(1.0)
+                                .border_radius(6.0)
+                                .border_color(
+                                    config.get().color(LapceColor::LAPCE_BORDER),
+                                )
+                                .color(
+                                    config.get().color(LapceColor::STATUS_FOREGROUND),
+                                )
+                                .cursor(CursorStyle::Pointer)
+                        }),
+                    label(|| "Audit".to_string())
+                        .on_click_stop({
+                            let ownstack_audit = ownstack_audit.clone();
+                            move |_| {
+                                if !ownstack_audit.visible.get_untracked() {
+                                    ownstack_audit.reload_from_disk();
+                                }
+                                ownstack_audit.toggle();
+                            }
+                        })
+                        .style(move |s| {
+                            s.padding_horiz(8.0)
+                                .padding_vert(2.0)
+                                .margin_right(8.0)
+                                .border(1.0)
+                                .border_radius(6.0)
+                                .border_color(
+                                    config.get().color(LapceColor::LAPCE_BORDER),
+                                )
+                                .color(
+                                    config.get().color(LapceColor::STATUS_FOREGROUND),
+                                )
+                                .cursor(CursorStyle::Pointer)
+                        }),
                     {
                         let ownstack_mode_label = ownstack_style.clone();
                         let ownstack_mode_color = ownstack_style.clone();

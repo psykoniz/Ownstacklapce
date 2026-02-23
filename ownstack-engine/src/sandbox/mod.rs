@@ -1,6 +1,7 @@
 use crate::tool_result::ToolResult;
 use std::path::Path;
 
+pub mod docker;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "macos")]
@@ -17,9 +18,15 @@ pub enum SandboxLevel {
     Strict,
 }
 
-pub trait Sandbox {
+#[async_trait::async_trait]
+pub trait Sandbox: Send + Sync {
     /// Executes a command in the sandbox.
-    fn exec(&self, command: &str, cwd: &Path, level: SandboxLevel) -> ToolResult;
+    async fn exec(
+        &self,
+        command: &str,
+        cwd: &Path,
+        level: SandboxLevel,
+    ) -> ToolResult;
 }
 
 #[cfg(test)]

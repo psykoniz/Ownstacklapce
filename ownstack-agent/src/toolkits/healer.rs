@@ -617,7 +617,9 @@ Output snippet:\n{}",
 
         // Initial run
         let sandbox = ProcessSandbox;
-        let initial = sandbox.exec(command, &self.workspace, SandboxLevel::Standard);
+        let initial = sandbox
+            .exec(command, &self.workspace, SandboxLevel::Standard)
+            .await;
         session.original_output = format!("{}\n{}", initial.stdout, initial.stderr);
 
         if initial.success {
@@ -693,16 +695,18 @@ Output snippet:\n{}",
             let start = std::time::Instant::now();
 
             // Apply fix
-            let fix_result =
-                sandbox.exec(&fix, &self.workspace, SandboxLevel::Standard);
+            let fix_result = sandbox
+                .exec(&fix, &self.workspace, SandboxLevel::Standard)
+                .await;
             debug!(
                 "Healer: applied fix '{}' → success={}",
                 fix, fix_result.success
             );
 
             // Re-run original command
-            let verify =
-                sandbox.exec(command, &self.workspace, SandboxLevel::Standard);
+            let verify = sandbox
+                .exec(command, &self.workspace, SandboxLevel::Standard)
+                .await;
             let verify_output = format!("{}\n{}", verify.stdout, verify.stderr);
 
             let attempt = HealingAttempt {

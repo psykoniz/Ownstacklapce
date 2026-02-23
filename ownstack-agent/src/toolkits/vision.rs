@@ -69,7 +69,14 @@ struct AnalyzeImageArgs {
 
 #[derive(Deserialize)]
 struct CaptureUiArgs {
-    _panel: Option<String>,
+    panel: Option<String>,
+    title: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ClickUiArgs {
+    x: i32,
+    y: i32,
 }
 
 #[async_trait]
@@ -100,18 +107,49 @@ impl Toolkit for VisionToolkit {
                 }),
             },
             ToolDef {
+                name: "capture_desktop".to_string(),
+                description: "Capture the entire desktop (full screen)".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            ToolDef {
                 name: "capture_ui".to_string(),
                 description:
-                    "Capture the current IDE UI state (panel or full window)"
+                    "Capture the current IDE UI state (active window or specified by title)"
                         .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "panel": {
                             "type": "string",
-                            "description": "Optional panel name (e.g., 'terminal', 'editor', 'chat')"
+                            "description": "Optional panel name (for compatibility, currently captures the window)"
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Optional substring of the window title to target (e.g. 'Lapce')"
                         }
                     }
+                }),
+            },
+            ToolDef {
+                name: "click_ui".to_string(),
+                description: "Perform a native mouse click at specified relative coordinates"
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "x": {
+                            "type": "integer",
+                            "description": "X coordinate relative to window"
+                        },
+                        "y": {
+                            "type": "integer",
+                            "description": "Y coordinate relative to window"
+                        }
+                    },
+                    "required": ["x", "y"]
                 }),
             },
         ]
@@ -192,15 +230,22 @@ impl Toolkit for VisionToolkit {
             }
             "capture_ui" => {
                 let start = Instant::now();
-                let _parsed: CaptureUiArgs = serde_json::from_value(args)
+                let parsed: CaptureUiArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
+                let capture_target = if let Some(title) = parsed.title.as_ref() {
+                    format!("title:{title}")
+                } else if let Some(panel) = parsed.panel.as_ref() {
+                    format!("panel:{panel}")
+                } else {
+                    "active_window".to_string()
+                };
 
                 let rel_path = std::path::Path::new(".ownstack/ui_screenshot.png");
                 let validated_path =
                     self.path_validator.validate(rel_path).map_err(|e| {
                         self.audit(
                             "capture_ui",
-                            rel_path.to_string_lossy().as_ref(),
+                            &capture_target,
                             PolicyDecision::Blocked,
                             "vision.capture_ui",
                             false,
@@ -214,7 +259,7 @@ impl Toolkit for VisionToolkit {
                     std::fs::create_dir_all(parent).map_err(|e| {
                         self.audit(
                             "capture_ui",
-                            rel_path.to_string_lossy().as_ref(),
+                            &capture_target,
                             PolicyDecision::Auto,
                             "vision.capture_ui",
                             false,
@@ -228,10 +273,16 @@ impl Toolkit for VisionToolkit {
                     })?;
                 }
 
-                vision::capture_active_window(&validated_path).map_err(|e| {
+                let capture_res = if let Some(title) = parsed.title {
+                    vision::capture_window_by_title(&title, &validated_path)
+                } else {
+                    vision::capture_active_window(&validated_path)
+                };
+
+                capture_res.map_err(|e| {
                     self.audit(
                         "capture_ui",
-                        rel_path.to_string_lossy().as_ref(),
+                        &capture_target,
                         PolicyDecision::Auto,
                         "vision.capture_ui",
                         false,
@@ -246,7 +297,7 @@ impl Toolkit for VisionToolkit {
 
                 self.audit(
                     "capture_ui",
-                    rel_path.to_string_lossy().as_ref(),
+                    &capture_target,
                     PolicyDecision::Auto,
                     "vision.capture_ui",
                     true,
@@ -263,6 +314,91 @@ impl Toolkit for VisionToolkit {
                     validated_path.to_string_lossy().to_string(),
                 );
                 Ok(result)
+            }
+            "capture_desktop" => {
+                let start = Instant::now();
+                let rel_path =
+                    std::path::Path::new(".ownstack/desktop_screenshot.png");
+                let validated_path = self
+                    .path_validator
+                    .validate(rel_path)
+                    .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?;
+
+                if let Some(parent) = validated_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+
+                vision::capture_screen(&validated_path).map_err(|e| {
+                    self.audit(
+                        "capture_desktop",
+                        "full_screen",
+                        PolicyDecision::Auto,
+                        "vision.capture_desktop",
+                        false,
+                        start.elapsed().as_millis() as u64,
+                        vec![validated_path.to_string_lossy().to_string()],
+                    );
+                    ToolkitError::ExecutionFailed(format!(
+                        "Failed to capture desktop: {}",
+                        e
+                    ))
+                })?;
+
+                self.audit(
+                    "capture_desktop",
+                    "full_screen",
+                    PolicyDecision::Auto,
+                    "vision.capture_desktop",
+                    true,
+                    start.elapsed().as_millis() as u64,
+                    vec![validated_path.to_string_lossy().to_string()],
+                );
+
+                let mut result = ToolResult::success(format!(
+                    "Desktop screenshot captured to {}",
+                    validated_path.display()
+                ));
+                result.metadata.insert(
+                    "image_path".to_string(),
+                    validated_path.to_string_lossy().to_string(),
+                );
+                Ok(result)
+            }
+            "click_ui" => {
+                let start = Instant::now();
+                let parsed: ClickUiArgs = serde_json::from_value(args)
+                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
+
+                vision::click_active_window(parsed.x, parsed.y).map_err(|e| {
+                    self.audit(
+                        "click_ui",
+                        &format!("click {},{}", parsed.x, parsed.y),
+                        PolicyDecision::Auto,
+                        "vision.click_ui",
+                        false,
+                        start.elapsed().as_millis() as u64,
+                        vec![],
+                    );
+                    ToolkitError::ExecutionFailed(format!(
+                        "Failed to perform native click: {}",
+                        e
+                    ))
+                })?;
+
+                self.audit(
+                    "click_ui",
+                    &format!("click {},{}", parsed.x, parsed.y),
+                    PolicyDecision::Auto,
+                    "vision.click_ui",
+                    true,
+                    start.elapsed().as_millis() as u64,
+                    vec![],
+                );
+
+                Ok(ToolResult::success(format!(
+                    "Performed native click at ({}, {})",
+                    parsed.x, parsed.y
+                )))
             }
             _ => Err(ToolkitError::ToolNotFound(tool_name.to_string())),
         }

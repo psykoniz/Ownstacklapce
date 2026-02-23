@@ -192,13 +192,14 @@ impl MultiversToolkit {
                 let _permit = permit.ok();
 
                 let name_for_spawn = name.clone();
-                match tokio::task::spawn_blocking(move || {
+                match tokio::task::spawn(async move {
                     Self::run_variant_in_workspace(
                         &workspace,
                         &name_for_spawn,
                         &command,
                         &config,
                     )
+                    .await
                 })
                 .await
                 {
@@ -266,7 +267,7 @@ impl MultiversToolkit {
         run
     }
 
-    fn run_variant_in_workspace(
+    async fn run_variant_in_workspace(
         workspace: &PathBuf,
         name: &str,
         command: &str,
@@ -291,10 +292,14 @@ impl MultiversToolkit {
 
         for setup_cmd in &config.setup_commands {
             debug!("Multivers variant '{}' setup: {}", name, setup_cmd);
-            let _ = sandbox.exec(setup_cmd, workspace, SandboxLevel::Standard);
+            let _ = sandbox
+                .exec(setup_cmd, workspace, SandboxLevel::Standard)
+                .await;
         }
 
-        let result = sandbox.exec(&full_command, workspace, SandboxLevel::Standard);
+        let result = sandbox
+            .exec(&full_command, workspace, SandboxLevel::Standard)
+            .await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
         ForkResult {

@@ -94,6 +94,24 @@ impl AgentMode {
             _ => Self::Ask,
         }
     }
+
+    /// Returns the accent color for this mode.
+    pub fn color(&self) -> Color {
+        match self {
+            AgentMode::Ask => Color::from_rgb8(74, 158, 255), // Blue
+            AgentMode::Auto => Color::from_rgb8(255, 179, 71), // Amber
+            AgentMode::Plan => Color::from_rgb8(155, 89, 182), // Violet
+        }
+    }
+
+    /// Returns the label with an emoji indicator.
+    pub fn label_with_icon(&self) -> &'static str {
+        match self {
+            AgentMode::Ask => "💬 Ask",
+            AgentMode::Auto => "⚡ Auto",
+            AgentMode::Plan => "🗺 Plan",
+        }
+    }
 }
 
 impl OwnStackChatData {
@@ -314,41 +332,66 @@ pub fn ownstack_chat_panel(
     let config = window_tab_data.common.config;
     let input = chat_data.input;
 
+    let chat_data_hdr = chat_data.clone();
+    let chat_data_trash = chat_data.clone();
+    let chat_data_attach = chat_data.clone();
+
     v_stack((
-        // Header
+        // ── Header ───────────────────────────────────────────────────────
         h_stack((
-            text("OwnStack AI Chat").style(|s| s.font_weight(Weight::BOLD)),
+            // Title
+            text("OwnStack AI Chat")
+                .style(|s| s.font_weight(Weight::BOLD).font_size(13.0)),
+            // Right-side controls
             h_stack((
-                label(move || chat_data.agent_mode.get().to_string()).style(
-                    move |s| {
-                        let config = config.get();
-                        s.padding_horiz(6.0)
-                            .border(1.0)
-                            .border_radius(4.0)
-                            .border_color(config.color(LapceColor::LAPCE_BORDER))
-                    },
-                ),
-                clickable_icon(
-                    || LapceIcons::SETTINGS,
-                    {
+                // ① Colored mode badge — clic = cycle mode
+                label(move || chat_data_hdr.agent_mode.get().label_with_icon())
+                    .style(move |s| {
+                        let mode = chat_data_hdr.agent_mode.get();
+                        let accent = mode.color();
+                        s.padding_horiz(8.0)
+                            .padding_vert(4.0)
+                            .border(1.5)
+                            .border_radius(6.0)
+                            .border_color(accent)
+                            .color(accent)
+                            .font_weight(Weight::BOLD)
+                            .font_size(11.0)
+                            .cursor(floem::style::CursorStyle::Pointer)
+                            .hover(|s| s.background(accent.multiply_alpha(0.18)))
+                    })
+                    .on_click_stop({
                         let chat_data = chat_data.clone();
-                        move || chat_data.cycle_mode()
+                        move |_| chat_data.cycle_mode()
+                    }),
+                // ② Trash — Clear History
+                clickable_icon(
+                    || LapceIcons::TRASH,
+                    {
+                        let chat_data = chat_data_trash.clone();
+                        move || chat_data.clear_history()
                     },
                     || false,
                     || false,
-                    || "Cycle Mode",
+                    || "Clear History",
                     config,
                 ),
             ))
-            .style(|s| s.items_center().gap(10.0)),
+            .style(|s| s.items_center().gap(8.0)),
         ))
         .style(move |s| {
             let config = config.get();
             s.width_full()
                 .padding(10.0)
                 .justify_between()
+                .items_center()
                 .border_bottom(1.0)
                 .border_color(config.color(LapceColor::LAPCE_BORDER))
+                .background(
+                    config
+                        .color(LapceColor::PANEL_BACKGROUND)
+                        .multiply_alpha(0.8),
+                )
         }),
         // Messages list
         scroll(
@@ -367,7 +410,9 @@ pub fn ownstack_chat_panel(
                     move |(goal, steps)| {
                         v_stack((
                             label(move || format!("Mission: {}", goal)).style(|s| {
-                                s.font_weight(Weight::BOLD).padding_bottom(5.0)
+                                s.font_weight(Weight::BOLD)
+                                    .padding_bottom(5.0)
+                                    .color(Color::from_rgb8(180, 220, 255))
                             }),
                             v_stack((dyn_stack(
                                 move || steps.clone(),
@@ -396,8 +441,14 @@ pub fn ownstack_chat_panel(
                                 .border_radius(6.0)
                                 .border_color(config.color(LapceColor::LAPCE_BORDER))
                                 .background(
-                                    config.color(LapceColor::PANEL_BACKGROUND),
+                                    config
+                                        .color(LapceColor::PANEL_BACKGROUND)
+                                        .multiply_alpha(0.6),
                                 )
+                                .box_shadow_blur(10.0)
+                                .box_shadow_color(Color::from_rgba8(
+                                    100, 150, 255, 30,
+                                ))
                         })
                     },
                 ),
@@ -440,12 +491,35 @@ pub fn ownstack_chat_panel(
                     },
                 ),
             ))
-            .style(|s| s.width_full().padding(10.0).gap(15.0)),
+            .style(|s| s.width_full().padding(12.0).gap(20.0)),
         )
         .style(|s| s.flex_grow(1.0).width_full()),
         // Input area
         container(
             h_stack((
+                // ③ 📎 Context attach button
+                label(|| "📎")
+                    .style(move |s| {
+                        let config = config.get();
+                        s.padding(6.0)
+                            .border_radius(6.0)
+                            .font_size(14.0)
+                            .cursor(floem::style::CursorStyle::Pointer)
+                            .color(config.color(LapceColor::EDITOR_DIM))
+                            .hover(|s| {
+                                s.background(Color::from_rgba8(100, 150, 255, 40))
+                                    .color(Color::from_rgb8(100, 150, 255))
+                            })
+                    })
+                    .on_click_stop(move |_| {
+                        chat_data_attach
+                            .common
+                            .proxy
+                            .ownstack(OwnStackRpc::UiSnapshotRequest);
+                        chat_data_attach.add_system_message(
+                            "UI context snapshot requested".to_string(),
+                        );
+                    }),
                 text_input(input)
                     .placeholder("Ask OwnStack anything...")
                     .style(move |s| {
@@ -453,9 +527,19 @@ pub fn ownstack_chat_panel(
                         s.width_full()
                             .padding(8.0)
                             .border(1.0)
-                            .border_radius(6.0)
+                            .border_radius(10.0)
                             .border_color(config.color(LapceColor::LAPCE_BORDER))
                             .background(config.color(LapceColor::EDITOR_BACKGROUND))
+                            .hover(|s| {
+                                s.border_color(Color::from_rgb8(100, 150, 255))
+                            })
+                            .active(|s| {
+                                s.border_color(Color::from_rgb8(100, 200, 255))
+                                    .box_shadow_blur(5.0)
+                                    .box_shadow_color(Color::from_rgba8(
+                                        100, 200, 255, 100,
+                                    ))
+                            })
                     })
                     .on_event_stop(floem::event::EventListener::KeyDown, {
                         let chat_data = chat_data.clone();
@@ -537,9 +621,9 @@ fn message_view(
         h_stack((
             label(move || if is_user { "You" } else { "AI" }).style(move |s| {
                 s.font_weight(Weight::BOLD).color(if is_user {
-                    Color::from_rgb8(100, 150, 255)
+                    Color::from_rgb8(120, 180, 255)
                 } else {
-                    Color::from_rgb8(100, 255, 150)
+                    Color::from_rgb8(120, 255, 180)
                 })
             }),
             text(msg.timestamp.clone()).style(move |s| {
@@ -547,7 +631,7 @@ fn message_view(
                     .color(config.get().color(LapceColor::EDITOR_DIM))
             }),
         ))
-        .style(|s| s.items_center().justify_between()),
+        .style(|s| s.items_center().justify_between().padding_bottom(6.0)),
         v_stack((
             // Message content
             text(msg.content).style(|s| s.width_full().padding_top(4.0)),

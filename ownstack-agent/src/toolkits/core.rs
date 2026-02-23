@@ -139,7 +139,10 @@ impl CoreToolkit {
 
         // Step 2: Execute in sandbox using Sandbox trait
         let sandbox = ProcessSandbox;
-        let result = sandbox.exec(command, &self.workspace, SandboxLevel::Standard);
+        let result = sandbox
+            .exec(command, &self.workspace, SandboxLevel::Standard)
+            .await;
+
         self.audit(
             "exec",
             command,

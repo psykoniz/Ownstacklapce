@@ -11,14 +11,14 @@ fn get_cwd() -> PathBuf {
 }
 
 #[cfg(windows)]
-#[test]
-fn test_sandbox_memory_limit_enforcement() {
+#[tokio::test]
+async fn test_sandbox_memory_limit_enforcement() {
     let sandbox = ProcessSandbox;
     // We'll run a command that tries to allocate more than the limit.
     // 1000MB allocation will trigger 128MB Strict limit
     let cmd = "powershell -Command \"$a = New-Object byte[] 1000MB; for($i=0; $i -lt $a.Length; $i+=4096){ $a[$i] = 1 }; Write-Host 'Allocated'\"";
 
-    let result = sandbox.exec(cmd, &get_cwd(), SandboxLevel::Strict);
+    let result = sandbox.exec(cmd, &get_cwd(), SandboxLevel::Strict).await;
 
     println!(
         "DEBUG: OOM Test: success={}, stdout='{}', stderr='{}'",
@@ -39,15 +39,15 @@ fn test_sandbox_memory_limit_enforcement() {
 }
 
 #[cfg(windows)]
-#[test]
-fn test_sandbox_process_limit_enforcement() {
+#[tokio::test]
+async fn test_sandbox_process_limit_enforcement() {
     let sandbox = ProcessSandbox;
     // 'Strict' level has 2 process limit.
     // PowerShell counts as 1. If it tries to spawn more, it should fail or be constrained.
     // Since windows-sys Job Objects enforce this at the OS level, child spawn will fail.
     let cmd = "powershell -Command \"Start-Process cmd; Start-Process cmd; Start-Process cmd; Start-Process cmd\"";
 
-    let result = sandbox.exec(cmd, &get_cwd(), SandboxLevel::Strict);
+    let result = sandbox.exec(cmd, &get_cwd(), SandboxLevel::Strict).await;
 
     // The result depends on how PowerShell handles the spawn failure.
     // If Job Object blocks the spawn, PowerShell might throw an error or just fail to start them.
@@ -58,18 +58,20 @@ fn test_sandbox_process_limit_enforcement() {
 }
 
 #[cfg(windows)]
-#[test]
-fn test_sandbox_rapid_spawn_stress() {
+#[tokio::test]
+async fn test_sandbox_rapid_spawn_stress() {
     let sandbox = ProcessSandbox;
     for i in 0..50 {
-        let result = sandbox.exec("cmd /c echo 1", &get_cwd(), SandboxLevel::Light);
+        let result = sandbox
+            .exec("cmd /c echo 1", &get_cwd(), SandboxLevel::Light)
+            .await;
         assert!(result.success, "Failed at iteration {}", i);
     }
 }
 
 #[cfg(windows)]
-#[test]
-fn test_sandbox_timeout_under_load() {
+#[tokio::test]
+async fn test_sandbox_timeout_under_load() {
     let sandbox = ProcessSandbox;
     // Test that timeout is still respected when system is busy.
     // We use a command that sleeps longer than a short timeout.
@@ -79,7 +81,7 @@ fn test_sandbox_timeout_under_load() {
         "powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 2\"",
         &get_cwd(),
         SandboxLevel::Light,
-    );
+    ).await;
     assert!(
         result.success,
         "Expected sleep command to succeed. Out: {}, Err: {}",

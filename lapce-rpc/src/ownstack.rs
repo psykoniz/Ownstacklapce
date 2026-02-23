@@ -40,4 +40,6 @@ pub enum OwnStackRpc {
     UiSnapshot { metadata: String },
     /// Trigger a physical screenshot
     CaptureScreenshot,
+    /// Request a UI snapshot from the agent side
+    UiSnapshotRequest,
 }

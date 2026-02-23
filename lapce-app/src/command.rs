@@ -454,6 +454,14 @@ pub enum LapceWorkbenchCommand {
     #[strum(serialize = "ownstack.capture_ui_snapshot")]
     OwnStackCaptureUiSnapshot,
 
+    #[strum(message = "OwnStack: Toggle AI Palette")]
+    #[strum(serialize = "ownstack.toggle_palette")]
+    OwnStackTogglePalette,
+
+    #[strum(message = "OwnStack: Toggle Audit Overlay")]
+    #[strum(serialize = "ownstack.toggle_audit")]
+    OwnStackToggleAudit,
+
     // Focus toggle commands
     #[strum(message = "Toggle Terminal Focus")]
     #[strum(serialize = "toggle_terminal_focus")]

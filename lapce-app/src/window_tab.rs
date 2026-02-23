@@ -186,6 +186,8 @@ pub struct WindowTabData {
     pub about_data: AboutData,
     pub alert_data: AlertBoxData,
     pub ownstack_chat: crate::ownstack_chat::OwnStackChatData,
+    pub ownstack_palette: crate::ownstack_palette::OwnStackPaletteData,
+    pub ownstack_audit: crate::ownstack_audit::OwnStackAuditData,
     pub ownstack_status: crate::ownstack_status::OwnStackStatusData,
     pub policy_prompt_seq: RwSignal<u64>,
     pub layout_rect: RwSignal<Rect>,
@@ -559,6 +561,10 @@ impl WindowTabData {
         }
         let ownstack_status =
             crate::ownstack_status::OwnStackStatusData::new((*common).clone());
+        let ownstack_palette =
+            crate::ownstack_palette::OwnStackPaletteData::new((*common).clone());
+        let ownstack_audit =
+            crate::ownstack_audit::OwnStackAuditData::new((*common).clone());
 
         let window_tab_data = Self {
             scope: cx,
@@ -583,6 +589,8 @@ impl WindowTabData {
             about_data,
             alert_data,
             ownstack_chat,
+            ownstack_palette,
+            ownstack_audit,
             ownstack_status,
             policy_prompt_seq: cx.create_rw_signal(0),
             layout_rect: cx.create_rw_signal(Rect::ZERO),
@@ -1312,6 +1320,19 @@ impl WindowTabData {
             }
             OwnStackCaptureUiSnapshot => {
                 self.take_ui_snapshot();
+            }
+            OwnStackTogglePalette => {
+                if self.ownstack_palette.active.get_untracked() {
+                    self.ownstack_palette.hide();
+                } else {
+                    self.ownstack_palette.show();
+                }
+            }
+            OwnStackToggleAudit => {
+                if !self.ownstack_audit.visible.get_untracked() {
+                    self.ownstack_audit.reload_from_disk();
+                }
+                self.ownstack_audit.toggle();
             }
             ToggleTerminalFocus => {
                 self.toggle_panel_focus(PanelKind::Terminal);
@@ -2421,6 +2442,7 @@ impl WindowTabData {
                     }
                     OwnStackRpc::AuditEvent { json_entry } => {
                         self.ownstack_status.set_status("audit");
+                        self.ownstack_audit.add_entry_from_json(&json_entry);
                         self.ownstack_chat.add_system_message(format!(
                             "AuditEvent: {}",
                             json_entry
@@ -2500,7 +2522,41 @@ impl WindowTabData {
                             }
                         });
                     }
-                    _ => {}
+                    OwnStackRpc::CaptureScreenshot => {
+                        if let Some(workspace_root) =
+                            self.common.workspace.path.as_ref()
+                        {
+                            let ownstack_dir = workspace_root.join(".ownstack");
+                            let screenshot_path =
+                                ownstack_dir.join("ui_screenshot.png");
+                            if let Err(err) = std::fs::create_dir_all(&ownstack_dir)
+                            {
+                                tracing::warn!(
+                                    "Failed to create .ownstack directory: {}",
+                                    err
+                                );
+                            } else if let Err(err) =
+                                ownstack_engine::vision::capture_active_window(
+                                    &screenshot_path,
+                                )
+                            {
+                                tracing::warn!(
+                                    "Failed to capture screenshot: {}",
+                                    err
+                                );
+                            }
+                        } else {
+                            tracing::warn!(
+                                "Ignoring screenshot capture request: no workspace is open"
+                            );
+                        }
+                    }
+                    OwnStackRpc::UiSnapshotRequest => {
+                        self.take_ui_snapshot();
+                    }
+                    _ => {
+                        tracing::debug!("Unhandled RPC: {:?}", message);
+                    }
                 }
             }
             _ => {}
@@ -3195,6 +3251,9 @@ impl WindowTabData {
             })
             .collect::<std::collections::HashMap<_, _>>();
 
+        let panel_size = self.panel.size.get_untracked();
+        let available_size = self.panel.available_size.get_untracked();
+
         let snapshot = serde_json::json!({
             "timestamp": chrono::Utc::now().to_rfc3339(),
             "workspace": workspace_root,
@@ -3206,6 +3265,28 @@ impl WindowTabData {
                 .map(|e| e.cursor().get_untracked().offset()),
             "panels": all_panels,
             "visible_panels": visible_panels,
+            "container_regions": {
+                "Left": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "width": if self.panel.is_position_shown(&crate::panel::position::PanelPosition::LeftTop, false) { panel_size.left } else { 0.0 },
+                    "height": available_size.height
+                },
+                "Right": {
+                    "x": available_size.width - panel_size.right,
+                    "y": 0.0,
+                    "width": if self.panel.is_position_shown(&crate::panel::position::PanelPosition::RightTop, false) { panel_size.right } else { 0.0 },
+                    "height": available_size.height
+                },
+                "Bottom": {
+                    "x": if self.panel.is_position_shown(&crate::panel::position::PanelPosition::LeftTop, false) { panel_size.left } else { 0.0 },
+                    "y": available_size.height - panel_size.bottom,
+                    "width": available_size.width
+                        - (if self.panel.is_position_shown(&crate::panel::position::PanelPosition::LeftTop, false) { panel_size.left } else { 0.0 })
+                        - (if self.panel.is_position_shown(&crate::panel::position::PanelPosition::RightTop, false) { panel_size.right } else { 0.0 }),
+                    "height": if self.panel.is_position_shown(&crate::panel::position::PanelPosition::BottomLeft, false) { panel_size.bottom } else { 0.0 }
+                }
+            }
         });
 
         if let Some(workspace_root) = workspace_root {

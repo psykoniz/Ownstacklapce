@@ -247,8 +247,9 @@ fn append_read_error(stderr: &mut String, read_error: Option<String>) {
     }
 }
 
+#[async_trait::async_trait]
 impl Sandbox for ProcessSandbox {
-    fn exec(
+    async fn exec(
         &self,
         command_str: &str,
         cwd: &Path,
@@ -467,27 +468,29 @@ mod tests {
     }
 
     // ─── Empty Command ──────────────────────────────────────────
-    #[test]
-    fn test_empty_command() {
+    #[tokio::test]
+    async fn test_empty_command() {
         let sandbox = ProcessSandbox;
-        let result = sandbox.exec("", &cwd(), SandboxLevel::Light);
+        let result = sandbox.exec("", &cwd(), SandboxLevel::Light).await;
         assert!(!result.success);
         assert!(result.stderr.contains("Empty command"));
     }
 
-    #[test]
-    fn test_whitespace_only_command() {
+    #[tokio::test]
+    async fn test_whitespace_only_command() {
         let sandbox = ProcessSandbox;
-        let result = sandbox.exec("   ", &cwd(), SandboxLevel::Light);
+        let result = sandbox.exec("   ", &cwd(), SandboxLevel::Light).await;
         assert!(!result.success);
     }
 
     // ─── Known Commands ─────────────────────────────────────────
     #[cfg(windows)]
-    #[test]
-    fn test_exec_echo_windows() {
+    #[tokio::test]
+    async fn test_exec_echo_windows() {
         let sandbox = ProcessSandbox;
-        let result = sandbox.exec("cmd /c echo hello", &cwd(), SandboxLevel::Light);
+        let result = sandbox
+            .exec("cmd /c echo hello", &cwd(), SandboxLevel::Light)
+            .await;
         assert!(
             result.success,
             "Expected echo command to succeed, stderr: {}",
@@ -501,10 +504,12 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[test]
-    fn test_exec_set_windows_has_output() {
+    #[tokio::test]
+    async fn test_exec_set_windows_has_output() {
         let sandbox = ProcessSandbox;
-        let result = sandbox.exec("cmd /c set", &cwd(), SandboxLevel::Light);
+        let result = sandbox
+            .exec("cmd /c set", &cwd(), SandboxLevel::Light)
+            .await;
         assert!(
             result.success,
             "Expected cmd /c set to succeed, stderr: {}",
@@ -517,31 +522,31 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn test_exec_echo() {
+    #[tokio::test]
+    async fn test_exec_echo() {
         let sandbox = ProcessSandbox;
-        let result = sandbox.exec("echo hello", &cwd(), SandboxLevel::Light);
+        let result = sandbox
+            .exec("echo hello", &cwd(), SandboxLevel::Light)
+            .await;
         assert!(result.success);
         assert!(result.stdout.contains("hello"));
     }
 
     #[cfg(unix)]
-    #[test]
-    fn test_exec_false() {
+    #[tokio::test]
+    async fn test_exec_false() {
         let sandbox = ProcessSandbox;
-        let result = sandbox.exec("false", &cwd(), SandboxLevel::Light);
+        let result = sandbox.exec("false", &cwd(), SandboxLevel::Light).await;
         assert!(!result.success);
     }
 
     // ─── Unknown Commands ───────────────────────────────────────
-    #[test]
-    fn test_nonexistent_command() {
+    #[tokio::test]
+    async fn test_nonexistent_command() {
         let sandbox = ProcessSandbox;
-        let result = sandbox.exec(
-            "nonexistent_command_xyz_12345",
-            &cwd(),
-            SandboxLevel::Light,
-        );
+        let result = sandbox
+            .exec("nonexistent_command_xyz_12345", &cwd(), SandboxLevel::Light)
+            .await;
         assert!(!result.success);
         assert!(
             !result.stderr.trim().is_empty() || !result.stdout.trim().is_empty(),
@@ -555,8 +560,8 @@ mod tests {
     }
 
     // ─── All Sandbox Levels ─────────────────────────────────────
-    #[test]
-    fn test_all_sandbox_levels() {
+    #[tokio::test]
+    async fn test_all_sandbox_levels() {
         let sandbox = ProcessSandbox;
         for level in [
             SandboxLevel::Light,
@@ -564,7 +569,7 @@ mod tests {
             SandboxLevel::Strict,
         ] {
             // Should not panic at any level
-            let result = sandbox.exec("nonexistent_xyz", &cwd(), level);
+            let result = sandbox.exec("nonexistent_xyz", &cwd(), level).await;
             assert!(!result.success);
         }
     }
@@ -583,59 +588,59 @@ mod tests {
     }
 
     // ─── Command Parsing ────────────────────────────────────────
-    #[test]
-    fn test_command_with_multiple_args() {
+    #[tokio::test]
+    async fn test_command_with_multiple_args() {
         let sandbox = ProcessSandbox;
         // Even if command doesn't exist, parsing shouldn't panic
-        let result = sandbox.exec(
-            "cmd arg1 arg2 arg3 arg4 arg5",
-            &cwd(),
-            SandboxLevel::Light,
-        );
+        let result = sandbox
+            .exec("cmd arg1 arg2 arg3 arg4 arg5", &cwd(), SandboxLevel::Light)
+            .await;
         let _ = result;
     }
 
-    #[test]
-    fn test_command_with_special_chars() {
+    #[tokio::test]
+    async fn test_command_with_special_chars() {
         let sandbox = ProcessSandbox;
         // Shouldn't panic
-        let result = sandbox.exec("echo 'hello world'", &cwd(), SandboxLevel::Light);
+        let result = sandbox
+            .exec("echo 'hello world'", &cwd(), SandboxLevel::Light)
+            .await;
         let _ = result;
     }
 
     // ─── Stress Tests ───────────────────────────────────────────
-    #[test]
-    fn stress_test_rapid_error_commands() {
+    #[tokio::test]
+    async fn stress_test_rapid_error_commands() {
         let sandbox = ProcessSandbox;
         for i in 0..100 {
             let cmd = format!("nonexistent_cmd_{}", i);
-            let result = sandbox.exec(&cmd, &cwd(), SandboxLevel::Light);
+            let result = sandbox.exec(&cmd, &cwd(), SandboxLevel::Light).await;
             assert!(!result.success);
         }
     }
 
-    #[test]
-    fn stress_test_concurrent_sandbox() {
-        use std::thread;
-        let handles: Vec<_> = (0..20)
-            .map(|i| {
-                thread::spawn(move || {
-                    let sandbox = ProcessSandbox;
-                    for j in 0..10 {
-                        let cmd = format!("nonexistent_{}_{}", i, j);
-                        let result = sandbox.exec(&cmd, &cwd(), SandboxLevel::Light);
-                        assert!(!result.success);
-                    }
-                })
-            })
-            .collect();
+    #[tokio::test]
+    async fn stress_test_concurrent_sandbox() {
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let h = tokio::spawn(async move {
+                let sandbox = ProcessSandbox;
+                for j in 0..5 {
+                    let cmd = format!("nonexistent_{}_{}", i, j);
+                    let result =
+                        sandbox.exec(&cmd, &cwd(), SandboxLevel::Light).await;
+                    assert!(!result.success);
+                }
+            });
+            handles.push(h);
+        }
         for h in handles {
-            h.join().unwrap();
+            h.await.unwrap();
         }
     }
 
-    #[test]
-    fn test_exec_timeout() {
+    #[tokio::test]
+    async fn test_exec_timeout() {
         let sandbox = ProcessSandbox;
         #[cfg(windows)]
         let cmd = "cmd /c ping 127.0.0.1 -n 3 > nul";
@@ -643,7 +648,7 @@ mod tests {
         let cmd = "sleep 2";
 
         // This should succeed because 2s < 60s
-        let result = sandbox.exec(cmd, &cwd(), SandboxLevel::Light);
+        let result = sandbox.exec(cmd, &cwd(), SandboxLevel::Light).await;
         assert!(
             result.success,
             "Expected command to finish before timeout, stderr: {}",

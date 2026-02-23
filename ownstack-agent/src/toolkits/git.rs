@@ -122,11 +122,10 @@ impl GitToolkit {
                     )));
                 }
 
-                let result = self.sandbox.exec(
-                    &full_command,
-                    &self.workspace,
-                    SandboxLevel::Standard,
-                );
+                let result = self
+                    .sandbox
+                    .exec(&full_command, &self.workspace, SandboxLevel::Standard)
+                    .await;
                 self.audit(
                     &full_command,
                     PolicyDecision::Ask,
@@ -136,11 +135,10 @@ impl GitToolkit {
                 Ok(result)
             }
             PolicyDecision::Auto => {
-                let result = self.sandbox.exec(
-                    &full_command,
-                    &self.workspace,
-                    SandboxLevel::Standard,
-                );
+                let result = self
+                    .sandbox
+                    .exec(&full_command, &self.workspace, SandboxLevel::Standard)
+                    .await;
                 self.audit(
                     &full_command,
                     PolicyDecision::Auto,

@@ -265,6 +265,18 @@ command = "toggle_plugin_focus"
 key = "meta+shift+m"
 command = "toggle_problem_focus"
 
+[[keymaps]]
+key = "meta+alt+m"
+command = "ownstack.capture_ui_snapshot"
+
+[[keymaps]]
+key = "meta+alt+p"
+command = "ownstack.toggle_palette"
+
+[[keymaps]]
+key = "meta+alt+a"
+command = "ownstack.toggle_audit"
+
 # ------------------------------------ Navigation -------------------------------------
 
 [[keymaps]]

@@ -357,7 +357,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 | OwnStackRpc::ToolExec { .. }
                                 | OwnStackRpc::SuggestionDecision { .. }
                                 | OwnStackRpc::UiSnapshot { .. }
-                                | OwnStackRpc::CaptureScreenshot => {
+                                | OwnStackRpc::CaptureScreenshot
+                                | OwnStackRpc::UiSnapshotRequest => {
                                     let _ = work_tx_reader.send(rpc);
                                 }
                                 _ => {
@@ -455,6 +456,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Suggestion decision received: {} ({})",
                         decision, message_id
                     );
+                }
+                OwnStackRpc::UiSnapshotRequest => {
+                    // Forward to UI through proxy so lapce-app can emit UiSnapshot metadata.
+                    send_rpc_notification(OwnStackRpc::UiSnapshotRequest);
                 }
                 OwnStackRpc::UiSnapshot { metadata } => {
                     let ownstack_dir = workspace.join(".ownstack");

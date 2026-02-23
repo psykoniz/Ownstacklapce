@@ -43,6 +43,8 @@ impl LapceIcons {
     pub const SEND: &'static str = "send";
     pub const STOP: &'static str = "stop";
     pub const COMMENT: &'static str = "comment";
+    pub const TRASH: &'static str = "trash";
+    pub const AI_CHAT: &'static str = "ai.chat";
 
     pub const FILE: &'static str = "file";
     pub const FILE_EXPLORER: &'static str = "file_explorer";
