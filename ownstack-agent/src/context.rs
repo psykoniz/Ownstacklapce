@@ -51,15 +51,22 @@ impl ContextManager {
 
     /// Estimate token count for a string using word-boundary heuristic.
     ///
-    /// Uses a hybrid approach: count whitespace-separated words, then add
-    /// a correction factor for punctuation and newlines. More accurate
-    /// than the naive `len/4` especially on source code.
+    /// Uses a hybrid approach: count whitespace-separated words with a
+    /// higher multiplier for code (snake_case, camelCase split into
+    /// multiple subword tokens). Punctuation and newlines are counted
+    /// separately since they typically become their own tokens.
     pub(crate) fn estimate_tokens(text: &str) -> usize {
         if text.is_empty() {
             return 0;
         }
 
         let word_count = text.split_whitespace().count();
+
+        // Underscores / camelCase boundaries add extra subword tokens
+        let underscore_count = text.chars().filter(|c| *c == '_').count();
+        let camel_boundaries = text.as_bytes().windows(2)
+            .filter(|w| w[0].is_ascii_lowercase() && w[1].is_ascii_uppercase())
+            .count();
 
         // Punctuation that typically becomes its own token
         let punct_count = text
@@ -92,15 +99,23 @@ impl ContextManager {
                         | '\\'
                         | '|'
                         | '&'
+                        | '%'
+                        | '^'
+                        | '~'
+                        | '@'
                 )
             })
             .count();
 
         let newline_count = text.chars().filter(|c| *c == '\n').count();
 
-        // Words * 1.3 (subword splits) + half of punctuation + newlines
-        let estimate =
-            ((word_count as f64 * 1.3) as usize) + (punct_count / 2) + newline_count;
+        // Words * 1.3 (base subword splits) + extra subword boundaries
+        // + punctuation (most become own tokens) + newlines
+        let estimate = ((word_count as f64 * 1.3) as usize)
+            + underscore_count
+            + camel_boundaries
+            + ((punct_count as f64 * 0.75) as usize)
+            + newline_count;
 
         estimate.max(1)
     }

@@ -281,12 +281,14 @@ impl FailureAnalyzer {
             });
         }
 
-        // ─── Dependency Missing (multi-language) ─────────────────
-        if output.contains("pip install")
-            || output.contains("npm install")
-            || output.contains("cargo add")
-            || output.contains("go get")
-            || output.contains("Could not find a version")
+        // ─── Dependency Missing (multi-language, only if not already detected) ──
+        let has_dep_failure = failures.iter().any(|f| f.failure_type == FailureType::DependencyMissing);
+        if !has_dep_failure
+            && (output.contains("pip install")
+                || output.contains("npm install")
+                || output.contains("cargo add")
+                || output.contains("go get")
+                || output.contains("Could not find a version"))
         {
             failures.push(Failure {
                 failure_type: FailureType::DependencyMissing,
@@ -314,10 +316,13 @@ impl FailureAnalyzer {
     fn extract_quoted(output: &str, after: &str) -> String {
         if let Some(pos) = output.find(after) {
             let rest = &output[pos + after.len()..];
-            if let Some(start) = rest.find('\'') {
-                let inner = &rest[start + 1..];
-                if let Some(end) = inner.find('\'') {
-                    return inner[..end].to_string();
+            // Try single quotes, backticks, then double quotes
+            for quote in &['\'', '`', '"'] {
+                if let Some(start) = rest.find(*quote) {
+                    let inner = &rest[start + 1..];
+                    if let Some(end) = inner.find(*quote) {
+                        return inner[..end].to_string();
+                    }
                 }
             }
         }
@@ -627,9 +632,9 @@ Output snippet:\n{}",
             return session;
         }
 
-        // Analyze failures
+        // Analyze failures using actual exit code
         session.failures_detected =
-            FailureAnalyzer::analyze(&session.original_output, 1);
+            FailureAnalyzer::analyze(&session.original_output, initial.exit_code.unwrap_or(1));
 
         info!(
             "Healer: {} failures detected for: {}",
@@ -724,8 +729,8 @@ Output snippet:\n{}",
                 break;
             }
 
-            // Re-analyze
-            session.failures_detected = FailureAnalyzer::analyze(&verify_output, 1);
+            // Re-analyze using actual exit code
+            session.failures_detected = FailureAnalyzer::analyze(&verify_output, verify.exit_code.unwrap_or(1));
         }
 
         session

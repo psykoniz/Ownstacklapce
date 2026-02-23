@@ -49,19 +49,26 @@ impl PolicyEngine {
             "kill -9 1",
             "mount ",
             "umount ",
-            // Writing to system directories
+            // Writing to system directories (redirect and append)
             "> /etc/",
             "> /usr/",
             "> /bin/",
             "> /sbin/",
             "> /var/",
+            ">> /etc/",
+            ">> /usr/",
+            ">> /bin/",
+            ">> /sbin/",
+            ">> /var/",
             // Command injection vectors
             "eval ",
+            "sh -c ",
             "python -c ",
             "python3 -c ",
             "node -e ",
             "perl -e ",
             "ruby -e ",
+            "php -r ",
             // Reverse shells / backdoors
             "nc -l",
             "ncat ",
@@ -159,9 +166,17 @@ impl PolicyEngine {
             // Destructive file ops
             "rm -rf ",
             "rm -r ",
-            // Network operations
-            "curl ",
-            "wget ",
+            // Network operations (write/upload/remote — lowercased by evaluate())
+            "curl -x post",
+            "curl -x put",
+            "curl -x delete",
+            "curl -x patch",
+            "curl --upload",
+            "curl -t ",
+            "curl -d ",
+            "curl --data",
+            "wget --post",
+            "wget --method",
             "ssh ",
             "scp ",
             "rsync ",
@@ -187,8 +202,17 @@ impl PolicyEngine {
 
             let git_side_effect = first == "git"
                 && matches!(second, "push" | "reset" | "rebase" | "clean");
-            let network_cmd =
-                matches!(first, "curl" | "wget" | "ssh" | "scp" | "rsync");
+            let has_write_flag = |args: &[String]| {
+                args.iter().any(|a| {
+                    let a = a.to_lowercase();
+                    a == "-x" || a.starts_with("--data") || a == "-d"
+                        || a == "-t" || a == "--upload" || a.starts_with("--post")
+                        || a.starts_with("--method")
+                })
+            };
+            let network_cmd = matches!(first, "ssh" | "scp" | "rsync")
+                || (first == "curl" && has_write_flag(&argv))
+                || (first == "wget" && has_write_flag(&argv));
             let publish_cmd = matches!(first, "npm" | "cargo" | "twine")
                 && matches!(second, "publish" | "upload");
             let docker_destructive =
@@ -460,12 +484,26 @@ mod tests {
 
     #[test]
     fn test_ask_network() {
+        // Read-only curl/wget are Auto (safe)
         assert_eq!(
             PolicyEngine::evaluate("curl https://example.com"),
-            PolicyDecision::Ask
+            PolicyDecision::Auto
         );
         assert_eq!(
             PolicyEngine::evaluate("wget https://example.com/file"),
+            PolicyDecision::Auto
+        );
+        // Write/upload operations require Ask
+        assert_eq!(
+            PolicyEngine::evaluate("curl -X POST https://example.com/api"),
+            PolicyDecision::Ask
+        );
+        assert_eq!(
+            PolicyEngine::evaluate("curl -d 'data' https://example.com/api"),
+            PolicyDecision::Ask
+        );
+        assert_eq!(
+            PolicyEngine::evaluate("wget --post-data='x=1' https://example.com"),
             PolicyDecision::Ask
         );
     }

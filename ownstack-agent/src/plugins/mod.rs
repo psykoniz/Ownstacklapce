@@ -56,7 +56,10 @@ fn trusted_public_key_bytes() -> Result<[u8; 32], ToolkitError> {
                 ))
             })
         }
-        Err(_) => Ok([0u8; 32]),
+        Err(_) => Err(ToolkitError::SecurityViolation(format!(
+            "{} environment variable is required for plugin signature verification",
+            TRUSTED_PLUGIN_PUBKEY_HEX_ENV
+        ))),
     }
 }
 

@@ -53,6 +53,11 @@ bigfile.txt
 target_phase*/
 ownstack-engine/%SystemDrive%/
 
+# Build/check debug dumps (root level)
+build_final_check*.txt
+build_warnings*.txt
+check_*_latest.txt
+
 # Local stress/diagnostic dumps (do not commit)
 ownstack-agent/test_*.txt
 ownstack-agent/stress_*.txt

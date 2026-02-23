@@ -320,7 +320,7 @@ impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            model: "claude-3-5-sonnet-20241022".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             base_url: None,
             max_tokens: 4096,
             temperature: 0.7,
@@ -616,7 +616,7 @@ mod tests {
     fn test_config_default() {
         let cfg = ProviderConfig::default();
         assert!(cfg.api_key.is_empty());
-        assert_eq!(cfg.model, "claude-3-5-sonnet-20241022");
+        assert_eq!(cfg.model, "claude-sonnet-4-6");
         assert!(cfg.base_url.is_none());
         assert_eq!(cfg.max_tokens, 4096);
         assert!((cfg.temperature - 0.7).abs() < 0.001);

@@ -333,7 +333,7 @@ impl LlmProvider for OpenRouterProvider {
         })
         .map_err(|e| ProviderError::SerializationError(e.to_string()))?;
         body.as_object_mut()
-            .unwrap()
+            .ok_or_else(|| ProviderError::SerializationError("request body is not a JSON object".to_string()))?
             .insert("stream".to_string(), serde_json::Value::Bool(true));
 
         debug!(

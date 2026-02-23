@@ -128,28 +128,9 @@ pub struct AgentOrchestrator {
     index: crate::index::SemanticIndex,
     current_mission: Option<Mission>,
     started_at: Option<Instant>,
-    router: crate::routing::ModelRouter,
 }
 
 impl AgentOrchestrator {
-    fn encode_tool_name(namespace: &str, local_name: &str) -> String {
-        format!("{}__{}", namespace, local_name)
-    }
-
-    fn normalize_tool_name(toolkits: &[Arc<dyn Toolkit>], raw_name: &str) -> String {
-        if raw_name.contains(':') {
-            return raw_name.to_string();
-        }
-
-        if let Some((namespace, local_name)) = raw_name.split_once("__") {
-            if toolkits.iter().any(|tk| tk.name() == namespace) {
-                return format!("{}:{}", namespace, local_name);
-            }
-        }
-
-        raw_name.to_string()
-    }
-
     pub fn new(
         provider: Arc<dyn LlmProvider>,
         workspace: PathBuf,
@@ -157,7 +138,6 @@ impl AgentOrchestrator {
     ) -> Self {
         let memory = crate::project_memory::ProjectMemory::new(workspace.clone());
         let index = crate::index::SemanticIndex::new(workspace.clone());
-        let router = crate::routing::ModelRouter::new(&workspace);
         Self {
             provider,
             toolkits: Vec::new(),
@@ -169,12 +149,7 @@ impl AgentOrchestrator {
             index,
             current_mission: None,
             started_at: None,
-            router,
         }
-    }
-
-    pub fn register_toolkit(&mut self, toolkit: Arc<dyn Toolkit>) {
-        self.toolkits.push(toolkit);
     }
 
     pub fn set_system_prompt(&mut self, prompt: impl Into<String>) {
@@ -185,6 +160,10 @@ impl AgentOrchestrator {
         self.budget = budget;
     }
 
+    pub fn register_toolkit(&mut self, toolkit: Arc<dyn Toolkit>) {
+        self.toolkits.push(toolkit);
+    }
+
     pub fn current_mission(&self) -> Option<&Mission> {
         self.current_mission.as_ref()
     }
@@ -192,21 +171,11 @@ impl AgentOrchestrator {
     fn get_tool_definitions(&self) -> Vec<ToolDefinition> {
         self.toolkits
             .iter()
-            .flat_map(|tk| {
-                let toolkit_name = tk.name().to_string();
-                tk.tools().into_iter().map(move |t| {
-                    let canonical = format!("{}:{}", toolkit_name, t.name);
-                    let provider_safe =
-                        Self::encode_tool_name(&toolkit_name, &t.name);
-                    ToolDefinition {
-                        name: provider_safe,
-                        description: format!(
-                            "{} (canonical tool id: {})",
-                            t.description, canonical
-                        ),
-                        parameters: t.parameters,
-                    }
-                })
+            .flat_map(|tk| tk.tools())
+            .map(|t| ToolDefinition {
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters,
             })
             .collect()
     }
@@ -216,70 +185,15 @@ impl AgentOrchestrator {
         name: &str,
         args: serde_json::Value,
     ) -> ToolResult {
-        let normalized_name = Self::normalize_tool_name(toolkits, name);
-
-        if let Some((namespace, local_name)) = normalized_name.split_once(':') {
-            for toolkit in toolkits {
-                if toolkit.name() != namespace {
-                    continue;
-                }
-
-                return match toolkit.execute(local_name, args).await {
-                    Ok(result) => result,
-                    Err(e) => ToolResult::failure(format!("{}", e), None),
-                };
-            }
-
-            return ToolResult::failure(
-                format!(
-                    "Toolkit not found for namespaced tool: {}",
-                    normalized_name
-                ),
-                None,
-            );
-        }
-
-        // Backward-compatibility mode for legacy aliases (single-cycle migration).
-        let mut alias_matches = Vec::new();
         for toolkit in toolkits {
-            if toolkit
-                .tools()
-                .iter()
-                .any(|def| def.name == normalized_name)
-            {
-                alias_matches.push(toolkit.clone());
-            }
-        }
-
-        if alias_matches.len() > 1 {
-            let suggestions = alias_matches
-                .iter()
-                .map(|tk| format!("{}:{}", tk.name(), name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            return ToolResult::failure(
-                format!(
-                    "Ambiguous legacy tool alias '{}'. Use namespaced tool id: {}",
-                    normalized_name, suggestions
-                ),
-                None,
-            );
-        }
-
-        if let Some(toolkit) = alias_matches.into_iter().next() {
-            return match toolkit.execute(&normalized_name, args).await {
-                Ok(result) => result,
-                Err(e) => ToolResult::failure(format!("{}", e), None),
-            };
-        }
-
-        for toolkit in toolkits {
-            match toolkit.execute(&normalized_name, args.clone()).await {
+            match toolkit.execute(name, args.clone()).await {
                 Ok(result) => return result,
-                Err(e) => match e {
-                    ToolkitError::ToolNotFound(_) => continue,
-                    _ => return ToolResult::failure(format!("{}", e), None),
-                },
+                Err(e) => {
+                    match e {
+                        ToolkitError::ToolNotFound(_) => continue,
+                        _ => return ToolResult::failure(format!("{}", e), None),
+                    }
+                }
             }
         }
         ToolResult::failure(format!("Tool not found: {}", name), None)
@@ -294,63 +208,18 @@ impl AgentOrchestrator {
         Self::execute_tool_shared(&self.toolkits, name, args).await
     }
 
-    fn route_model(&self, role: &str, task_type: Option<&str>) -> Option<String> {
-        if let Some(routed) = self.router.route(role, task_type) {
-            return Some(routed);
-        }
-
-        match (self.provider.name(), role, task_type) {
-            ("anthropic", "planner", _) | ("anthropic", "critic", _) => {
-                Some("claude-sonnet-4-6".to_string())
-            }
-            ("anthropic", "worker", Some("fast")) => {
-                Some("claude-haiku-4-5-20251001".to_string())
-            }
-            ("openrouter", "planner", _) | ("openrouter", "critic", _) => {
-                Some("anthropic/claude-sonnet-4-6".to_string())
-            }
-            ("openrouter", "worker", Some("fast")) => {
-                Some("anthropic/claude-haiku-4-5-20251001".to_string())
-            }
-            _ => None,
-        }
-    }
-
-    fn infer_task_type(prompt: &str) -> Option<String> {
-        let lower = prompt.to_ascii_lowercase();
-        let matches_any = |keywords: &[&str]| {
-            keywords.iter().any(|keyword| lower.contains(keyword))
-        };
-
-        if matches_any(&["refactor", "cleanup", "restructure", "rename"]) {
-            Some("refactoring".to_string())
-        } else if matches_any(&[
-            "document",
-            "documentation",
-            "readme",
-            "comment",
-            "explain",
-        ]) {
-            Some("documentation".to_string())
-        } else if matches_any(&[
-            "research",
-            "investigate",
-            "analyze",
-            "compare",
-            "study",
-        ]) {
-            Some("research".to_string())
-        } else if matches_any(&[
-            "ui",
-            "interface",
-            "layout",
-            "screen",
-            "frontend",
-            "visual",
-        ]) {
-            Some("ui_debugging".to_string())
-        } else {
-            None
+    fn route_model(&self, task_type: &str) -> Option<String> {
+        let provider_name = self.provider.name();
+        match (provider_name, task_type) {
+            ("anthropic", "planning") => Some("claude-sonnet-4-6".to_string()),
+            ("anthropic", "critique") => Some("claude-sonnet-4-6".to_string()),
+            ("anthropic", "worker") => Some("claude-sonnet-4-6".to_string()),
+            ("anthropic", "fast") => Some("claude-haiku-4-5-20251001".to_string()),
+            ("openrouter", "planning") => Some("anthropic/claude-sonnet-4-6".to_string()),
+            ("openrouter", "critique") => Some("anthropic/claude-sonnet-4-6".to_string()),
+            ("openrouter", "worker") => Some("anthropic/claude-sonnet-4-6".to_string()),
+            ("openrouter", "fast") => Some("anthropic/claude-haiku-4-5-20251001".to_string()),
+            _ => None, // use default from config
         }
     }
 
@@ -404,7 +273,7 @@ impl AgentOrchestrator {
             LlmMessage::user(user_goal),
         ];
 
-        let model = self.route_model("planner", Some("planning"));
+        let model = self.route_model("planning");
         let response = self
             .provider
             .complete(messages, None, model)
@@ -452,7 +321,7 @@ impl AgentOrchestrator {
         let messages =
             vec![LlmMessage::system(CRITIC_PROMPT), LlmMessage::user(prompt)];
 
-        let model = self.route_model("critic", Some("critique"));
+        let model = self.route_model("critique");
         let response = self
             .provider
             .complete(messages, None, model)
@@ -495,7 +364,7 @@ impl AgentOrchestrator {
 
         // Augment system prompt with project memory and semantic index
         let project_rules = self.memory.to_system_prompt();
-
+        
         // Phase 11: Semantic Retrieval
         let mut rag_context = String::new();
         if let Ok(snippets) = self.index.search(user_prompt, 5).await {
@@ -517,8 +386,7 @@ impl AgentOrchestrator {
                 .get(0)
                 .map(|m| m.content.clone())
                 .unwrap_or_default();
-            let augmented =
-                format!("{}\n\n{}\n\n{}", base_prompt, project_rules, rag_context);
+            let augmented = format!("{}\n\n{}\n\n{}", base_prompt, project_rules, rag_context);
             self.context.set_system_prompt(augmented);
         }
 
@@ -527,11 +395,6 @@ impl AgentOrchestrator {
         // Create mission if in Plan mode or if specified
         if let Ok(mission) = self.plan(user_prompt).await {
             on_mission(mission);
-        }
-
-        let inferred_worker_task = Self::infer_task_type(user_prompt);
-        if let Some(task) = inferred_worker_task.as_ref() {
-            debug!("Worker routing task inferred as '{}'", task);
         }
 
         loop {
@@ -559,10 +422,7 @@ impl AgentOrchestrator {
             let mut final_finish_reason = None;
             let mut _final_usage = None;
 
-            let model = self.route_model(
-                "worker",
-                inferred_worker_task.as_deref().or(Some("worker")),
-            );
+            let model = self.route_model("worker");
             let mut stream = self
                 .provider
                 .stream(messages.clone(), tools, model)
@@ -648,22 +508,14 @@ impl AgentOrchestrator {
                     let futures = tool_calls.into_iter().map(|tool_call| {
                         let tks = toolkits.clone();
                         async move {
-                            debug!(
-                                "Executing (parallel): {} ({})",
-                                tool_call.name, tool_call.arguments
-                            );
-                            let result = Self::execute_tool_shared(
-                                &tks,
-                                &tool_call.name,
-                                tool_call.arguments.clone(),
-                            )
-                            .await;
+                            debug!("Executing (parallel): {} ({})", tool_call.name, tool_call.arguments);
+                            let result = Self::execute_tool_shared(&tks, &tool_call.name, tool_call.arguments.clone()).await;
                             (tool_call, result)
                         }
                     });
 
                     let results = futures::future::join_all(futures).await;
-
+                    
                     for (tool_call, result) in results {
                         self.counters.tool_calls += 1;
                         if !result.success {
@@ -672,38 +524,28 @@ impl AgentOrchestrator {
                             self.counters.consecutive_failures = 0;
                         }
 
-                        let result_msg = if let Some(image_data) =
-                            result.metadata.get("image_data")
-                        {
-                            let media_type = result
-                                .metadata
-                                .get("media_type")
+                        let result_msg = if let Some(image_data) = result.metadata.get("image_data") {
+                            let media_type = result.metadata.get("media_type")
                                 .cloned()
                                 .unwrap_or_else(|| "image/png".to_string());
-
+                            
                             LlmMessage {
                                 role: crate::provider::Role::Tool,
-                                content: crate::provider::MessageContent::Parts(
-                                    vec![
-                                        crate::provider::ContentPart::Text {
-                                            text: serde_json::to_string(&result)
-                                                .unwrap_or_default(),
-                                        },
-                                        crate::provider::ContentPart::Image {
-                                            source: crate::provider::ImageSource {
-                                                type_: "base64".to_string(),
-                                                media_type,
-                                                data: image_data.clone(),
-                                            },
-                                        },
-                                    ],
-                                ),
+                                content: crate::provider::MessageContent::Parts(vec![
+                                    crate::provider::ContentPart::Text { text: serde_json::to_string(&result).unwrap_or_default() },
+                                    crate::provider::ContentPart::Image {
+                                        source: crate::provider::ImageSource {
+                                            type_: "base64".to_string(),
+                                            media_type,
+                                            data: image_data.clone(),
+                                        }
+                                    }
+                                ]),
                                 tool_call_id: Some(tool_call.id.clone()),
                                 tool_calls: None,
                             }
                         } else {
-                            let result_json =
-                                serde_json::to_string(&result).unwrap_or_default();
+                            let result_json = serde_json::to_string(&result).unwrap_or_default();
                             LlmMessage::tool_result(&tool_call.id, result_json)
                         };
                         self.context.add_message(result_msg);
@@ -726,11 +568,6 @@ impl AgentOrchestrator {
         self.started_at = Some(Instant::now());
         self.context.add_message(LlmMessage::user(user_prompt));
 
-        let inferred_worker_task = Self::infer_task_type(user_prompt);
-        if let Some(task) = inferred_worker_task.as_ref() {
-            debug!("Worker routing task inferred as '{}'", task);
-        }
-
         loop {
             self.counters.steps += 1;
 
@@ -748,10 +585,7 @@ impl AgentOrchestrator {
                 self.counters.steps, self.counters.llm_calls
             );
 
-            let model = self.route_model(
-                "worker",
-                inferred_worker_task.as_deref().or(Some("worker")),
-            );
+            let model = self.route_model("worker");
             let response = self
                 .provider
                 .complete(messages, tools, model)
@@ -791,38 +625,28 @@ impl AgentOrchestrator {
                             self.counters.consecutive_failures = 0;
                         }
 
-                        let result_msg = if let Some(image_data) =
-                            result.metadata.get("image_data")
-                        {
-                            let media_type = result
-                                .metadata
-                                .get("media_type")
+                        let result_msg = if let Some(image_data) = result.metadata.get("image_data") {
+                            let media_type = result.metadata.get("media_type")
                                 .cloned()
                                 .unwrap_or_else(|| "image/png".to_string());
-
+                            
                             LlmMessage {
                                 role: crate::provider::Role::Tool,
-                                content: crate::provider::MessageContent::Parts(
-                                    vec![
-                                        crate::provider::ContentPart::Text {
-                                            text: serde_json::to_string(&result)
-                                                .unwrap_or_default(),
-                                        },
-                                        crate::provider::ContentPart::Image {
-                                            source: crate::provider::ImageSource {
-                                                type_: "base64".to_string(),
-                                                media_type,
-                                                data: image_data.clone(),
-                                            },
-                                        },
-                                    ],
-                                ),
+                                content: crate::provider::MessageContent::Parts(vec![
+                                    crate::provider::ContentPart::Text { text: serde_json::to_string(&result).unwrap_or_default() },
+                                    crate::provider::ContentPart::Image {
+                                        source: crate::provider::ImageSource {
+                                            type_: "base64".to_string(),
+                                            media_type,
+                                            data: image_data.clone(),
+                                        }
+                                    }
+                                ]),
                                 tool_call_id: Some(tool_call.id.clone()),
                                 tool_calls: None,
                             }
                         } else {
-                            let result_json =
-                                serde_json::to_string(&result).unwrap_or_default();
+                            let result_json = serde_json::to_string(&result).unwrap_or_default();
                             LlmMessage::tool_result(&tool_call.id, result_json)
                         };
                         self.context.add_message(result_msg);
@@ -876,11 +700,7 @@ impl AgentOrchestrator {
                                 m.steps[i].status = StepStatus::Failed(e.clone());
                             }
                         }
-                        return Err(format!(
-                            "Mission failed at step {}: {}",
-                            i + 1,
-                            e
-                        ));
+                        return Err(format!("Mission failed at step {}: {}", i + 1, e));
                     }
                 };
 
@@ -890,20 +710,12 @@ impl AgentOrchestrator {
                 }
 
                 if retry_count >= max_retries {
-                    warn!(
-                        "Critic rejected step {} after {} retries. Continuing.",
-                        i + 1,
-                        retry_count
-                    );
+                    warn!("Critic rejected step {} after {} retries. Continuing.", i + 1, retry_count);
                     break output;
                 }
 
                 retry_count += 1;
-                info!(
-                    "Self-Healing: Retrying step {} (attempt {}) with feedback.",
-                    i + 1,
-                    retry_count + 1
-                );
+                info!("Self-Healing: Retrying step {} (attempt {}) with feedback.", i + 1, retry_count + 1);
                 current_prompt = format!(
                     "Your previous response for the task '{}' was REJECTED by the critic.\nFeedback: {}\n\nPlease try again, addressing the feedback above.",
                     step.description, critique.feedback
@@ -923,6 +735,7 @@ impl AgentOrchestrator {
                 step.description,
                 step_output
             ));
+
             self.context.clear();
         }
 
@@ -953,52 +766,6 @@ pub struct CriticResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use std::collections::HashMap;
-
-    struct MockToolkit {
-        toolkit_name: String,
-        handled_tools: Vec<String>,
-    }
-
-    #[async_trait]
-    impl Toolkit for MockToolkit {
-        fn name(&self) -> &str {
-            &self.toolkit_name
-        }
-
-        fn tools(&self) -> Vec<crate::toolkits::ToolDef> {
-            self.handled_tools
-                .iter()
-                .map(|tool| crate::toolkits::ToolDef {
-                    name: tool.clone(),
-                    description: format!("{} tool", tool),
-                    parameters: serde_json::json!({
-                        "type": "object",
-                        "properties": {}
-                    }),
-                })
-                .collect()
-        }
-
-        async fn execute(
-            &self,
-            tool_name: &str,
-            _args: serde_json::Value,
-        ) -> Result<ToolResult, ToolkitError> {
-            if self.handled_tools.iter().any(|t| t == tool_name) {
-                let payload = HashMap::from([
-                    ("toolkit".to_string(), self.toolkit_name.clone()),
-                    ("tool".to_string(), tool_name.to_string()),
-                ]);
-                Ok(ToolResult::success(
-                    serde_json::to_string(&payload).unwrap_or_default(),
-                ))
-            } else {
-                Err(ToolkitError::ToolNotFound(tool_name.to_string()))
-            }
-        }
-    }
 
     // ─── AgentBudget ─────────────────────────────────────────────
     #[test]
@@ -1207,79 +974,5 @@ mod tests {
             let r: CriticResult = serde_json::from_str(&json).unwrap();
             assert_eq!(r.feedback, format!("feedback_{}", i));
         }
-    }
-
-    #[tokio::test]
-    async fn test_execute_tool_shared_namespaced_dispatch() {
-        let toolkits: Vec<Arc<dyn Toolkit>> = vec![
-            Arc::new(MockToolkit {
-                toolkit_name: "alpha".to_string(),
-                handled_tools: vec!["run".to_string()],
-            }),
-            Arc::new(MockToolkit {
-                toolkit_name: "beta".to_string(),
-                handled_tools: vec!["run".to_string()],
-            }),
-        ];
-
-        let result = AgentOrchestrator::execute_tool_shared(
-            &toolkits,
-            "alpha:run",
-            serde_json::json!({}),
-        )
-        .await;
-
-        assert!(result.success);
-        assert!(result.stdout.contains("\"toolkit\":\"alpha\""));
-    }
-
-    #[tokio::test]
-    async fn test_execute_tool_shared_legacy_alias_ambiguous() {
-        let toolkits: Vec<Arc<dyn Toolkit>> = vec![
-            Arc::new(MockToolkit {
-                toolkit_name: "alpha".to_string(),
-                handled_tools: vec!["run".to_string()],
-            }),
-            Arc::new(MockToolkit {
-                toolkit_name: "beta".to_string(),
-                handled_tools: vec!["run".to_string()],
-            }),
-        ];
-
-        let result = AgentOrchestrator::execute_tool_shared(
-            &toolkits,
-            "run",
-            serde_json::json!({}),
-        )
-        .await;
-
-        assert!(!result.success);
-        assert!(result.stderr.contains("Ambiguous legacy tool alias"));
-        assert!(result.stderr.contains("alpha:run"));
-        assert!(result.stderr.contains("beta:run"));
-    }
-
-    #[tokio::test]
-    async fn test_execute_tool_shared_legacy_alias_unique() {
-        let toolkits: Vec<Arc<dyn Toolkit>> = vec![
-            Arc::new(MockToolkit {
-                toolkit_name: "core".to_string(),
-                handled_tools: vec!["exec".to_string()],
-            }),
-            Arc::new(MockToolkit {
-                toolkit_name: "git".to_string(),
-                handled_tools: vec!["git_status".to_string()],
-            }),
-        ];
-
-        let result = AgentOrchestrator::execute_tool_shared(
-            &toolkits,
-            "exec",
-            serde_json::json!({}),
-        )
-        .await;
-
-        assert!(result.success);
-        assert!(result.stdout.contains("\"toolkit\":\"core\""));
     }
 }
