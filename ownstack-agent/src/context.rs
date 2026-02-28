@@ -148,6 +148,11 @@ impl ContextManager {
     pub fn message_count(&self) -> usize {
         self.messages.len()
     }
+
+    /// Get the configured maximum context tokens.
+    pub fn max_tokens(&self) -> usize {
+        self.max_tokens
+    }
 }
 
 #[cfg(test)]

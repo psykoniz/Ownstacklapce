@@ -272,6 +272,8 @@ pub struct AgentOrchestrator {
     started_at: Option<Instant>,
     /// Tracks consecutive identical tool-parse errors for anti-loop detection.
     parse_error_tracker: ParseErrorTracker,
+    /// Optional RPC sink for emitting live budget/context metrics to the IDE.
+    rpc_sink: Option<crate::policy_approval::RpcSink>,
 }
 
 impl AgentOrchestrator {
@@ -294,6 +296,7 @@ impl AgentOrchestrator {
             current_mission: None,
             started_at: None,
             parse_error_tracker: ParseErrorTracker::default(),
+            rpc_sink: None,
         }
     }
 
@@ -303,6 +306,54 @@ impl AgentOrchestrator {
 
     pub fn set_budget(&mut self, budget: AgentBudget) {
         self.budget = budget;
+    }
+
+    /// Attach an RPC sink so the orchestrator can emit live metrics to the IDE.
+    pub fn set_rpc_sink(&mut self, sink: crate::policy_approval::RpcSink) {
+        self.rpc_sink = Some(sink);
+    }
+
+    /// Emit live budget counters to the IDE UI (no-op if no sink configured).
+    fn emit_budget_update(&self) {
+        if let Some(ref sink) = self.rpc_sink {
+            sink(lapce_rpc::ownstack::OwnStackRpc::BudgetUpdate {
+                tokens: self.context.estimated_tokens() as u64,
+                max_tokens: self.context.max_tokens() as u64,
+                steps: u64::from(self.counters.steps),
+                max_steps: u64::from(self.budget.max_steps),
+                calls: u64::from(self.counters.llm_calls),
+                max_calls: u64::from(self.budget.max_llm_calls),
+            });
+        }
+    }
+
+    /// Emit context-window usage to the IDE UI (no-op if no sink configured).
+    fn emit_context_update(&self) {
+        if let Some(ref sink) = self.rpc_sink {
+            sink(lapce_rpc::ownstack::OwnStackRpc::ContextUpdate {
+                current: self.context.estimated_tokens() as u64,
+                max: self.context.max_tokens() as u64,
+            });
+        }
+    }
+
+    /// Emit a patch suggestion (diff) from a tool result metadata.
+    ///
+    /// Tool results may carry a "patch" key in their metadata with a unified diff.
+    /// This emits it as a ToolResultMsg so the UI can display it in the chat.
+    fn emit_patch_suggestion(&self, tool_name: &str, result: &ToolResult) {
+        if let Some(ref sink) = self.rpc_sink {
+            if let Some(patch) = result.metadata.get("patch") {
+                let payload = serde_json::json!({
+                    "type": "patch_suggestion",
+                    "tool": tool_name,
+                    "diff": patch,
+                });
+                sink(lapce_rpc::ownstack::OwnStackRpc::ToolResultMsg {
+                    json_result: payload.to_string(),
+                });
+            }
+        }
     }
 
     pub fn register_toolkit(&mut self, toolkit: Arc<dyn Toolkit>) {
@@ -715,11 +766,14 @@ impl AgentOrchestrator {
                             self.counters.consecutive_failures = 0;
                         }
 
+                        // G3: emit patch suggestion if tool produced a diff
+                        self.emit_patch_suggestion(&tool_call.name, &result);
+
                         let result_msg = if let Some(image_data) = result.metadata.get("image_data") {
                             let media_type = result.metadata.get("media_type")
                                 .cloned()
                                 .unwrap_or_else(|| "image/png".to_string());
-                            
+
                             LlmMessage {
                                 role: crate::provider::Role::Tool,
                                 content: crate::provider::MessageContent::Parts(vec![
@@ -741,6 +795,9 @@ impl AgentOrchestrator {
                         };
                         self.context.add_message(result_msg);
                     }
+                    // G1+G2: emit live metrics after each tool round-trip
+                    self.emit_budget_update();
+                    self.emit_context_update();
                     // Loop back for next interaction after tool results
                 }
                 FinishReason::Length => {
