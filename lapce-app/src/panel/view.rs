@@ -330,8 +330,8 @@ pub fn panel_container_view(
                                     - (pointer_event.pos.x - drag_start_point.x);
                                 let current_panel_size = panel_size.get_untracked();
                                 let new_size = new_size
-                                    .max(150.0)
-                                    .min(available_size.width - 150.0 - 150.0);
+                                    .max(200.0)
+                                    .min(available_size.width - 150.0 - 200.0);
                                 if new_size != current_panel_size.right {
                                     panel_size.update(|size| {
                                         size.right = new_size;

@@ -2,7 +2,7 @@ use floem::prelude::*;
 use floem::reactive::RwSignal;
 use floem::{
     peniko::Color,
-    style::{CursorStyle, Display, Style},
+    style::{CursorStyle, Style},
     text::Weight,
     views::{dyn_stack, h_stack, label, scroll, text_input, v_stack, Decorators},
     View,

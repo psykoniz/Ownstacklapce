@@ -9,6 +9,7 @@ use floem::{
         create_memo, Memo, ReadSignal, RwSignal, SignalGet, SignalUpdate, SignalWith,
     },
     style::{AlignItems, CursorStyle, Display},
+    text::Weight,
     views::{dyn_stack, label, stack, svg, Decorators},
     View,
 };
@@ -248,7 +249,7 @@ pub fn status(
                         )
                         .style(|s| s.margin_right(10.0))
                     },
-                    label(|| "AI Cmd".to_string())
+                    label(|| "\u{26A1} AI Cmd".to_string())
                         .on_click_stop({
                             let ownstack_palette = ownstack_palette.clone();
                             move |_| {
@@ -260,20 +261,37 @@ pub fn status(
                             }
                         })
                         .style(move |s| {
-                            s.padding_horiz(8.0)
-                                .padding_vert(2.0)
-                                .margin_right(8.0)
+                            let config = config.get();
+                            s.padding_horiz(10.0)
+                                .padding_vert(3.0)
+                                .margin_right(6.0)
                                 .border(1.0)
                                 .border_radius(6.0)
                                 .border_color(
-                                    config.get().color(LapceColor::LAPCE_BORDER),
+                                    config.color(LapceColor::LAPCE_BORDER),
+                                )
+                                .background(
+                                    config
+                                        .color(LapceColor::PANEL_HOVERED_BACKGROUND)
+                                        .multiply_alpha(0.3),
                                 )
                                 .color(
-                                    config.get().color(LapceColor::STATUS_FOREGROUND),
+                                    config.color(LapceColor::STATUS_FOREGROUND),
                                 )
+                                .font_size(12.0)
                                 .cursor(CursorStyle::Pointer)
+                                .hover(|s| {
+                                    s.background(
+                                        config
+                                            .color(LapceColor::PANEL_HOVERED_BACKGROUND)
+                                            .multiply_alpha(0.7),
+                                    )
+                                    .border_color(
+                                        config.color(LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE),
+                                    )
+                                })
                         }),
-                    label(|| "Audit".to_string())
+                    label(|| "\u{1F6E1} Audit".to_string())
                         .on_click_stop({
                             let ownstack_audit = ownstack_audit.clone();
                             move |_| {
@@ -284,20 +302,37 @@ pub fn status(
                             }
                         })
                         .style(move |s| {
-                            s.padding_horiz(8.0)
-                                .padding_vert(2.0)
-                                .margin_right(8.0)
+                            let config = config.get();
+                            s.padding_horiz(10.0)
+                                .padding_vert(3.0)
+                                .margin_right(6.0)
                                 .border(1.0)
                                 .border_radius(6.0)
                                 .border_color(
-                                    config.get().color(LapceColor::LAPCE_BORDER),
+                                    config.color(LapceColor::LAPCE_BORDER),
+                                )
+                                .background(
+                                    config
+                                        .color(LapceColor::PANEL_HOVERED_BACKGROUND)
+                                        .multiply_alpha(0.3),
                                 )
                                 .color(
-                                    config.get().color(LapceColor::STATUS_FOREGROUND),
+                                    config.color(LapceColor::STATUS_FOREGROUND),
                                 )
+                                .font_size(12.0)
                                 .cursor(CursorStyle::Pointer)
+                                .hover(|s| {
+                                    s.background(
+                                        config
+                                            .color(LapceColor::PANEL_HOVERED_BACKGROUND)
+                                            .multiply_alpha(0.7),
+                                    )
+                                    .border_color(
+                                        config.color(LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE),
+                                    )
+                                })
                         }),
-                    label(|| "Settings".to_string())
+                    label(|| "\u{2699} Settings".to_string())
                         .on_click_stop({
                             let workbench_command = workbench_command.clone();
                             move |_| {
@@ -306,18 +341,35 @@ pub fn status(
                             }
                         })
                         .style(move |s| {
-                            s.padding_horiz(8.0)
-                                .padding_vert(2.0)
-                                .margin_right(8.0)
+                            let config = config.get();
+                            s.padding_horiz(10.0)
+                                .padding_vert(3.0)
+                                .margin_right(6.0)
                                 .border(1.0)
                                 .border_radius(6.0)
                                 .border_color(
-                                    config.get().color(LapceColor::LAPCE_BORDER),
+                                    config.color(LapceColor::LAPCE_BORDER),
+                                )
+                                .background(
+                                    config
+                                        .color(LapceColor::PANEL_HOVERED_BACKGROUND)
+                                        .multiply_alpha(0.3),
                                 )
                                 .color(
-                                    config.get().color(LapceColor::STATUS_FOREGROUND),
+                                    config.color(LapceColor::STATUS_FOREGROUND),
                                 )
+                                .font_size(12.0)
                                 .cursor(CursorStyle::Pointer)
+                                .hover(|s| {
+                                    s.background(
+                                        config
+                                            .color(LapceColor::PANEL_HOVERED_BACKGROUND)
+                                            .multiply_alpha(0.7),
+                                    )
+                                    .border_color(
+                                        config.color(LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE),
+                                    )
+                                })
                         }),
                     {
                         let ownstack_mode_label = ownstack_style.clone();
@@ -327,25 +379,26 @@ pub fn status(
                                 let config = config.get();
                                 let badge_bg = match ownstack_mode_color.mode.get() {
                                     crate::ownstack_chat::AgentMode::Ask => {
-                                        config.color(LapceColor::LAPCE_WARN)
+                                        config.color(
+                                            LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE,
+                                        )
                                     }
                                     crate::ownstack_chat::AgentMode::Auto => {
                                         config.color(LapceColor::SOURCE_CONTROL_ADDED)
                                     }
                                     crate::ownstack_chat::AgentMode::Plan => {
-                                        config.color(
-                                            LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE,
-                                        )
+                                        config.color(LapceColor::LAPCE_WARN)
                                     }
                                 };
 
-                                s.padding_horiz(7.0)
-                                    .padding_vert(2.0)
+                                s.padding_horiz(8.0)
+                                    .padding_vert(3.0)
                                     .margin_right(8.0)
                                     .border_radius(999.0)
                                     .background(badge_bg.multiply_alpha(0.9))
                                     .color(config.color(LapceColor::STATUS_BACKGROUND))
-                                    .font_size(10.0)
+                                    .font_size(11.0)
+                                    .font_weight(Weight::SEMIBOLD)
                                     .selectable(false)
                             })
                     },
@@ -396,7 +449,7 @@ pub fn status(
                                         ),
                                     };
 
-                                s.padding_horiz(6.0)
+                                s.padding_horiz(7.0)
                                     .padding_vert(2.0)
                                     .margin_left(6.0)
                                     .border(1.0)
@@ -404,7 +457,7 @@ pub fn status(
                                     .border_color(border)
                                     .background(bg)
                                     .color(fg)
-                                    .font_size(10.0)
+                                    .font_size(11.0)
                                     .selectable(false)
                             },
                         )
@@ -452,15 +505,15 @@ pub fn status(
                                         ),
                                     };
 
-                                s.padding_horiz(6.0)
+                                s.padding_horiz(7.0)
                                     .padding_vert(2.0)
-                                    .margin_left(4.0)
+                                    .margin_left(5.0)
                                     .border(1.0)
                                     .border_radius(999.0)
                                     .border_color(border)
                                     .background(bg)
                                     .color(fg)
-                                    .font_size(10.0)
+                                    .font_size(11.0)
                                     .selectable(false)
                             },
                         )
@@ -508,15 +561,15 @@ pub fn status(
                                         ),
                                     };
 
-                                s.padding_horiz(6.0)
+                                s.padding_horiz(7.0)
                                     .padding_vert(2.0)
-                                    .margin_left(4.0)
+                                    .margin_left(5.0)
                                     .border(1.0)
                                     .border_radius(999.0)
                                     .border_color(border)
                                     .background(bg)
                                     .color(fg)
-                                    .font_size(10.0)
+                                    .font_size(11.0)
                                     .selectable(false)
                             },
                         )

@@ -1120,7 +1120,7 @@ fn message_view(
 
     let tool_block = if let Some(tool_res) = &msg.tool_result {
         let diff_block = if let Some(target) = &msg.diff_target {
-            let chat_for_click = chat_data.clone();
+            let _chat_for_click = chat_data.clone();
             let target_clone = target.clone();
             h_stack((
                     h_stack((

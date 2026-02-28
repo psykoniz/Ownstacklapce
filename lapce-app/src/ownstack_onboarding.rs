@@ -7,7 +7,6 @@ use floem::{
     peniko::Color,
     reactive::{RwSignal, Scope, SignalGet, SignalUpdate},
     style::CursorStyle,
-    text::Weight,
     views::{
         Decorators, container, dyn_stack, empty, h_stack, label, text_input, v_stack,
     },
@@ -214,7 +213,7 @@ pub fn onboarding_view(
 
     container(container(
         v_stack((
-            // ── Progress indicator: Step X / 5 + bar ─────────────────────
+            // ── Title row + step badge ───────────────────────────────────
             h_stack((
                 label(move || data_title.current_step_info().title.to_string()).style(
                     move |s| {
@@ -225,17 +224,103 @@ pub fn onboarding_view(
                             .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
                     },
                 ),
+                // Pill-shaped step badge: blue bg + white text, 12px
                 label(move || {
                     format!("Step {} / {}", data_progress.current_step.get() + 1, total_steps)
                 })
                 .style(move |s| {
-                    s.font_size(11.0)
-                        .color(config.get().color(LapceColor::EDITOR_DIM))
+                    s.font_size(12.0)
+                        .font_bold()
+                        .color(Color::WHITE)
+                        .background(Color::from_rgb8(74, 158, 255))
+                        .padding_horiz(10.0)
+                        .padding_vert(3.0)
+                        .border_radius(10.0)
                         .margin_left(8.0)
                 }),
             ))
-            .style(|s| s.width_full().justify_between().items_center().margin_bottom(4.0)),
-            // Progress bar
+            .style(|s| s.width_full().justify_between().items_center().margin_bottom(8.0)),
+            // ── Step dots: 5 small circles above progress bar ────────────
+            {
+                let data_dots = data.clone();
+                h_stack((
+                    // Dot 1 — always filled (step 0 is always reached)
+                    {
+                        empty().style(move |s| {
+                            s.width(8.0).height(8.0).border_radius(4.0)
+                                .background(Color::from_rgb8(74, 158, 255))
+                        })
+                    },
+                    // Dot 2
+                    {
+                        let d = data_dots.clone();
+                        empty().style(move |s| {
+                            let current = d.current_step.get();
+                            let dot_base = s.width(8.0).height(8.0).border_radius(4.0);
+                            if current >= 1 {
+                                dot_base.background(Color::from_rgb8(74, 158, 255))
+                            } else {
+                                dot_base
+                                    .border(1.5)
+                                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+                            }
+                        })
+                    },
+                    // Dot 3
+                    {
+                        let d = data_dots.clone();
+                        empty().style(move |s| {
+                            let current = d.current_step.get();
+                            let dot_base = s.width(8.0).height(8.0).border_radius(4.0);
+                            if current >= 2 {
+                                dot_base.background(Color::from_rgb8(74, 158, 255))
+                            } else {
+                                dot_base
+                                    .border(1.5)
+                                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+                            }
+                        })
+                    },
+                    // Dot 4
+                    {
+                        let d = data_dots.clone();
+                        empty().style(move |s| {
+                            let current = d.current_step.get();
+                            let dot_base = s.width(8.0).height(8.0).border_radius(4.0);
+                            if current >= 3 {
+                                dot_base.background(Color::from_rgb8(74, 158, 255))
+                            } else {
+                                dot_base
+                                    .border(1.5)
+                                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+                            }
+                        })
+                    },
+                    // Dot 5
+                    {
+                        let d = data_dots.clone();
+                        empty().style(move |s| {
+                            let current = d.current_step.get();
+                            let dot_base = s.width(8.0).height(8.0).border_radius(4.0);
+                            if current >= 4 {
+                                dot_base.background(Color::from_rgb8(74, 158, 255))
+                            } else {
+                                dot_base
+                                    .border(1.5)
+                                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+                            }
+                        })
+                    },
+                ))
+                .style(|s| {
+                    s.width_full()
+                        .justify_center()
+                        .items_center()
+                        .gap(10.0)
+                        .margin_bottom(6.0)
+                })
+            },
+            // ── Progress bar ─────────────────────────────────────────────
             {
                 let data_bar = data.clone();
                 h_stack((
@@ -256,6 +341,7 @@ pub fn onboarding_view(
                         .margin_bottom(12.0)
                 })
             },
+            // ── Description ──────────────────────────────────────────────
             label(move || data_desc.current_step_info().description.to_string())
                 .style(move |s| {
                     s.font_size(13.0)
@@ -264,6 +350,7 @@ pub fn onboarding_view(
                         .margin_bottom(14.0)
                         .color(config.get().color(LapceColor::EDITOR_DIM))
                 }),
+            // ── Dynamic step content ─────────────────────────────────────
             dyn_stack(
                 move || std::iter::once(data_stack.current_step.get()),
                 move |step| *step,
@@ -288,6 +375,7 @@ pub fn onboarding_view(
                 },
             )
             .style(|s| s.width_full()),
+            // ── Navigation: Skip | spacer | Next/Finish ─────────────────
             h_stack((
                 {
                     let data = data_nav.clone();
@@ -300,7 +388,16 @@ pub fn onboarding_view(
                             s.padding_horiz(20.0)
                                 .padding_vert(10.0)
                                 .cursor(CursorStyle::Pointer)
-                                .color(config.color(LapceColor::EDITOR_DIM))
+                                .font_size(13.0)
+                                .color(config.color(LapceColor::EDITOR_DIM).with_alpha(0.7))
+                                .border(1.0)
+                                .border_color(Color::TRANSPARENT)
+                                .border_radius(4.0)
+                                .hover(|s| {
+                                    s.color(Color::from_rgb8(180, 200, 230))
+                                        .border_color(Color::from_rgba8(120, 140, 170, 80))
+                                        .background(Color::from_rgba8(255, 255, 255, 8))
+                                })
                         })
                 },
                 empty().style(|s| s.flex_grow(1.0)),
@@ -329,6 +426,10 @@ pub fn onboarding_view(
                             .border_radius(4.0)
                             .cursor(CursorStyle::Pointer)
                             .color(config.color(LapceColor::EDITOR_FOREGROUND))
+                            .hover(|s| {
+                                s.background(Color::from_rgba8(74, 158, 255, 30))
+                                    .border_color(Color::from_rgba8(74, 158, 255, 120))
+                            })
                     })
                 },
             ))
@@ -480,22 +581,64 @@ fn finish_step(
 ) -> impl View {
     let backend = keyring_backend_label();
     v_stack((
-        label(move || format!("Provider: {}", data.chosen_provider.get())).style(
-            move |s| {
+        // ── Large green checkmark icon ───────────────────────────────
+        label(|| "\u{2713}".to_string()).style(move |s| {
+            s.font_size(42.0)
+                .font_bold()
+                .color(Color::from_rgb8(80, 200, 120))
+                .margin_bottom(4.0)
+        }),
+        // ── "Setup Complete" header ──────────────────────────────────
+        label(|| "Setup Complete".to_string()).style(move |s| {
+            s.font_size(16.0)
+                .font_bold()
+                .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
+                .margin_bottom(8.0)
+        }),
+        // ── Separator line ───────────────────────────────────────────
+        empty().style(move |s| {
+            s.width_full()
+                .height(1.0)
+                .background(config.get().color(LapceColor::LAPCE_BORDER))
+                .margin_bottom(8.0)
+        }),
+        // ── Summary rows ─────────────────────────────────────────────
+        h_stack((
+            label(|| "Provider:".to_string()).style(move |s| {
+                s.font_size(12.0)
+                    .font_bold()
+                    .color(config.get().color(LapceColor::EDITOR_DIM))
+                    .min_width(70.0)
+            }),
+            label(move || data.chosen_provider.get()).style(move |s| {
                 s.font_size(12.0)
                     .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
+            }),
+        ))
+        .style(|s| s.items_center().gap(8.0)),
+        h_stack((
+            label(|| "Mode:".to_string()).style(move |s| {
+                s.font_size(12.0)
+                    .font_bold()
+                    .color(config.get().color(LapceColor::EDITOR_DIM))
+                    .min_width(70.0)
+            }),
+            label(move || data.chosen_mode.get()).style(move |s| {
+                s.font_size(12.0)
+                    .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
+            }),
+        ))
+        .style(|s| s.items_center().gap(8.0)),
+        // ── Secrets info ─────────────────────────────────────────────
+        label(move || format!("Secrets are stored in {}.", backend)).style(
+            move |s| {
+                s.font_size(11.0)
+                    .color(config.get().color(LapceColor::EDITOR_DIM))
+                    .margin_top(6.0)
             },
         ),
-        label(move || format!("Mode: {}", data.chosen_mode.get())).style(move |s| {
-            s.font_size(12.0)
-                .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
-        }),
-        label(move || format!("Secrets are stored in {backend}.")).style(move |s| {
-            s.font_size(12.0)
-                .color(config.get().color(LapceColor::EDITOR_DIM))
-        }),
     ))
-    .style(|s| s.width_full().gap(8.0))
+    .style(|s| s.width_full().gap(6.0).items_center())
 }
 
 /// Secure API key input with masked text + show/hide toggle
@@ -511,8 +654,6 @@ fn provider_secret_input(
 
     // We use a display signal: when hidden, we show dots; when visible, the real value.
     // The actual value signal always holds the real key.
-    let display_value: RwSignal<String> = floem::reactive::create_rw_signal(String::new());
-
     v_stack((
         label(move || title.to_string()).style(move |s| {
             s.font_size(12.0)
