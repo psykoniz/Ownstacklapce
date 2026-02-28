@@ -101,6 +101,7 @@ impl CoreToolkit {
                         .request(
                             command.to_string(),
                             "Command requires user approval".to_string(),
+                            None,
                         )
                         .await;
                     if !approved {

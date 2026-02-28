@@ -95,6 +95,7 @@ impl GitToolkit {
                         .request(
                             full_command.clone(),
                             "Git command requires user approval".to_string(),
+                            None,
                         )
                         .await;
                     if !approved {

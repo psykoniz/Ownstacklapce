@@ -128,10 +128,25 @@ pub enum OwnStackRpc {
         tool_call_delta: Option<serde_json::Value>,
         finish_reason: Option<String>,
     },
-    /// UI prompt for policy decision (Ask mode)
-    PolicyPrompt { command: String, reason: String },
-    /// User response to a policy prompt
-    PolicyResponse { approved: bool },
+    /// UI prompt for policy decision (Ask mode).
+    /// `correlation_id` must be echoed in the matching `PolicyResponse`.
+    /// `timeout_secs` tells the UI how long to wait before auto-deny.
+    PolicyPrompt {
+        command: String,
+        reason: String,
+        /// Optional CWD for display purposes.
+        cwd: Option<String>,
+        /// Unique id for this prompt — matched in PolicyResponse.
+        correlation_id: String,
+        /// Seconds before the UI auto-denies (0 means no forced timeout).
+        timeout_secs: u32,
+    },
+    /// User (or auto-timeout) response to a policy prompt.
+    PolicyResponse {
+        approved: bool,
+        /// Must match the `correlation_id` from the corresponding PolicyPrompt.
+        correlation_id: String,
+    },
     /// Audit event notification
     AuditEvent { json_entry: String },
     /// Tool execution result

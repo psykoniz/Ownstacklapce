@@ -2474,12 +2474,22 @@ impl WindowTabData {
                             json_entry
                         ));
                     }
-                    OwnStackRpc::PolicyPrompt { command, reason } => {
+                    OwnStackRpc::PolicyPrompt {
+                        command,
+                        reason,
+                        cwd,
+                        correlation_id,
+                        timeout_secs,
+                    } => {
                         self.ownstack_status.set_active(true);
                         self.ownstack_status.set_status("awaiting approval");
+                        let cwd_display = cwd
+                            .as_deref()
+                            .map(|c| format!("\nCWD: {}", c))
+                            .unwrap_or_default();
                         self.ownstack_chat.add_system_message(format!(
-                            "Approval required (Ask mode):\n{}\nReason: {}",
-                            command, reason
+                            "Approval required (Ask mode):\n{}{}\nReason: {}",
+                            command, cwd_display, reason
                         ));
                         self.show_message(
                             "OwnStack",
@@ -2505,21 +2515,27 @@ impl WindowTabData {
                         let status_approve = self.ownstack_status.clone();
                         let status_deny = self.ownstack_status.clone();
                         let status_timeout = self.ownstack_status.clone();
+                        let corr_approve = correlation_id.clone();
+                        let corr_deny = correlation_id.clone();
+                        let corr_timeout = correlation_id.clone();
 
-                        self.alert_data
-                            .title
-                            .set("OwnStack approval required".to_string());
-                        self.alert_data
-                            .msg
-                            .set(format!("{command}\n\nReason: {reason}"));
+                        let title = format!(
+                            "OwnStack approval required ({}s)",
+                            timeout_secs
+                        );
+                        self.alert_data.title.set(title);
+                        self.alert_data.msg.set(format!(
+                            "{command}{cwd_display}\n\nReason: {reason}"
+                        ));
 
                         self.alert_data.buttons.set(vec![
                             AlertButton {
-                                text: "Approve".to_string(),
+                                text: "Allow".to_string(),
                                 action: Rc::new(move || {
                                     proxy_approve.ownstack(
                                         OwnStackRpc::PolicyResponse {
                                             approved: true,
+                                            correlation_id: corr_approve.clone(),
                                         },
                                     );
                                     status_approve.set_active(false);
@@ -2533,6 +2549,7 @@ impl WindowTabData {
                                     proxy_deny.ownstack(
                                         OwnStackRpc::PolicyResponse {
                                             approved: false,
+                                            correlation_id: corr_deny.clone(),
                                         },
                                     );
                                     status_deny.set_active(false);
@@ -2544,13 +2561,17 @@ impl WindowTabData {
 
                         self.alert_data.active.set(true);
 
-                        // Auto-dismiss after 300s and default to deny if still pending.
-                        exec_after(Duration::from_secs(300), move |_| {
+                        // Auto-dismiss after `timeout_secs` and default to deny.
+                        let auto_secs = if timeout_secs == 0 { 15 } else { timeout_secs };
+                        exec_after(Duration::from_secs(u64::from(auto_secs)), move |_| {
                             if active_timeout.get_untracked()
                                 && policy_prompt_seq.get_untracked() == seq
                             {
                                 proxy_timeout.ownstack(
-                                    OwnStackRpc::PolicyResponse { approved: false },
+                                    OwnStackRpc::PolicyResponse {
+                                        approved: false,
+                                        correlation_id: corr_timeout.clone(),
+                                    },
                                 );
                                 status_timeout.set_active(false);
                                 status_timeout.set_status("idle");

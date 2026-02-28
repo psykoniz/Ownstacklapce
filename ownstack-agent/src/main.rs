@@ -348,9 +348,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         match serde_json::from_str::<OwnStackRpc>(trimmed) {
                             Ok(rpc) => match rpc {
-                                OwnStackRpc::PolicyResponse { approved } => {
+                                OwnStackRpc::PolicyResponse { approved, correlation_id } => {
                                     if let Some(mgr) = approval_for_reader.as_ref() {
-                                        mgr.resolve(approved).await;
+                                        mgr.resolve(approved, &correlation_id).await;
                                     }
                                 }
                                 OwnStackRpc::AiPrompt { .. }
