@@ -12,6 +12,148 @@ use crate::context::ContextManager;
 use crate::provider::{FinishReason, LlmMessage, LlmProvider, ToolDefinition};
 use crate::toolkits::{ToolResult, Toolkit, ToolkitError};
 
+// ─── Tool-args Safety Constants ────────────────────────────────────
+
+/// Maximum allowed byte size for raw tool-call arguments.
+/// If the model sends more than this it is almost certainly truncated.
+const TOOL_ARGS_MAX_BYTES: usize = 16 * 1024; // 16 KB
+
+/// How many times the *same* parse-error signature may repeat before
+/// the orchestrator aborts with a controlled error instead of looping.
+const REPEATED_PARSE_ERROR_LIMIT: u32 = 3;
+
+// ─── Orchestrator Error ─────────────────────────────────────────────
+
+/// Structured error variants returned by the orchestrator.
+#[derive(Debug, Clone)]
+pub enum OrchestratorError {
+    /// Tool arguments are repeated-invalid: abort before timeout.
+    RepeatedInvalidToolArgs {
+        model: String,
+        tool_name: String,
+        count: u32,
+        /// Safe excerpt of the offending input (≤200 chars).
+        input_excerpt: String,
+    },
+    /// Tool arguments exceed the byte-size limit.
+    ToolArgsTooLarge {
+        tool_name: String,
+        actual_bytes: usize,
+        limit_bytes: usize,
+    },
+    /// Generic orchestrator error (budget, LLM, …).
+    General(String),
+}
+
+impl std::fmt::Display for OrchestratorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RepeatedInvalidToolArgs { model, tool_name, count, input_excerpt } => write!(
+                f,
+                "Orchestrator aborted: tool '{}' received invalid/truncated JSON args \
+                 {} time(s) in a row (model: {}). \
+                 Excerpt: {:?}. \
+                 Recommendation: switch model or reduce tool payload.",
+                tool_name, count, model, input_excerpt
+            ),
+            Self::ToolArgsTooLarge { tool_name, actual_bytes, limit_bytes } => write!(
+                f,
+                "Tool '{}' args too large ({} bytes > {} byte limit), \
+                 likely truncated by model/provider.",
+                tool_name, actual_bytes, limit_bytes
+            ),
+            Self::General(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+impl From<String> for OrchestratorError {
+    fn from(s: String) -> Self {
+        Self::General(s)
+    }
+}
+
+// ─── Parse-Error Signature ──────────────────────────────────────────
+
+/// Identifies a repeated tool-parse failure.
+/// Two failures have the same signature if (tool_name, error_kind, args_prefix)
+/// are identical, which indicates a stuck model loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParseErrSig {
+    tool_name: String,
+    error_kind: String,
+    /// First 64 chars of the offending raw args string.
+    args_prefix: String,
+}
+
+/// Tracks consecutive parse-error repetitions.
+#[derive(Debug, Default)]
+struct ParseErrorTracker {
+    last_sig: Option<ParseErrSig>,
+    count: u32,
+}
+
+impl ParseErrorTracker {
+    /// Record one occurrence of `sig`.  Returns the new consecutive count.
+    fn record(&mut self, sig: ParseErrSig) -> u32 {
+        if self.last_sig.as_ref() == Some(&sig) {
+            self.count += 1;
+        } else {
+            self.last_sig = Some(sig);
+            self.count = 1;
+        }
+        self.count
+    }
+
+    /// Reset on a successful parse.
+    fn reset(&mut self) {
+        self.last_sig = None;
+        self.count = 0;
+    }
+}
+
+// ─── Helper: validate tool args ────────────────────────────────────
+
+/// Returns `Ok(parsed_value)` or an `OrchestratorError` that the caller
+/// should record in the parse-error tracker and potentially abort on.
+fn validate_and_parse_tool_args(
+    tool_name: &str,
+    args_str: &str,
+) -> Result<serde_json::Value, OrchestratorError> {
+    // 1. Size guard
+    if args_str.len() > TOOL_ARGS_MAX_BYTES {
+        return Err(OrchestratorError::ToolArgsTooLarge {
+            tool_name: tool_name.to_string(),
+            actual_bytes: args_str.len(),
+            limit_bytes: TOOL_ARGS_MAX_BYTES,
+        });
+    }
+
+    // 2. Parse guard
+    serde_json::from_str(args_str).map_err(|e| {
+        // Classify the error kind coarsely for signature matching
+        let error_kind = if e.is_eof() {
+            "unexpected_eof"
+        } else if e.is_syntax() {
+            "syntax_error"
+        } else if e.is_data() {
+            "data_error"
+        } else {
+            "other"
+        };
+
+        let args_prefix: String = args_str.chars().take(64).collect();
+        // We piggy-back the signature data in a temporary error – the
+        // caller decides whether to abort or continue.
+        OrchestratorError::RepeatedInvalidToolArgs {
+            model: String::new(), // filled in by caller
+            tool_name: tool_name.to_string(),
+            count: 0,             // filled in by caller
+            input_excerpt: format!("{}: {:?}", error_kind, args_prefix),
+        }
+    })
+}
+
 // ─── Budget ────────────────────────────────────────────────────────
 
 /// Budget limits per GEMINI.md §6.8
@@ -128,6 +270,8 @@ pub struct AgentOrchestrator {
     index: crate::index::SemanticIndex,
     current_mission: Option<Mission>,
     started_at: Option<Instant>,
+    /// Tracks consecutive identical tool-parse errors for anti-loop detection.
+    parse_error_tracker: ParseErrorTracker,
 }
 
 impl AgentOrchestrator {
@@ -149,6 +293,7 @@ impl AgentOrchestrator {
             index,
             current_mission: None,
             started_at: None,
+            parse_error_tracker: ParseErrorTracker::default(),
         }
     }
 
@@ -487,15 +632,61 @@ impl AgentOrchestrator {
                     for idx in sorted_indices {
                         let (id, name, args_str) =
                             tool_calls_deltas.get(idx).unwrap();
-                        let arguments: serde_json::Value =
-                            serde_json::from_str(args_str)
-                                .unwrap_or(serde_json::Value::Null);
+                        let tool_name = name.clone().unwrap_or_default();
+
+                        let arguments = match validate_and_parse_tool_args(&tool_name, args_str) {
+                            Ok(v) => {
+                                self.parse_error_tracker.reset();
+                                v
+                            }
+                            Err(parse_err) => {
+                                // Classify and build the signature for dedup
+                                let (error_kind, args_prefix) = match &parse_err {
+                                    OrchestratorError::ToolArgsTooLarge { .. } => (
+                                        "too_large".to_string(),
+                                        args_str.chars().take(64).collect(),
+                                    ),
+                                    OrchestratorError::RepeatedInvalidToolArgs { input_excerpt, .. } => (
+                                        input_excerpt.split(':').next().unwrap_or("parse_error").to_string(),
+                                        args_str.chars().take(64).collect(),
+                                    ),
+                                    _ => ("unknown".to_string(), String::new()),
+                                };
+
+                                let sig = ParseErrSig {
+                                    tool_name: tool_name.clone(),
+                                    error_kind,
+                                    args_prefix,
+                                };
+                                let count = self.parse_error_tracker.record(sig);
+                                self.counters.consecutive_failures += 1;
+
+                                if count >= REPEATED_PARSE_ERROR_LIMIT {
+                                    let excerpt: String = args_str.chars().take(200).collect();
+                                    let err = OrchestratorError::RepeatedInvalidToolArgs {
+                                        model: self.provider.name().to_string(),
+                                        tool_name: tool_name.clone(),
+                                        count,
+                                        input_excerpt: excerpt,
+                                    };
+                                    warn!("{}", err);
+                                    return Err(err.to_string());
+                                }
+
+                                warn!(
+                                    "Tool '{}' parse error (attempt {}/{}): {}",
+                                    tool_name, count, REPEATED_PARSE_ERROR_LIMIT, parse_err
+                                );
+                                // Use Null as fallback — tool will return an error
+                                serde_json::Value::Null
+                            }
+                        };
 
                         tool_calls.push(crate::provider::ToolCall {
                             id: id
                                 .clone()
                                 .unwrap_or_else(|| format!("call_{}", idx)),
-                            name: name.clone().unwrap_or_default(),
+                            name: tool_name,
                             arguments,
                         });
                     }
@@ -515,7 +706,7 @@ impl AgentOrchestrator {
                     });
 
                     let results = futures::future::join_all(futures).await;
-                    
+
                     for (tool_call, result) in results {
                         self.counters.tool_calls += 1;
                         if !result.success {
@@ -615,6 +806,41 @@ impl AgentOrchestrator {
                             "Executing: {} ({})",
                             tool_call.name, tool_call.arguments
                         );
+
+                        // Size guard on already-parsed args (re-serialise to measure)
+                        let args_serialised = tool_call.arguments.to_string();
+                        if args_serialised.len() > TOOL_ARGS_MAX_BYTES {
+                            let sig = ParseErrSig {
+                                tool_name: tool_call.name.clone(),
+                                error_kind: "too_large".to_string(),
+                                args_prefix: args_serialised.chars().take(64).collect(),
+                            };
+                            let count = self.parse_error_tracker.record(sig);
+                            self.counters.consecutive_failures += 1;
+                            let err = OrchestratorError::ToolArgsTooLarge {
+                                tool_name: tool_call.name.clone(),
+                                actual_bytes: args_serialised.len(),
+                                limit_bytes: TOOL_ARGS_MAX_BYTES,
+                            };
+                            warn!("{} (consecutive: {})", err, count);
+                            if count >= REPEATED_PARSE_ERROR_LIMIT {
+                                let abort = OrchestratorError::RepeatedInvalidToolArgs {
+                                    model: self.provider.name().to_string(),
+                                    tool_name: tool_call.name.clone(),
+                                    count,
+                                    input_excerpt: args_serialised.chars().take(200).collect(),
+                                };
+                                return Err(abort.to_string());
+                            }
+                            let result_msg = LlmMessage::tool_result(
+                                &tool_call.id,
+                                format!("{{\"error\":\"{}\"}}", err),
+                            );
+                            self.context.add_message(result_msg);
+                            continue;
+                        }
+                        self.parse_error_tracker.reset();
+
                         let result = self
                             .execute_tool(&tool_call.name, tool_call.arguments)
                             .await;
@@ -748,6 +974,7 @@ impl AgentOrchestrator {
         self.context.clear();
         self.counters = BudgetCounters::default();
         self.current_mission = None;
+        self.parse_error_tracker = ParseErrorTracker::default();
     }
 }
 
@@ -973,6 +1200,311 @@ mod tests {
             );
             let r: CriticResult = serde_json::from_str(&json).unwrap();
             assert_eq!(r.feedback, format!("feedback_{}", i));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // C1 — Unit tests: validate_and_parse_tool_args + ParseErrorTracker
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn tool_args_valid_json_parses_ok() {
+        let v = validate_and_parse_tool_args("exec", r#"{"cmd":"echo","args":["hello"]}"#);
+        assert!(v.is_ok());
+        assert_eq!(v.unwrap()["cmd"], "echo");
+    }
+
+    #[test]
+    fn tool_args_truncated_json_returns_err() {
+        let truncated = r#"{"cmd":"echo","#;
+        let err = validate_and_parse_tool_args("exec", truncated).unwrap_err();
+        assert!(
+            matches!(err, OrchestratorError::RepeatedInvalidToolArgs { .. }),
+            "Expected RepeatedInvalidToolArgs"
+        );
+        if let OrchestratorError::RepeatedInvalidToolArgs { tool_name, .. } = err {
+            assert_eq!(tool_name, "exec");
+        }
+    }
+
+    #[test]
+    fn tool_args_trailing_chars_returns_err() {
+        let bad = r#"{"cmd":"echo"}trailing garbage"#;
+        let err = validate_and_parse_tool_args("exec", bad).unwrap_err();
+        assert!(matches!(err, OrchestratorError::RepeatedInvalidToolArgs { .. }));
+    }
+
+    #[test]
+    fn tool_args_empty_string_returns_err() {
+        let err = validate_and_parse_tool_args("exec", "").unwrap_err();
+        assert!(matches!(err, OrchestratorError::RepeatedInvalidToolArgs { .. }));
+    }
+
+    #[test]
+    fn tool_args_over_size_limit_returns_too_large() {
+        let big = "x".repeat(TOOL_ARGS_MAX_BYTES + 1);
+        let err = validate_and_parse_tool_args("exec", &big).unwrap_err();
+        assert!(
+            matches!(err, OrchestratorError::ToolArgsTooLarge { .. }),
+            "Expected ToolArgsTooLarge"
+        );
+        if let OrchestratorError::ToolArgsTooLarge { actual_bytes, limit_bytes, .. } = err {
+            assert!(actual_bytes > limit_bytes);
+            assert_eq!(limit_bytes, TOOL_ARGS_MAX_BYTES);
+        }
+    }
+
+    #[test]
+    fn tool_args_16kb_plus_one_triggers_too_large() {
+        let oversized = "a".repeat(16 * 1024 + 1);
+        let err = validate_and_parse_tool_args("my_tool", &oversized).unwrap_err();
+        assert!(matches!(err, OrchestratorError::ToolArgsTooLarge { .. }));
+    }
+
+    #[test]
+    fn parse_error_tracker_increments_same_sig() {
+        let mut tracker = ParseErrorTracker::default();
+        let sig = ParseErrSig {
+            tool_name: "exec".to_string(),
+            error_kind: "unexpected_eof".to_string(),
+            args_prefix: r#"{"cmd":"echo","#.to_string(),
+        };
+        assert_eq!(tracker.record(sig.clone()), 1);
+        assert_eq!(tracker.record(sig.clone()), 2);
+        assert_eq!(tracker.record(sig.clone()), 3);
+    }
+
+    #[test]
+    fn parse_error_tracker_resets_on_different_sig() {
+        let mut tracker = ParseErrorTracker::default();
+        let sig_a = ParseErrSig {
+            tool_name: "exec".to_string(),
+            error_kind: "unexpected_eof".to_string(),
+            args_prefix: "aaa".to_string(),
+        };
+        let sig_b = ParseErrSig {
+            tool_name: "exec".to_string(),
+            error_kind: "syntax_error".to_string(),
+            args_prefix: "bbb".to_string(),
+        };
+        tracker.record(sig_a.clone());
+        tracker.record(sig_a);
+        let count = tracker.record(sig_b);
+        assert_eq!(count, 1, "Different signature should reset count to 1");
+    }
+
+    #[test]
+    fn parse_error_tracker_reset_clears() {
+        let mut tracker = ParseErrorTracker::default();
+        let sig = ParseErrSig {
+            tool_name: "t".to_string(),
+            error_kind: "e".to_string(),
+            args_prefix: "p".to_string(),
+        };
+        tracker.record(sig.clone());
+        tracker.record(sig.clone());
+        tracker.reset();
+        assert_eq!(tracker.record(sig), 1);
+    }
+
+    #[test]
+    fn parse_tracker_reaches_limit_exactly() {
+        let mut tracker = ParseErrorTracker::default();
+        let sig = ParseErrSig {
+            tool_name: "exec".to_string(),
+            error_kind: "unexpected_eof".to_string(),
+            args_prefix: r#"{"cmd":"#.to_string(),
+        };
+        for i in 1..=REPEATED_PARSE_ERROR_LIMIT {
+            let count = tracker.record(sig.clone());
+            assert_eq!(count, i);
+        }
+        assert!(tracker.count >= REPEATED_PARSE_ERROR_LIMIT);
+    }
+
+    #[test]
+    fn orchestrator_error_repeated_display_contains_key_info() {
+        let err = OrchestratorError::RepeatedInvalidToolArgs {
+            model: "llama-3.3-70b".to_string(),
+            tool_name: "exec".to_string(),
+            count: 3,
+            input_excerpt: r#"{"cmd":"echo","#.to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("exec"));
+        assert!(msg.contains("3"));
+        assert!(msg.contains("llama-3.3-70b"));
+        assert!(msg.contains("switch model"));
+        assert!(!msg.contains('\n'), "Error message should be single-line safe");
+    }
+
+    #[test]
+    fn orchestrator_error_too_large_display_contains_sizes() {
+        let err = OrchestratorError::ToolArgsTooLarge {
+            tool_name: "read_file".to_string(),
+            actual_bytes: 20_000,
+            limit_bytes: TOOL_ARGS_MAX_BYTES,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("read_file"));
+        assert!(msg.contains("20000"));
+        assert!(msg.contains("truncated"));
+    }
+
+    #[test]
+    fn fixture_stream_error_message_is_stable() {
+        // C2: fixture — error message must be stable (no timestamps/addresses)
+        let err = OrchestratorError::RepeatedInvalidToolArgs {
+            model: "meta-llama/llama-3.3-70b-instruct".to_string(),
+            tool_name: "exec".to_string(),
+            count: REPEATED_PARSE_ERROR_LIMIT,
+            input_excerpt: r#"{"cmd":"echo","args":["test"]"#.chars().take(200).collect(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("exec"));
+        assert!(msg.contains("meta-llama"));
+        assert!(msg.contains(&REPEATED_PARSE_ERROR_LIMIT.to_string()));
+        assert!(msg.contains("switch model"));
+        assert!(msg.contains("reduce tool payload"));
+        // No time-dependent content
+        assert!(!msg.contains('\n'));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // C2 — Integration: mock provider with oversized tool args
+    //      Verifies orchestrator aborts (no infinite loop)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn orchestrator_aborts_on_repeated_large_tool_args() {
+        use async_trait::async_trait;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct BrokenToolProvider {
+            call_count: Arc<AtomicU32>,
+        }
+
+        #[async_trait]
+        impl crate::provider::LlmProvider for BrokenToolProvider {
+            async fn complete(
+                &self,
+                _messages: Vec<crate::provider::LlmMessage>,
+                _tools: Option<Vec<crate::provider::ToolDefinition>>,
+                _model_override: Option<String>,
+            ) -> Result<crate::provider::LlmResponse, crate::provider::ProviderError> {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                // Always return oversized tool args
+                Ok(crate::provider::LlmResponse {
+                    content: None,
+                    tool_calls: vec![crate::provider::ToolCall {
+                        id: "call_bad".to_string(),
+                        name: "exec".to_string(),
+                        arguments: serde_json::json!({
+                            "cmd": "x".repeat(TOOL_ARGS_MAX_BYTES + 100)
+                        }),
+                    }],
+                    finish_reason: crate::provider::FinishReason::ToolCalls,
+                    usage: None,
+                })
+            }
+
+            fn name(&self) -> &str {
+                "broken-llama-mock"
+            }
+        }
+
+        let call_counter = Arc::new(AtomicU32::new(0));
+        let provider = Arc::new(BrokenToolProvider {
+            call_count: Arc::clone(&call_counter),
+        });
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut orc = AgentOrchestrator::new(provider, tmp.path().to_path_buf(), 8192);
+        // Override budget: let anti-loop guard fire, not consecutive_failures
+        orc.set_budget(AgentBudget {
+            max_steps: 200,
+            max_tool_calls: 200,
+            max_llm_calls: 200,
+            max_files_modified: 20,
+            max_duration_minutes: 10,
+            max_consecutive_failures: 200,
+        });
+
+        let result = orc.process("do something").await;
+        assert!(result.is_err(), "Should abort on repeated large args");
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.contains("too large") || err_msg.contains("Orchestrator aborted"),
+            "Expected size/anti-loop error, got: {}",
+            err_msg
+        );
+
+        // The loop MUST terminate within LIMIT + small overhead (not run forever)
+        let calls = call_counter.load(Ordering::SeqCst);
+        assert!(
+            calls <= REPEATED_PARSE_ERROR_LIMIT + 3,
+            "Too many provider calls ({}) — anti-loop guard not working",
+            calls
+        );
+    }
+
+    #[tokio::test]
+    async fn orchestrator_normal_flow_not_affected_by_guard() {
+        use async_trait::async_trait;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct GoodProvider {
+            calls: Arc<AtomicU32>,
+        }
+
+        #[async_trait]
+        impl crate::provider::LlmProvider for GoodProvider {
+            async fn complete(
+                &self,
+                _messages: Vec<crate::provider::LlmMessage>,
+                _tools: Option<Vec<crate::provider::ToolDefinition>>,
+                _model_override: Option<String>,
+            ) -> Result<crate::provider::LlmResponse, crate::provider::ProviderError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Ok(crate::provider::LlmResponse {
+                        content: None,
+                        tool_calls: vec![crate::provider::ToolCall {
+                            id: "call_valid".to_string(),
+                            name: "echo".to_string(),
+                            arguments: serde_json::json!({"text": "hello"}),
+                        }],
+                        finish_reason: crate::provider::FinishReason::ToolCalls,
+                        usage: None,
+                    })
+                } else {
+                    Ok(crate::provider::LlmResponse {
+                        content: Some("done".to_string()),
+                        tool_calls: vec![],
+                        finish_reason: crate::provider::FinishReason::Stop,
+                        usage: None,
+                    })
+                }
+            }
+
+            fn name(&self) -> &str {
+                "good-mock"
+            }
+        }
+
+        let provider = Arc::new(GoodProvider { calls: Arc::new(AtomicU32::new(0)) });
+        let tmp = tempfile::tempdir().unwrap();
+        let mut orc = AgentOrchestrator::new(provider, tmp.path().to_path_buf(), 8192);
+        let result = orc.process("do something valid").await;
+        // Should return Ok or a tool-execution failure — NOT an anti-loop error
+        if let Err(ref e) = result {
+            assert!(
+                !e.contains("Orchestrator aborted"),
+                "Should not trigger anti-loop for valid args, got: {}",
+                e
+            );
         }
     }
 }
