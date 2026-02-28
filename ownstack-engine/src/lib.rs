@@ -15,7 +15,7 @@ pub use audit::{AuditEntry, AuditLogger};
 pub use path_safety::{PathError, PathValidator};
 pub use policy::{PolicyDecision, PolicyEngine};
 pub use sandbox::docker::DockerSandbox;
-pub use sandbox::process::ProcessSandbox;
+pub use sandbox::process::{ProcessSandbox, WorkspaceSandbox};
 pub use sandbox::{Sandbox, SandboxLevel};
 pub use security::SecurityContext;
 pub use tool_result::ToolResult;

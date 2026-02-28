@@ -8,6 +8,8 @@ pub mod linux;
 pub mod macos;
 pub mod process;
 
+pub use process::WorkspaceSandbox;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SandboxLevel {
     /// Level 1: Light isolation (standard process env_clear)

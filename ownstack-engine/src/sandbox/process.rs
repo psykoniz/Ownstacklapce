@@ -166,6 +166,75 @@ mod windows_job {
 
 pub struct ProcessSandbox;
 
+// ─── H1: Workspace-scoped Sandbox ────────────────────────────────────────────
+
+/// A sandbox that enforces CWD containment within a workspace root before
+/// delegating execution to `ProcessSandbox`.
+///
+/// Implements H1 (path safety) for every command:
+/// - CWD is canonicalized and verified to be inside `workspace_root`.
+/// - Symlinks are resolved (canonicalize) and re-checked to prevent traversal.
+/// - Commands that would write outside the workspace are rejected at CWD level.
+pub struct WorkspaceSandbox {
+    inner: ProcessSandbox,
+    workspace_root: std::path::PathBuf,
+}
+
+impl WorkspaceSandbox {
+    /// Create a `WorkspaceSandbox` rooted at `workspace_root`.
+    ///
+    /// `workspace_root` is canonicalized on construction; if that fails the
+    /// original path is used as-is.
+    pub fn new(workspace_root: std::path::PathBuf) -> Self {
+        let root = workspace_root
+            .canonicalize()
+            .unwrap_or(workspace_root);
+        Self {
+            inner: ProcessSandbox,
+            workspace_root: root,
+        }
+    }
+
+    /// Returns `true` if `path` (after canonicalization) is inside the workspace.
+    fn path_is_safe(&self, path: &Path) -> bool {
+        // Resolve symlinks + normalise; fall back to lexical path if not on disk yet
+        let canonical = path.canonicalize().unwrap_or_else(|_| {
+            // For paths that don't exist yet, resolve lexically
+            self.workspace_root.join(
+                path.strip_prefix(&self.workspace_root).unwrap_or(path),
+            )
+        });
+        canonical.starts_with(&self.workspace_root)
+    }
+}
+
+#[async_trait::async_trait]
+impl Sandbox for WorkspaceSandbox {
+    async fn exec(
+        &self,
+        command_str: &str,
+        cwd: &Path,
+        level: SandboxLevel,
+    ) -> ToolResult {
+        // H1: Validate CWD before execution
+        if !self.path_is_safe(cwd) {
+            return ToolResult::failure(
+                format!(
+                    "Security: CWD '{}' is outside the allowed workspace '{}'",
+                    cwd.display(),
+                    self.workspace_root.display()
+                ),
+                None,
+            );
+        }
+
+        // H3: Policy integration is handled upstream (CoreToolkit → PolicyEngine).
+        // The sandbox itself does not re-run policy checks; it enforces at path level.
+
+        self.inner.exec(command_str, cwd, level).await
+    }
+}
+
 fn split_command(command_str: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
@@ -455,6 +524,121 @@ impl Sandbox for ProcessSandbox {
                 ToolResult::failure(format!("Failed to spawn process: {}", e), None)
             }
         }
+    }
+}
+
+// ─── H1: WorkspaceSandbox path-safety tests ──────────────────────────────────
+#[cfg(test)]
+mod workspace_sandbox_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp_workspace() -> PathBuf {
+        // Use /tmp/<unique> so canonicalize() succeeds
+        let dir = std::env::temp_dir().join(format!(
+            "ownstack_ws_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    // H1-1: CWD inside workspace → allowed (returns ToolResult, not a security rejection)
+    #[tokio::test]
+    async fn h1_cwd_inside_workspace_is_allowed() {
+        let ws = temp_workspace();
+        let sandbox = WorkspaceSandbox::new(ws.clone());
+        // Use a benign command; success/fail is about the command, NOT the CWD guard
+        let result = sandbox.exec("echo ok", &ws, SandboxLevel::Light).await;
+        // If we got a security rejection we would see the security error message
+        assert!(
+            !result.stderr.contains("Security: CWD"),
+            "Unexpected security rejection for in-workspace CWD: {}",
+            result.stderr
+        );
+    }
+
+    // H1-2: CWD outside workspace → rejected with security message
+    #[tokio::test]
+    async fn h1_cwd_outside_workspace_is_rejected() {
+        let ws = temp_workspace();
+        let sandbox = WorkspaceSandbox::new(ws.clone());
+        let outside = PathBuf::from("/tmp");
+        let result = sandbox.exec("echo pwned", &outside, SandboxLevel::Light).await;
+        assert!(
+            !result.success,
+            "Expected failure for out-of-workspace CWD"
+        );
+        assert!(
+            result.stderr.contains("Security: CWD"),
+            "Expected security rejection message, got: {}",
+            result.stderr
+        );
+    }
+
+    // H1-3: CWD = workspace root exactly → allowed
+    #[tokio::test]
+    async fn h1_cwd_equal_to_workspace_root_is_allowed() {
+        let ws = temp_workspace();
+        let sandbox = WorkspaceSandbox::new(ws.clone());
+        let result = sandbox.exec("echo root", &ws, SandboxLevel::Light).await;
+        assert!(
+            !result.stderr.contains("Security: CWD"),
+            "Workspace root itself should be allowed: {}",
+            result.stderr
+        );
+    }
+
+    // H1-4: CWD is a subdirectory of workspace root → allowed
+    #[tokio::test]
+    async fn h1_cwd_subdir_of_workspace_is_allowed() {
+        let ws = temp_workspace();
+        let sub = ws.join("src").join("deep");
+        std::fs::create_dir_all(&sub).unwrap();
+        let sandbox = WorkspaceSandbox::new(ws.clone());
+        let result = sandbox.exec("echo sub", &sub, SandboxLevel::Light).await;
+        assert!(
+            !result.stderr.contains("Security: CWD"),
+            "Subdirectory should be allowed: {}",
+            result.stderr
+        );
+    }
+
+    // H1-5: path_is_safe is false for paths that don't start with the workspace root
+    #[test]
+    fn h1_path_is_safe_rejects_traversal() {
+        let ws = temp_workspace();
+        let sandbox = WorkspaceSandbox::new(ws.clone());
+        assert!(
+            !sandbox.path_is_safe(Path::new("/etc")),
+            "/etc should not be safe within a temp workspace"
+        );
+        assert!(
+            !sandbox.path_is_safe(Path::new("/")),
+            "/ should not be safe"
+        );
+    }
+
+    // H1-6: path_is_safe is true for paths inside the workspace
+    #[test]
+    fn h1_path_is_safe_accepts_inner_paths() {
+        let ws = temp_workspace();
+        let sandbox = WorkspaceSandbox::new(ws.clone());
+        assert!(sandbox.path_is_safe(&ws), "workspace root itself must be safe");
+        assert!(
+            sandbox.path_is_safe(&ws.join("src")),
+            "child of workspace must be safe"
+        );
+    }
+
+    // H1-7: WorkspaceSandbox is Send + Sync (needed for async contexts)
+    #[test]
+    fn h1_workspace_sandbox_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<WorkspaceSandbox>();
     }
 }
 
