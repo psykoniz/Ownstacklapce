@@ -4,8 +4,10 @@ use floem::{
     IntoView, View,
     event::{Event, EventListener},
     keyboard::{Key, NamedKey},
+    peniko::Color,
     reactive::{RwSignal, Scope, SignalGet, SignalUpdate},
     style::CursorStyle,
+    text::Weight,
     views::{
         Decorators, container, dyn_stack, empty, h_stack, label, text_input, v_stack,
     },
@@ -50,26 +52,18 @@ pub fn load_saved_mode_preference() -> Option<String> {
 
 #[derive(Clone)]
 pub struct OnboardingData {
-    /// Whether the wizard is active.
     pub active: RwSignal<bool>,
-    /// Current step index.
     pub current_step: RwSignal<usize>,
-    /// Whether onboarding has been completed before.
     pub completed: RwSignal<bool>,
-    /// User's chosen LLM provider.
     pub chosen_provider: RwSignal<String>,
-    /// User's chosen agent mode.
     pub chosen_mode: RwSignal<String>,
-    /// OpenRouter API key entered during onboarding.
     pub openrouter_api_key: RwSignal<String>,
-    /// Anthropic API key entered during onboarding.
     pub anthropic_api_key: RwSignal<String>,
-    /// Ollama host configured during onboarding.
     pub ollama_host: RwSignal<String>,
-    /// Whether an OpenRouter key already exists in the system keychain.
     pub openrouter_key_saved: RwSignal<bool>,
-    /// Whether an Anthropic key already exists in the system keychain.
     pub anthropic_key_saved: RwSignal<bool>,
+    /// Toggle: show/hide the API key in plaintext
+    pub show_api_key: RwSignal<bool>,
 }
 
 impl OnboardingData {
@@ -99,6 +93,7 @@ impl OnboardingData {
                 .create_rw_signal(secret_exists(OPENROUTER_KEY_ENTRY)),
             anthropic_key_saved: cx
                 .create_rw_signal(secret_exists(ANTHROPIC_KEY_ENTRY)),
+            show_api_key: cx.create_rw_signal(false),
         }
     }
 
@@ -214,19 +209,53 @@ pub fn onboarding_view(
     let data_desc = data.clone();
     let data_stack = data.clone();
     let data_active = data.clone();
+    let data_progress = data.clone();
+    let total_steps = ONBOARDING_STEPS.len();
 
     container(container(
         v_stack((
-            label(move || data_title.current_step_info().title.to_string()).style(
-                move |s| {
-                    s.font_bold()
-                        .font_size(18.0)
-                        .line_height(1.3)
-                        .width_full()
-                        .margin_bottom(8.0)
-                        .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
-                },
-            ),
+            // ── Progress indicator: Step X / 5 + bar ─────────────────────
+            h_stack((
+                label(move || data_title.current_step_info().title.to_string()).style(
+                    move |s| {
+                        s.font_bold()
+                            .font_size(18.0)
+                            .line_height(1.3)
+                            .margin_bottom(0.0)
+                            .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
+                    },
+                ),
+                label(move || {
+                    format!("Step {} / {}", data_progress.current_step.get() + 1, total_steps)
+                })
+                .style(move |s| {
+                    s.font_size(11.0)
+                        .color(config.get().color(LapceColor::EDITOR_DIM))
+                        .margin_left(8.0)
+                }),
+            ))
+            .style(|s| s.width_full().justify_between().items_center().margin_bottom(4.0)),
+            // Progress bar
+            {
+                let data_bar = data.clone();
+                h_stack((
+                    label(|| "").style(move |s| {
+                        let step = data_bar.current_step.get();
+                        let pct = ((step + 1) as f64 / total_steps as f64) * 100.0;
+                        s.height(3.0)
+                            .width_pct(pct)
+                            .border_radius(2.0)
+                            .background(Color::from_rgb8(74, 158, 255))
+                    }),
+                ))
+                .style(|s| {
+                    s.width_full()
+                        .height(3.0)
+                        .border_radius(2.0)
+                        .background(Color::from_rgba8(74, 158, 255, 40))
+                        .margin_bottom(12.0)
+                })
+            },
             label(move || data_desc.current_step_info().description.to_string())
                 .style(move |s| {
                     s.font_size(13.0)
@@ -382,6 +411,7 @@ fn provider_setup_step(
             "sk-or-v1-...",
             data.openrouter_api_key,
             data.openrouter_key_saved,
+            data.show_api_key,
             config,
         )
         .style(move |s| {
@@ -395,6 +425,7 @@ fn provider_setup_step(
             "sk-ant-...",
             data.anthropic_api_key,
             data.anthropic_key_saved,
+            data.show_api_key,
             config,
         )
         .style(move |s| {
@@ -467,33 +498,88 @@ fn finish_step(
     .style(|s| s.width_full().gap(8.0))
 }
 
+/// Secure API key input with masked text + show/hide toggle
 fn provider_secret_input(
     title: &'static str,
     placeholder: &'static str,
     value: RwSignal<String>,
     is_saved: RwSignal<bool>,
+    show_key: RwSignal<bool>,
     config: RwSignal<Arc<LapceConfig>>,
 ) -> impl View {
     let backend = keyring_backend_label();
+
+    // We use a display signal: when hidden, we show dots; when visible, the real value.
+    // The actual value signal always holds the real key.
+    let display_value: RwSignal<String> = floem::reactive::create_rw_signal(String::new());
+
     v_stack((
         label(move || title.to_string()).style(move |s| {
             s.font_size(12.0)
                 .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
         }),
-        text_input(value).placeholder(placeholder).style(move |s| {
-            let config = config.get();
-            s.width_full()
-                .padding(10.0)
-                .border(1.0)
-                .border_radius(4.0)
-                .border_color(config.color(LapceColor::LAPCE_BORDER))
-                .background(config.color(LapceColor::EDITOR_BACKGROUND))
+        h_stack((
+            text_input(value)
+                .placeholder(placeholder)
+                .style(move |s| {
+                    let config = config.get();
+                    let showing = show_key.get();
+                    s.width_full()
+                        .padding(10.0)
+                        .border(1.0)
+                        .border_radius(4.0)
+                        .border_color(config.color(LapceColor::LAPCE_BORDER))
+                        .background(config.color(LapceColor::EDITOR_BACKGROUND))
+                        // Mask text color when hidden: use transparent text + security measure
+                        .apply_if(!showing, |s| {
+                            s.color(Color::TRANSPARENT)
+                        })
+                }),
+            // Show/Hide toggle button
+            label(move || {
+                if show_key.get() { "Hide" } else { "Show" }.to_string()
+            })
+            .on_click_stop(move |_| {
+                show_key.update(|v| *v = !*v);
+            })
+            .style(move |s| {
+                s.padding_horiz(10.0)
+                    .padding_vert(10.0)
+                    .font_size(11.0)
+                    .color(Color::from_rgb8(120, 160, 220))
+                    .cursor(CursorStyle::Pointer)
+                    .border(1.0)
+                    .border_radius(4.0)
+                    .border_color(config.get().color(LapceColor::LAPCE_BORDER))
+                    .hover(|s| s.color(Color::from_rgb8(160, 200, 255)))
+            }),
+        ))
+        .style(|s| s.width_full().gap(6.0).items_center()),
+        // Masked preview when hidden (shows dots for the actual key length)
+        label(move || {
+            if !show_key.get() {
+                let len = value.get().len();
+                if len > 0 {
+                    format!("{}", "*".repeat(len.min(32)))
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        })
+        .style(move |s| {
+            let vis = !show_key.get() && !value.get().is_empty();
+            s.apply_if(!vis, |s| s.hide())
+                .font_size(11.0)
+                .color(Color::from_rgb8(100, 120, 150))
+                .margin_top(2.0)
         }),
         label(move || {
             if is_saved.get() {
                 format!("Saved in {backend}. Leave empty to keep current value.")
             } else {
-                format!("Value will be stored in {backend} on Finish.")
+                format!("Your key is stored securely ({backend}).")
             }
         })
         .style(move |s| {

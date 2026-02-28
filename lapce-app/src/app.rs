@@ -1300,7 +1300,7 @@ fn editor_tab_content(
                     )
                     .into_any()
                 } else {
-                    text("empty editor").into_any()
+                    crate::ownstack_empty_state::empty_editor_placeholder().into_any()
                 }
             }
             EditorTabChild::DiffEditor(diff_editor_id) => {
@@ -1956,7 +1956,7 @@ fn split_list(
                         )
                         .into_any()
                     } else {
-                        text("empty editor tab").into_any()
+                        crate::ownstack_empty_state::empty_editor_placeholder().into_any()
                     }
                 }
                 SplitContent::Split(split_id) => {
@@ -1971,7 +1971,7 @@ fn split_list(
                         )
                         .into_any()
                     } else {
-                        text("empty split").into_any()
+                        crate::ownstack_empty_state::empty_editor_placeholder().into_any()
                     }
                 }
             };

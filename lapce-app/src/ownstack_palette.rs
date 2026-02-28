@@ -107,25 +107,25 @@ impl OwnStackPaletteData {
     }
 }
 
-/// AI Command Palette bar — shown inline at top of panel when active.
-/// Toggled via `palette_data.active`. Place it at the top of the right panel
-/// or whichever layout host is appropriate.
+/// AI Command Palette — full-screen overlay with click-outside dismiss.
+/// The overlay catches pointer events outside the palette card to close it.
 pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::View {
     use floem::peniko::Color;
     use floem::prelude::SignalGet;
     use floem::style::{CursorStyle, Display, Position};
     use floem::text::Weight;
     use floem::views::{
-        dyn_stack, h_stack, label, text, text_input, v_stack, Decorators,
+        container, dyn_stack, h_stack, label, text, text_input, v_stack, Decorators,
     };
 
     let active = palette_data.active;
     let input = palette_data.input;
 
-    v_stack((
+    // ── Palette card content ─────────────────────────────────────────────
+    let palette_card = v_stack((
         // Row 1: title + hint
         h_stack((
-            text("⚡ OwnStack — AI Command")
+            text("OwnStack — AI Command")
                 .style(|s| s.font_size(13.0).font_weight(Weight::BOLD).color(Color::from_rgb8(180, 220, 255))),
             label(|| "Esc: close  Enter: send").style(|s| {
                 s.font_size(10.0)
@@ -179,8 +179,8 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                 }),
         ))
         .style(|s| s.width_full().items_center().gap(12.0)),
-        
-        // Row 3: suggested quick actions with basic filtering.
+
+        // Row 3: suggested quick actions with basic filtering + "No results" state.
         v_stack((
             text("Suggested Actions").style(|s| s.font_size(10.0).font_weight(Weight::BOLD).color(Color::from_rgb8(120, 140, 180)).padding_top(12.0).padding_bottom(6.0)),
             dyn_stack(
@@ -201,8 +201,8 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         let on_click_data = palette_data.clone();
                         let action_for_click = action.clone();
                         h_stack((
-                            text("✦").style(|s| s.margin_right(8.0).color(Color::from_rgb8(74, 158, 255))),
-                            text(action.title.clone()),
+                            text("+").style(|s| s.margin_right(8.0).color(Color::from_rgb8(74, 158, 255))),
+                            text(action.title),
                         ))
                         .on_click_stop(move |_| {
                             on_click_data
@@ -225,9 +225,34 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                     }
                 },
             ),
+            // "No results" label — shown when query filters out everything
+            label(move || {
+                let query = input.get();
+                let count = suggested_actions()
+                    .iter()
+                    .filter(|a| action_matches_query(a, &query))
+                    .count();
+                if count == 0 && !query.trim().is_empty() {
+                    "No matching actions — press Enter to send as prompt".to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .style(move |s| {
+                let query = input.get();
+                let count = suggested_actions()
+                    .iter()
+                    .filter(|a| action_matches_query(a, &query))
+                    .count();
+                let visible = count == 0 && !query.trim().is_empty();
+                s.apply_if(!visible, |s| s.hide())
+                    .padding_vert(10.0)
+                    .font_size(11.0)
+                    .color(Color::from_rgba8(180, 190, 220, 160))
+            }),
         ))
         .style(|s| s.width_full().gap(6.0)),
-        
+
         // Final Hint
         text("Tip: try '/plan' to switch agent to planning mode").style(|s| {
             s.font_size(10.0)
@@ -235,23 +260,41 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                 .padding_top(12.0)
         }),
     ))
-    .style(move |s| {
-        s.display(if active.get() {
-            Display::Flex
-        } else {
-            Display::None
+    // Prevent click-through: clicks on the card stay inside the card
+    .on_event_stop(floem::event::EventListener::PointerDown, |_| {})
+    .style(|s| {
+        s.margin_top(64.0)
+            .max_width(640.0)
+            .width_pct(90.0)
+            .padding(18.0)
+            .background(Color::from_rgba8(14, 18, 28, 240))
+            .border(1.5)
+            .border_color(Color::from_rgba8(74, 158, 255, 150))
+            .border_radius(16.0)
+            .box_shadow_blur(40.0)
+            .box_shadow_color(Color::from_rgba8(0, 0, 0, 200))
+    });
+
+    // ── Full-screen overlay (click-outside backdrop) ─────────────────────
+    // The backdrop catches pointer events. Clicking the backdrop = close.
+    // The card itself stops propagation via on_event_stop above.
+    let pd_overlay = palette_data.clone();
+    container(palette_card)
+        .on_click_stop(move |_| {
+            pd_overlay.hide();
         })
-        .position(Position::Absolute)
-        .margin_top(64.0)
-        .margin_horiz(16.0)
-        .max_width(640.0)
-        .width_pct(100.0)
-        .padding(18.0)
-        .background(Color::from_rgba8(14, 18, 28, 230)) // Glassmorphism base
-        .border(1.5)
-        .border_color(Color::from_rgba8(74, 158, 255, 150))
-        .border_radius(16.0)
-        .box_shadow_blur(40.0)
-        .box_shadow_color(Color::from_rgba8(0, 0, 0, 200))
-    })
+        .style(move |s| {
+            s.display(if active.get() {
+                Display::Flex
+            } else {
+                Display::None
+            })
+            .position(Position::Absolute)
+            .inset(0.0)
+            .size_full()
+            .items_start()
+            .justify_center()
+            .background(Color::from_rgba8(0, 0, 0, 80))
+            .cursor(CursorStyle::Default)
+        })
 }

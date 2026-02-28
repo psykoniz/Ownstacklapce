@@ -521,9 +521,21 @@ pub fn ownstack_chat_panel(
                         .multiply_alpha(0.8),
                 )
         }),
-        // Messages list
+        // Messages list (with empty state when no messages)
         scroll(
             v_stack((
+                // Empty state — shown when there are no messages yet
+                label(|| "")
+                    .style(|s| s.hide()) // placeholder, real empty state below
+                    .into_any(),
+                crate::ownstack_empty_state::chat_empty_state()
+                    .style(move |s| {
+                        let has_messages = !chat_data.messages.get().is_empty()
+                            || chat_data.current_mission.get().is_some()
+                            || !chat_data.streaming_content.get().is_empty();
+                        s.apply_if(has_messages, |s| s.hide())
+                    })
+                    .into_any(),
                 // Current Mission Display (if active)
                 dyn_stack(
                     move || {
