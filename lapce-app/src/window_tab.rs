@@ -566,7 +566,10 @@ impl WindowTabData {
             crate::ownstack_palette::OwnStackPaletteData::new((*common).clone());
         let ownstack_audit =
             crate::ownstack_audit::OwnStackAuditData::new((*common).clone());
-        let ownstack_mcp = crate::ownstack_mcp::OwnStackMcpData::new(common.clone());
+        let ownstack_mcp = crate::ownstack_mcp::OwnStackMcpData::new(
+            common.clone(),
+            workspace.path.clone(),
+        );
 
         let window_tab_data = Self {
             scope: cx,
