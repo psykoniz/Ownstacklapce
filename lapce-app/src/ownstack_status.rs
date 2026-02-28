@@ -140,17 +140,17 @@ impl OwnStackStatusData {
         &self,
         tokens: u64,
         max_tokens: u64,
-        steps: u32,
-        max_steps: u32,
-        calls: u32,
-        max_calls: u32,
+        steps: u64,
+        max_steps: u64,
+        calls: u64,
+        max_calls: u64,
     ) {
         self.budget_tokens.set(tokens);
         self.budget_max_tokens.set(max_tokens);
-        self.budget_steps.set(steps as u64);
-        self.budget_max_steps.set(max_steps as u64);
-        self.budget_calls.set(calls as u64);
-        self.budget_max_calls.set(max_calls as u64);
+        self.budget_steps.set(steps);
+        self.budget_max_steps.set(max_steps);
+        self.budget_calls.set(calls);
+        self.budget_max_calls.set(max_calls);
     }
 
     pub fn tokens_badge_label(&self) -> String {
