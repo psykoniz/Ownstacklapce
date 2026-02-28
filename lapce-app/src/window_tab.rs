@@ -4,16 +4,15 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
+        mpsc::{channel, Sender},
         Arc,
-        mpsc::{Sender, channel},
     },
     time::{Duration, Instant},
 };
 
 use alacritty_terminal::vte::ansi::Handler;
 use floem::{
-    ViewId,
-    action::{TimerToken, exec_after, open_file, remove_overlay},
+    action::{exec_after, open_file, remove_overlay, TimerToken},
     ext_event::{create_ext_action, create_signal_from_channel},
     file::FileDialogOptions,
     keyboard::Modifiers,
@@ -21,11 +20,12 @@ use floem::{
     peniko::kurbo::{Point, Rect, Vec2},
     prelude::SignalTrack,
     reactive::{
-        Memo, ReadSignal, RwSignal, Scope, SignalGet, SignalUpdate, SignalWith,
-        WriteSignal, use_context,
+        use_context, Memo, ReadSignal, RwSignal, Scope, SignalGet, SignalUpdate,
+        SignalWith, WriteSignal,
     },
     text::{Attrs, AttrsList, FamilyOwned, LineHeightValue, TextLayout},
     views::editor::core::buffer::rope_text::RopeText,
+    ViewId,
 };
 use im::HashMap;
 use indexmap::IndexMap;
@@ -35,7 +35,6 @@ use lapce_core::{
     mode::Mode, register::Register,
 };
 use lapce_rpc::{
-    RpcError,
     core::CoreNotification,
     dap_types::{ConfigSource, RunDebugConfig},
     file::{Naming, PathObject},
@@ -44,13 +43,14 @@ use lapce_rpc::{
     proxy::{ProxyResponse, ProxyRpcHandler, ProxyStatus},
     source_control::FileDiff,
     terminal::TermId,
+    RpcError,
 };
 use lsp_types::{
-    CodeActionOrCommand, CodeLens, Diagnostic, ProgressParams, ProgressToken,
-    ShowMessageParams,
+    CodeActionOrCommand, CodeLens, Diagnostic, MessageType, ProgressParams,
+    ProgressToken, ShowMessageParams,
 };
 use serde_json::Value;
-use tracing::{Level, debug, error, event};
+use tracing::{debug, error, event, Level};
 
 use crate::{
     about::AboutData,
@@ -73,23 +73,23 @@ use crate::{
     hover::HoverData,
     id::WindowTabId,
     inline_completion::InlineCompletionData,
-    keypress::{EventRef, KeyPressData, KeyPressFocus, condition::Condition},
+    keypress::{condition::Condition, EventRef, KeyPressData, KeyPressFocus},
     listener::Listener,
     lsp::path_from_url,
     main_split::{MainSplitData, SplitData, SplitDirection, SplitMoveDirection},
-    palette::{DEFAULT_RUN_TOML, PaletteData, PaletteStatus, kind::PaletteKind},
+    palette::{kind::PaletteKind, PaletteData, PaletteStatus, DEFAULT_RUN_TOML},
     panel::{
         call_hierarchy_view::{CallHierarchyData, CallHierarchyItemData},
-        data::{PanelData, PanelSection, default_panel_order},
+        data::{default_panel_order, PanelData, PanelSection},
         kind::PanelKind,
         position::PanelContainerPosition,
     },
     plugin::PluginData,
-    proxy::{ProxyData, new_proxy},
+    proxy::{new_proxy, ProxyData},
     rename::RenameData,
     source_control::SourceControlData,
     terminal::{
-        event::{TermEvent, TermNotification, terminal_update_process},
+        event::{terminal_update_process, TermEvent, TermNotification},
         panel::TerminalPanelData,
     },
     tracing::*,
@@ -189,6 +189,7 @@ pub struct WindowTabData {
     pub ownstack_palette: crate::ownstack_palette::OwnStackPaletteData,
     pub ownstack_audit: crate::ownstack_audit::OwnStackAuditData,
     pub ownstack_status: crate::ownstack_status::OwnStackStatusData,
+    pub ownstack_mcp: crate::ownstack_mcp::OwnStackMcpData,
     pub policy_prompt_seq: RwSignal<u64>,
     pub layout_rect: RwSignal<Rect>,
     pub title_height: RwSignal<f64>,
@@ -565,6 +566,7 @@ impl WindowTabData {
             crate::ownstack_palette::OwnStackPaletteData::new((*common).clone());
         let ownstack_audit =
             crate::ownstack_audit::OwnStackAuditData::new((*common).clone());
+        let ownstack_mcp = crate::ownstack_mcp::OwnStackMcpData::new(common.clone());
 
         let window_tab_data = Self {
             scope: cx,
@@ -592,6 +594,7 @@ impl WindowTabData {
             ownstack_palette,
             ownstack_audit,
             ownstack_status,
+            ownstack_mcp,
             policy_prompt_seq: cx.create_rw_signal(0),
             layout_rect: cx.create_rw_signal(Rect::ZERO),
             title_height,
@@ -2362,7 +2365,7 @@ impl WindowTabData {
                 target,
             } => {
                 use lapce_rpc::core::LogLevel;
-                use tracing_log::log::{Level, log};
+                use tracing_log::log::{log, Level};
 
                 let target = target.clone().unwrap_or(String::from("unknown"));
 
@@ -2386,7 +2389,7 @@ impl WindowTabData {
             }
             CoreNotification::LogMessage { message, target } => {
                 use lsp_types::MessageType;
-                use tracing_log::log::{Level, log};
+                use tracing_log::log::{log, Level};
                 match message.typ {
                     MessageType::ERROR => {
                         log!(target: target, Level::Error, "{}", message.message)
@@ -2433,6 +2436,26 @@ impl WindowTabData {
                         self.ownstack_status.set_status("mission");
                         self.ownstack_chat.receive_mission(goal, steps);
                     }
+                    OwnStackRpc::BudgetUpdate {
+                        tokens,
+                        max_tokens,
+                        steps,
+                        max_steps,
+                        calls,
+                        max_calls,
+                    } => {
+                        self.ownstack_status.set_budget(
+                            tokens, max_tokens, steps, max_steps, calls, max_calls,
+                        );
+                        self.ownstack_status.set_status("budget");
+                    }
+                    OwnStackRpc::ContextUpdate { current, max } => {
+                        self.ownstack_chat.set_context_window(current, max);
+                        self.ownstack_status.set_status("context");
+                    }
+                    OwnStackRpc::UiStateDelta { delta } => {
+                        self.apply_ownstack_ui_delta(delta);
+                    }
                     OwnStackRpc::ToolResultMsg { json_result } => {
                         self.ownstack_status.set_status("tool result");
                         self.ownstack_chat.add_system_message(format!(
@@ -2455,6 +2478,16 @@ impl WindowTabData {
                             "Approval required (Ask mode):\n{}\nReason: {}",
                             command, reason
                         ));
+                        self.show_message(
+                            "OwnStack",
+                            &ShowMessageParams {
+                                typ: MessageType::WARNING,
+                                message: format!(
+                                    "Approval required for command: {}",
+                                    command
+                                ),
+                            },
+                        );
 
                         let seq = self.policy_prompt_seq.get_untracked() + 1;
                         self.policy_prompt_seq.set(seq);
@@ -2544,6 +2577,27 @@ impl WindowTabData {
                                     "Failed to capture screenshot: {}",
                                     err
                                 );
+                                self.show_message(
+                                    "OwnStack Vision",
+                                    &ShowMessageParams {
+                                        typ: MessageType::WARNING,
+                                        message: format!(
+                                            "Screenshot capture failed: {}",
+                                            err
+                                        ),
+                                    },
+                                );
+                            } else {
+                                self.show_message(
+                                    "OwnStack Vision",
+                                    &ShowMessageParams {
+                                        typ: MessageType::INFO,
+                                        message: format!(
+                                            "Screenshot saved to {}",
+                                            screenshot_path.display()
+                                        ),
+                                    },
+                                );
                             }
                         } else {
                             tracing::warn!(
@@ -2553,6 +2607,29 @@ impl WindowTabData {
                     }
                     OwnStackRpc::UiSnapshotRequest => {
                         self.take_ui_snapshot();
+                        self.show_message(
+                            "OwnStack",
+                            &ShowMessageParams {
+                                typ: MessageType::INFO,
+                                message: "UI snapshot captured to .ownstack/ui_snapshot.json"
+                                    .to_string(),
+                            },
+                        );
+                    }
+                    OwnStackRpc::KillSwitch => {
+                        self.ownstack_status.set_active(false);
+                        self.ownstack_status.set_status("stopped");
+                        self.ownstack_chat.add_alert_message(
+                            "Kill-switch received. Execution halted.".to_string(),
+                        );
+                        self.show_message(
+                            "OwnStack",
+                            &ShowMessageParams {
+                                typ: MessageType::ERROR,
+                                message: "Kill-switch activated. Execution halted."
+                                    .to_string(),
+                            },
+                        );
                     }
                     _ => {
                         tracing::debug!("Unhandled RPC: {:?}", message);
@@ -2560,6 +2637,102 @@ impl WindowTabData {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn apply_ownstack_ui_delta(&self, delta: lapce_rpc::ownstack::UiStateDelta) {
+        if let Some(mode) = delta.mode {
+            let ui_mode = crate::ownstack_chat::AgentMode::from_runtime(mode.clone());
+            self.ownstack_chat.set_mode_from_runtime(mode);
+            self.ownstack_status.set_mode(ui_mode);
+        }
+
+        if let Some(run_state) = delta.run_state {
+            match run_state {
+                lapce_rpc::ownstack::AgentRunState::Disconnected => {
+                    self.ownstack_status.set_bridge_connected(false);
+                    self.ownstack_status.set_active(false);
+                    self.ownstack_status.set_status("disconnected");
+                }
+                lapce_rpc::ownstack::AgentRunState::Idle => {
+                    self.ownstack_status.set_bridge_connected(true);
+                    self.ownstack_status.set_active(false);
+                    self.ownstack_status.set_status("idle");
+                }
+                lapce_rpc::ownstack::AgentRunState::Running => {
+                    self.ownstack_status.set_bridge_connected(true);
+                    self.ownstack_status.set_active(true);
+                    self.ownstack_status.set_status("running");
+                }
+                lapce_rpc::ownstack::AgentRunState::AwaitingApproval => {
+                    self.ownstack_status.set_bridge_connected(true);
+                    self.ownstack_status.set_active(true);
+                    self.ownstack_status.set_status("awaiting approval");
+                }
+                lapce_rpc::ownstack::AgentRunState::Stopped => {
+                    self.ownstack_status.set_active(false);
+                    self.ownstack_status.set_status("stopped");
+                }
+                lapce_rpc::ownstack::AgentRunState::Error => {
+                    self.ownstack_status.set_active(false);
+                    self.ownstack_status.set_status("error");
+                }
+            }
+        }
+
+        if let Some(budget) = delta.budget {
+            self.ownstack_status.set_budget(
+                budget.tokens,
+                budget.max_tokens,
+                budget.steps,
+                budget.max_steps,
+                budget.calls,
+                budget.max_calls,
+            );
+        }
+
+        if let Some(context) = delta.context {
+            self.ownstack_chat
+                .set_context_window(context.current, context.max);
+        }
+
+        if let Some(mission) = delta.mission {
+            self.ownstack_chat
+                .receive_mission(mission.goal, mission.steps);
+        }
+
+        if let Some(pending) = delta.pending_approval {
+            self.ownstack_chat.add_system_message(format!(
+                "Approval required (runtime):\n{}\nReason: {}",
+                pending.command, pending.reason
+            ));
+        }
+
+        if let Some(event) = delta.tool_event {
+            let summary = event.summary.unwrap_or_default();
+            let details = if summary.is_empty() {
+                format!("Tool {}: {}", event.tool_name, event.status)
+            } else {
+                format!(
+                    "Tool {}: {} ({})",
+                    event.tool_name, event.status, summary
+                )
+            };
+            self.ownstack_chat.add_system_message(details);
+        }
+
+        if let Some(alert) = delta.alert {
+            let prefix = match alert.severity {
+                lapce_rpc::ownstack::AlertSeverity::Info => "Info",
+                lapce_rpc::ownstack::AlertSeverity::Warning => "Warning",
+                lapce_rpc::ownstack::AlertSeverity::Error => "Error",
+            };
+            let msg = format!("{}: {}", prefix, alert.message);
+            if matches!(alert.severity, lapce_rpc::ownstack::AlertSeverity::Error) {
+                self.ownstack_chat.add_alert_message(msg);
+            } else {
+                self.ownstack_chat.add_system_message(msg);
+            }
         }
     }
 
@@ -2871,7 +3044,8 @@ impl WindowTabData {
             | PanelKind::CallHierarchy
             | PanelKind::DocumentSymbol
             | PanelKind::References
-            | PanelKind::Implementation => {
+            | PanelKind::Implementation
+            | PanelKind::OwnStackMcp => {
                 // Some panels don't accept focus (yet). Fall back to visibility check
                 // in those cases.
                 self.panel.is_panel_visible(&kind)

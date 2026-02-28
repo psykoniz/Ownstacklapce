@@ -1,18 +1,20 @@
 use crate::app::clickable_icon;
 use crate::config::{color::LapceColor, icon::LapceIcons};
 use crate::panel::position::PanelPosition;
-use floem::prelude::{SignalGet, SignalUpdate};
-use floem::reactive::{RwSignal, create_rw_signal};
+use floem::prelude::*;
+use floem::reactive::{create_rw_signal, RwSignal};
 use floem::{
-    View,
     peniko::Color,
     style::CursorStyle,
     views::{
-        Decorators, container, dyn_stack, h_stack, label, scroll, stack, text,
-        text_input, v_stack,
+        container, dyn_stack, h_stack, label, scroll, stack, text, text_input,
+        v_stack,
     },
+    View,
+    ext_event::create_ext_action,
 };
-use lapce_rpc::ownstack::OwnStackRpc;
+use lapce_rpc::ownstack::{AgentModeState, OwnStackRpc};
+use lsp_types::DiagnosticSeverity;
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
@@ -26,6 +28,15 @@ pub struct ChatMessage {
     pub timestamp: String,
     // Optional diff content for preview
     pub diff_content: Option<String>,
+    // Optional metadata for roles and results
+    #[serde(default)]
+    pub sub_role: Option<String>, // "Worker", "Critic", "Healer"
+    #[serde(default)]
+    pub tool_result: Option<String>,
+    #[serde(default)]
+    pub diff_target: Option<String>,
+    #[serde(default)]
+    pub is_error: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +50,7 @@ pub enum ChatRole {
     User,
     Assistant,
     System,
+    Alert,
     Tool,
 }
 
@@ -63,6 +75,9 @@ pub struct OwnStackChatData {
     pub streaming_content: RwSignal<String>,
     /// Current mission being executed
     pub current_mission: RwSignal<Option<(String, Vec<(String, String)>)>>,
+    /// Context-window usage telemetry.
+    pub context_current: RwSignal<u64>,
+    pub context_max: RwSignal<u64>,
     #[allow(dead_code)]
     common: CommonData,
     db: Arc<crate::db::LapceDb>,
@@ -74,6 +89,12 @@ pub enum AgentMode {
     Ask,
     Auto,
     Plan,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatMonitorTab {
+    Output,
+    Problems,
 }
 
 impl std::fmt::Display for AgentMode {
@@ -92,6 +113,22 @@ impl AgentMode {
             "auto" => Self::Auto,
             "plan" => Self::Plan,
             _ => Self::Ask,
+        }
+    }
+
+    pub fn from_runtime(mode: AgentModeState) -> Self {
+        match mode {
+            AgentModeState::Ask => Self::Ask,
+            AgentModeState::Auto => Self::Auto,
+            AgentModeState::Plan => Self::Plan,
+        }
+    }
+
+    pub fn to_runtime(&self) -> AgentModeState {
+        match self {
+            AgentMode::Ask => AgentModeState::Ask,
+            AgentMode::Auto => AgentModeState::Auto,
+            AgentMode::Plan => AgentModeState::Plan,
         }
     }
 
@@ -129,6 +166,8 @@ impl OwnStackChatData {
             agent_mode: create_rw_signal(AgentMode::Ask),
             streaming_content: create_rw_signal(String::new()),
             current_mission: create_rw_signal(None),
+            context_current: create_rw_signal(0),
+            context_max: create_rw_signal(0),
             common,
             db,
         }
@@ -149,7 +188,6 @@ impl OwnStackChatData {
     pub fn hide(&self) {
         self.visible.set(false);
     }
-
     /// Send a message from the user
     pub fn send_message(&self) {
         let prompt = self.input.get_untracked();
@@ -163,6 +201,10 @@ impl OwnStackChatData {
             content: prompt.clone(),
             timestamp: chrono_now(),
             diff_content: None,
+            sub_role: None,
+            tool_result: None,
+            diff_target: None,
+            is_error: false,
         };
 
         self.messages.update(|msgs| {
@@ -190,11 +232,16 @@ impl OwnStackChatData {
 
     /// Receive a response from the AI
     pub fn receive_response(&self, content: String, diff: Option<String>) {
+        let timestamp = chrono_now();
         let assistant_msg = ChatMessage {
             role: ChatRole::Assistant,
-            content,
-            timestamp: chrono_now(),
-            diff_content: diff,
+            content: content.clone(),
+            timestamp: timestamp.clone(),
+            diff_content: diff.clone(),
+            sub_role: None,
+            tool_result: None,
+            diff_target: None,
+            is_error: false,
         };
         self.messages.update(|msgs| {
             msgs.push(assistant_msg);
@@ -205,6 +252,11 @@ impl OwnStackChatData {
             self.common.workspace.clone(),
             self.messages.get_untracked(),
         );
+
+        if diff.is_none() {
+            // If no diff provided (common during streaming end), trigger background computation
+            self.trigger_background_diff(content, timestamp);
+        }
 
         self.is_loading.set(false);
         self.streaming_content.set(String::new());
@@ -224,38 +276,70 @@ impl OwnStackChatData {
             if let Some(_reason) = finish_reason {
                 let content = self.streaming_content.get_untracked();
                 if !content.is_empty() {
-                    let diff = self.derive_diff_preview(&content);
-                    self.receive_response(content, diff);
+                    // DO NOT call derive_diff_preview synchronously here.
+                    // It involves disk I/O and expensive LCS diffing.
+                    // We call receive_response with None for diff, and it triggers background diffing.
+                    self.receive_response(content, None);
                 }
             }
         }
     }
 
-    fn derive_diff_preview(&self, content: &str) -> Option<String> {
-        if let Some(patch) = extract_structured_patch(content) {
-            return self.compute_workspace_diff(&patch);
-        }
-        extract_code_block(content)
+    fn trigger_background_diff(&self, content: String, timestamp: String) {
+        let workspace_root = self.common.workspace.path.clone();
+        let db = self.db.clone();
+        let messages = self.messages;
+        let workspace = self.common.workspace.clone();
+        let scope = self.common.scope;
+
+        let send = create_ext_action(scope, move |diff: Option<String>| {
+            if let Some(diff) = diff {
+                messages.update(|msgs| {
+                    if let Some(msg) = msgs.iter_mut().rev().find(|m| {
+                        m.timestamp == timestamp && m.role == ChatRole::Assistant
+                    }) {
+                        msg.diff_content = Some(diff);
+                    }
+                });
+
+                // Save after updating diff
+                db.save_ownstack_chat(workspace, messages.get_untracked());
+            }
+        });
+
+        std::thread::spawn(move || {
+            // Expensive operations moved to background thread
+            let diff = if let Some(patch) = extract_structured_patch(&content) {
+                if let Some(workspace_path) = workspace_root {
+                    let path = std::path::Path::new(&patch.path);
+                    if is_safe_workspace_relative_path(path) {
+                        let full_path = workspace_path.join(path);
+                        // Blocking I/O
+                        let old_content =
+                            std::fs::read_to_string(&full_path).unwrap_or_default();
+                        // Expensive LCS
+                        Some(render_unified_diff(
+                            &patch.path,
+                            &old_content,
+                            &patch.new_content,
+                        ))
+                    } else {
+                        Some(format!(
+                            "Rejected patch path outside workspace: {}",
+                            patch.path
+                        ))
+                    }
+                } else {
+                    None
+                }
+            } else {
+                extract_code_block(&content)
+            };
+
+            send(diff);
+        });
     }
 
-    fn compute_workspace_diff(&self, patch: &PatchSuggestion) -> Option<String> {
-        let workspace_root = self.common.workspace.path.as_ref()?;
-        let path = std::path::Path::new(&patch.path);
-        if !is_safe_workspace_relative_path(path) {
-            return Some(format!(
-                "Rejected patch path outside workspace: {}",
-                patch.path
-            ));
-        }
-
-        let full_path = workspace_root.join(path);
-        let old_content = std::fs::read_to_string(&full_path).unwrap_or_default();
-        Some(render_unified_diff(
-            &patch.path,
-            &old_content,
-            &patch.new_content,
-        ))
-    }
 
     /// Receive a mission update
     pub fn receive_mission(&self, goal: String, steps: Vec<(String, String)>) {
@@ -271,6 +355,17 @@ impl OwnStackChatData {
         self.common.proxy.ownstack(rpc);
     }
 
+    /// Update context-window usage telemetry for UI rendering.
+    pub fn set_context_window(&self, current: u64, max: u64) {
+        self.context_current.set(current);
+        self.context_max.set(max);
+    }
+
+    /// Apply runtime mode received from the agent.
+    pub fn set_mode_from_runtime(&self, mode: AgentModeState) {
+        self.agent_mode.set(AgentMode::from_runtime(mode));
+    }
+
     /// Stop the current operation
     pub fn stop(&self) {
         // Kill-switch is enforced in the proxy (owns the agent process handle).
@@ -281,6 +376,9 @@ impl OwnStackChatData {
             self.receive_response(content, None);
         }
         self.streaming_content.set(String::new());
+        self.add_alert_message(
+            "Kill-switch activated. Current agent run stopped.".to_string(),
+        );
     }
 
     /// Add a system message
@@ -290,10 +388,31 @@ impl OwnStackChatData {
             content,
             timestamp: chrono_now(),
             diff_content: None,
+            sub_role: None,
+            tool_result: None,
+            diff_target: None,
+            is_error: false,
         };
 
         self.messages.update(|msgs| {
             msgs.push(sys_msg);
+        });
+    }
+
+    pub fn add_alert_message(&self, content: String) {
+        let alert_msg = ChatMessage {
+            role: ChatRole::Alert,
+            content,
+            timestamp: chrono_now(),
+            diff_content: None,
+            sub_role: None,
+            tool_result: None,
+            diff_target: None,
+            is_error: true,
+        };
+
+        self.messages.update(|msgs| {
+            msgs.push(alert_msg);
         });
     }
 
@@ -314,8 +433,10 @@ impl OwnStackChatData {
             AgentMode::Auto => AgentMode::Plan,
             AgentMode::Plan => AgentMode::Ask,
         };
-        tracing::info!("Agent mode changed: {:?} → {:?}", current, next);
-        self.agent_mode.set(next);
+        tracing::info!("Agent mode changed request: {:?} -> {:?}", current, next);
+        self.common.proxy.ownstack(OwnStackRpc::SetAgentMode {
+            mode: next.to_runtime(),
+        });
     }
 
     /// Get message count
@@ -331,10 +452,17 @@ pub fn ownstack_chat_panel(
     let chat_data = window_tab_data.ownstack_chat.clone();
     let config = window_tab_data.common.config;
     let input = chat_data.input;
+    let diagnostics = window_tab_data.main_split.diagnostics;
+    let workspace_root = window_tab_data.workspace.path.clone();
+    let monitor_tab = create_rw_signal(ChatMonitorTab::Output);
 
     let chat_data_hdr = chat_data.clone();
     let chat_data_trash = chat_data.clone();
     let chat_data_attach = chat_data.clone();
+    let chat_data_output = chat_data.clone();
+    let monitor_tab_output = monitor_tab;
+    let monitor_tab_problems = monitor_tab;
+    let monitor_tab_list = monitor_tab;
 
     v_stack((
         // ── Header ───────────────────────────────────────────────────────
@@ -418,15 +546,39 @@ pub fn ownstack_chat_panel(
                                 move || steps.clone(),
                                 |(desc, _)| desc.clone(),
                                 move |(desc, status)| {
+                                    let status_for_icon = status.clone();
+                                    let status_for_color = status.clone();
                                     h_stack((
-                                        label(move || match status.as_str() {
-                                            "Pending" => "○",
-                                            "InProgress" => "▶",
-                                            "Completed" => "✓",
-                                            "Failed(_)" => "✕",
-                                            _ => "?",
+                                        label(move || {
+                                            match status_for_icon
+                                                .to_ascii_lowercase()
+                                                .as_str()
+                                            {
+                                                "pending" => "○",
+                                                "inprogress" => "⟳",
+                                                "completed" | "done" => "✓",
+                                                "failed" => "✕",
+                                                _ => "•",
+                                            }
                                         })
-                                        .style(|s| s.width(20.0)),
+                                        .style(move |s| {
+                                            let color = match status_for_color
+                                                .to_ascii_lowercase()
+                                                .as_str()
+                                            {
+                                                "inprogress" => {
+                                                    Color::from_rgb8(120, 180, 255)
+                                                }
+                                                "completed" | "done" => {
+                                                    Color::from_rgb8(120, 220, 140)
+                                                }
+                                                "failed" => {
+                                                    Color::from_rgb8(255, 120, 120)
+                                                }
+                                                _ => Color::from_rgb8(180, 180, 180),
+                                            };
+                                            s.width(20.0).color(color)
+                                        }),
                                         label(move || desc.clone()),
                                     ))
                                 },
@@ -483,6 +635,10 @@ pub fn ownstack_chat_panel(
                                     content,
                                     timestamp: chrono_now(),
                                     diff_content: None,
+                                    sub_role: None,
+                                    tool_result: None,
+                                    diff_target: None,
+                                    is_error: false,
                                 },
                                 chat_data.clone(),
                                 config,
@@ -494,110 +650,325 @@ pub fn ownstack_chat_panel(
             .style(|s| s.width_full().padding(12.0).gap(20.0)),
         )
         .style(|s| s.flex_grow(1.0).width_full()),
-        // Input area
         container(
-            h_stack((
-                // ③ 📎 Context attach button
-                label(|| "📎")
-                    .style(move |s| {
-                        let config = config.get();
-                        s.padding(6.0)
-                            .border_radius(6.0)
-                            .font_size(14.0)
-                            .cursor(floem::style::CursorStyle::Pointer)
-                            .color(config.color(LapceColor::EDITOR_DIM))
-                            .hover(|s| {
-                                s.background(Color::from_rgba8(100, 150, 255, 40))
-                                    .color(Color::from_rgb8(100, 150, 255))
-                            })
-                    })
-                    .on_click_stop(move |_| {
-                        chat_data_attach
-                            .common
-                            .proxy
-                            .ownstack(OwnStackRpc::UiSnapshotRequest);
-                        chat_data_attach.add_system_message(
-                            "UI context snapshot requested".to_string(),
-                        );
-                    }),
-                text_input(input)
-                    .placeholder("Ask OwnStack anything...")
-                    .style(move |s| {
-                        let config = config.get();
-                        s.width_full()
-                            .padding(8.0)
-                            .border(1.0)
-                            .border_radius(10.0)
-                            .border_color(config.color(LapceColor::LAPCE_BORDER))
-                            .background(config.color(LapceColor::EDITOR_BACKGROUND))
-                            .hover(|s| {
-                                s.border_color(Color::from_rgb8(100, 150, 255))
-                            })
-                            .active(|s| {
-                                s.border_color(Color::from_rgb8(100, 200, 255))
-                                    .box_shadow_blur(5.0)
-                                    .box_shadow_color(Color::from_rgba8(
-                                        100, 200, 255, 100,
-                                    ))
-                            })
-                    })
-                    .on_event_stop(floem::event::EventListener::KeyDown, {
-                        let chat_data = chat_data.clone();
-                        move |event| {
-                            if let floem::event::Event::KeyDown(ke) = event {
-                                if ke.key.logical_key
-                                    == floem::keyboard::Key::Named(
-                                        floem::keyboard::NamedKey::Enter,
+            v_stack((
+                h_stack((
+                    label(|| "OUTPUT".to_string())
+                        .on_click_stop(move |_| {
+                            monitor_tab_output.set(ChatMonitorTab::Output);
+                        })
+                        .style(move |s| {
+                            let is_active =
+                                monitor_tab_output.get() == ChatMonitorTab::Output;
+                            s.padding_horiz(8.0)
+                                .padding_vert(4.0)
+                                .border(1.0)
+                                .border_radius(6.0)
+                                .border_color(
+                                    config.get().color(LapceColor::LAPCE_BORDER),
+                                )
+                                .background(if is_active {
+                                    Color::from_rgba8(74, 158, 255, 40)
+                                } else {
+                                    Color::from_rgba8(0, 0, 0, 0)
+                                })
+                                .color(if is_active {
+                                    Color::from_rgb8(130, 190, 255)
+                                } else {
+                                    config.get().color(LapceColor::STATUS_FOREGROUND)
+                                })
+                                .font_size(10.0)
+                                .cursor(CursorStyle::Pointer)
+                        }),
+                    label(|| "PROBLEMS".to_string())
+                        .on_click_stop(move |_| {
+                            monitor_tab_problems.set(ChatMonitorTab::Problems);
+                        })
+                        .style(move |s| {
+                            let is_active = monitor_tab_problems.get()
+                                == ChatMonitorTab::Problems;
+                            s.padding_horiz(8.0)
+                                .padding_vert(4.0)
+                                .border(1.0)
+                                .border_radius(6.0)
+                                .border_color(
+                                    config.get().color(LapceColor::LAPCE_BORDER),
+                                )
+                                .background(if is_active {
+                                    Color::from_rgba8(255, 196, 82, 40)
+                                } else {
+                                    Color::from_rgba8(0, 0, 0, 0)
+                                })
+                                .color(if is_active {
+                                    Color::from_rgb8(255, 210, 130)
+                                } else {
+                                    config.get().color(LapceColor::STATUS_FOREGROUND)
+                                })
+                                .font_size(10.0)
+                                .cursor(CursorStyle::Pointer)
+                        }),
+                ))
+                .style(|s| s.width_full().items_center().gap(8.0)),
+                scroll(dyn_stack(
+                    move || {
+                        if monitor_tab_list.get() == ChatMonitorTab::Output {
+                            let mut lines = chat_data_output
+                                .messages
+                                .get()
+                                .into_iter()
+                                .rev()
+                                .filter(|msg| {
+                                    matches!(
+                                        msg.role,
+                                        ChatRole::System
+                                            | ChatRole::Tool
+                                            | ChatRole::Alert
                                     )
+                                })
+                                .map(|msg| summarize_output_entry(&msg))
+                                .take(20)
+                                .collect::<Vec<_>>();
+                            if lines.is_empty() {
+                                lines.push(
+                                    "No recent system/tool output.".to_string(),
+                                );
+                            }
+                            lines
+                        } else {
+                            let mut lines = Vec::new();
+                            let diagnostics_map = diagnostics.get();
+                            for (path, diagnostic_data) in diagnostics_map.iter() {
+                                let display_path = format_problem_path(
+                                    path,
+                                    workspace_root.as_deref(),
+                                );
+                                for diagnostic in
+                                    diagnostic_data.diagnostics.get().iter()
                                 {
-                                    chat_data.send_message();
+                                    let line = diagnostic.range.start.line + 1;
+                                    let severity =
+                                        severity_label(diagnostic.severity);
+                                    let summary =
+                                        first_line(&diagnostic.message, 180);
+                                    lines.push(format!(
+                                        "{severity} {display_path}:{line} {summary}"
+                                    ));
+                                    if lines.len() >= 20 {
+                                        break;
+                                    }
+                                }
+                                if lines.len() >= 20 {
+                                    break;
                                 }
                             }
-                        }
-                    }),
-                stack((
-                    clickable_icon(
-                        || LapceIcons::SEND,
-                        {
-                            let chat_data = chat_data.clone();
-                            move || {
-                                chat_data.send_message();
+                            if lines.is_empty() {
+                                lines.push("No active diagnostics.".to_string());
                             }
-                        },
-                        {
-                            let chat_data = chat_data.clone();
-                            move || chat_data.is_loading.get()
-                        },
-                        || false,
-                        || "Send",
-                        config,
-                    )
-                    .style({
-                        let chat_data = chat_data.clone();
-                        move |s| s.apply_if(chat_data.is_loading.get(), |s| s.hide())
-                    }),
-                    clickable_icon(
-                        || LapceIcons::STOP,
-                        {
-                            let chat_data = chat_data.clone();
-                            move || {
-                                chat_data.stop();
-                            }
-                        },
-                        || false,
-                        || false,
-                        || "Stop",
-                        config,
-                    )
-                    .style({
-                        let chat_data = chat_data.clone();
-                        move |s| {
-                            s.apply_if(!chat_data.is_loading.get(), |s| s.hide())
+                            lines
                         }
-                    }),
-                )),
+                    },
+                    |line| line.clone(),
+                    move |line| {
+                        label(move || line.clone()).style(move |s| {
+                            let config = config.get();
+                            s.width_full()
+                                .font_size(10.5)
+                                .line_height(1.35)
+                                .font_family("monospace".to_string())
+                                .color(config.color(LapceColor::EDITOR_DIM))
+                                .padding_bottom(4.0)
+                        })
+                    },
+                ))
+                .style(|s| s.width_full().max_height(96.0).padding_top(6.0)),
             ))
-            .style(|s| s.width_full().items_center().gap(10.0)),
+            .style(move |s| {
+                let config = config.get();
+                s.width_full()
+                    .padding_horiz(10.0)
+                    .padding_top(8.0)
+                    .padding_bottom(6.0)
+                    .border_top(1.0)
+                    .border_color(config.color(LapceColor::LAPCE_BORDER))
+                    .background(
+                        config
+                            .color(LapceColor::PANEL_BACKGROUND)
+                            .multiply_alpha(0.4),
+                    )
+            }),
+        )
+        .style(|s| s.width_full()),
+        // Input area
+        container(
+            v_stack((
+                {
+                    let context_label = chat_data.clone();
+                    let context_fill = chat_data.clone();
+                    v_stack((
+                        label(move || {
+                            let current = context_label.context_current.get();
+                            let max = context_label.context_max.get();
+                            if max == 0 {
+                                "Context window: n/a".to_string()
+                            } else {
+                                format!("Context window: {current}/{max}")
+                            }
+                        })
+                        .style(move |s| {
+                            let config = config.get();
+                            s.font_size(10.0)
+                                .color(config.color(LapceColor::EDITOR_DIM))
+                                .padding_bottom(4.0)
+                        }),
+                        stack((
+                            label(|| "".to_string()).style(move |s| {
+                                let config = config.get();
+                                s.width_full()
+                                    .height(4.0)
+                                    .border_radius(999.0)
+                                    .background(
+                                        config
+                                            .color(
+                                                LapceColor::PANEL_HOVERED_BACKGROUND,
+                                            )
+                                            .multiply_alpha(0.9),
+                                    )
+                            }),
+                            label(|| "".to_string()).style(move |s| {
+                                let current = context_fill.context_current.get();
+                                let max = context_fill.context_max.get();
+                                let ratio = if max == 0 {
+                                    0.0
+                                } else {
+                                    ((current as f64 / max as f64) * 100.0)
+                                        .clamp(0.0, 100.0)
+                                };
+                                let fill = if ratio >= 95.0 {
+                                    Color::from_rgb8(255, 112, 112)
+                                } else if ratio >= 80.0 {
+                                    Color::from_rgb8(255, 196, 82)
+                                } else {
+                                    Color::from_rgb8(94, 190, 129)
+                                };
+                                s.width_pct(ratio)
+                                    .height(4.0)
+                                    .border_radius(999.0)
+                                    .background(fill)
+                            }),
+                        ))
+                        .style(|s| s.width_full()),
+                    ))
+                    .style(|s| s.width_full().padding_bottom(8.0))
+                },
+                h_stack((
+                    label(|| "Ctx")
+                        .style(move |s| {
+                            let config = config.get();
+                            s.padding(6.0)
+                                .border_radius(6.0)
+                                .font_size(12.0)
+                                .cursor(floem::style::CursorStyle::Pointer)
+                                .color(config.color(LapceColor::EDITOR_DIM))
+                                .hover(|s| {
+                                    s.background(Color::from_rgba8(
+                                        100, 150, 255, 40,
+                                    ))
+                                    .color(Color::from_rgb8(100, 150, 255))
+                                })
+                        })
+                        .on_click_stop(move |_| {
+                            chat_data_attach
+                                .common
+                                .proxy
+                                .ownstack(OwnStackRpc::UiSnapshotRequest);
+                            chat_data_attach.add_system_message(
+                                "UI context snapshot requested".to_string(),
+                            );
+                        }),
+                    text_input(input)
+                        .placeholder("Type a message to OwnStack...")
+                        .style(move |s| {
+                            let config = config.get();
+                            s.width_full()
+                                .padding(8.0)
+                                .border(1.0)
+                                .border_radius(10.0)
+                                .border_color(config.color(LapceColor::LAPCE_BORDER))
+                                .background(
+                                    config.color(LapceColor::EDITOR_BACKGROUND),
+                                )
+                                .hover(|s| {
+                                    s.border_color(Color::from_rgb8(100, 150, 255))
+                                })
+                                .active(|s| {
+                                    s.border_color(Color::from_rgb8(100, 200, 255))
+                                        .box_shadow_blur(5.0)
+                                        .box_shadow_color(Color::from_rgba8(
+                                            100, 200, 255, 100,
+                                        ))
+                                })
+                        })
+                        .on_event_stop(floem::event::EventListener::KeyDown, {
+                            let chat_data = chat_data.clone();
+                            move |event| {
+                                if let floem::event::Event::KeyDown(ke) = event {
+                                    if ke.key.logical_key
+                                        == floem::keyboard::Key::Named(
+                                            floem::keyboard::NamedKey::Enter,
+                                        )
+                                    {
+                                        chat_data.send_message();
+                                    }
+                                }
+                            }
+                        }),
+                    stack((
+                        clickable_icon(
+                            || LapceIcons::SEND,
+                            {
+                                let chat_data = chat_data.clone();
+                                move || {
+                                    chat_data.send_message();
+                                }
+                            },
+                            {
+                                let chat_data = chat_data.clone();
+                                move || chat_data.is_loading.get()
+                            },
+                            || false,
+                            || "Send",
+                            config,
+                        )
+                        .style({
+                            let chat_data = chat_data.clone();
+                            move |s| {
+                                s.apply_if(chat_data.is_loading.get(), |s| s.hide())
+                            }
+                        }),
+                        clickable_icon(
+                            || LapceIcons::STOP,
+                            {
+                                let chat_data = chat_data.clone();
+                                move || {
+                                    chat_data.stop();
+                                }
+                            },
+                            || false,
+                            || false,
+                            || "Stop",
+                            config,
+                        )
+                        .style({
+                            let chat_data = chat_data.clone();
+                            move |s| {
+                                s.apply_if(!chat_data.is_loading.get(), |s| s.hide())
+                            }
+                        }),
+                    )),
+                ))
+                .style(|s| s.width_full().items_center().gap(10.0)),
+            ))
+            .style(|s| s.width_full()),
         )
         .style(move |s| {
             let config = config.get();
@@ -610,6 +981,59 @@ pub fn ownstack_chat_panel(
     .style(|s| s.size_full().flex_col())
 }
 
+fn summarize_output_entry(msg: &ChatMessage) -> String {
+    let role = match msg.role {
+        ChatRole::System => "system",
+        ChatRole::Tool => "tool",
+        ChatRole::Alert => "alert",
+        ChatRole::User => "user",
+        ChatRole::Assistant => "assistant",
+    };
+    let body = first_line(&msg.content, 180);
+    format!("[{}] {role}: {body}", msg.timestamp)
+}
+
+fn first_line(content: &str, max_chars: usize) -> String {
+    let line = content
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .replace('\t', " ");
+    if line.chars().count() <= max_chars {
+        line
+    } else {
+        let mut out = String::new();
+        for c in line.chars().take(max_chars.saturating_sub(1)) {
+            out.push(c);
+        }
+        out.push_str("...");
+        out
+    }
+}
+
+fn severity_label(severity: Option<DiagnosticSeverity>) -> &'static str {
+    match severity {
+        Some(DiagnosticSeverity::ERROR) => "error",
+        Some(DiagnosticSeverity::WARNING) => "warn",
+        Some(DiagnosticSeverity::INFORMATION) => "info",
+        Some(DiagnosticSeverity::HINT) => "hint",
+        _ => "diag",
+    }
+}
+
+fn format_problem_path(
+    path: &std::path::Path,
+    workspace_root: Option<&std::path::Path>,
+) -> String {
+    if let Some(root) = workspace_root {
+        if let Ok(rel) = path.strip_prefix(root) {
+            return rel.display().to_string();
+        }
+    }
+    path.display().to_string()
+}
+
 fn message_view(
     msg: ChatMessage,
     chat_data: OwnStackChatData,
@@ -617,105 +1041,199 @@ fn message_view(
 ) -> impl View {
     let is_user = msg.role == ChatRole::User;
 
-    v_stack((
-        h_stack((
-            label(move || if is_user { "You" } else { "AI" }).style(move |s| {
-                s.font_weight(Weight::BOLD).color(if is_user {
-                    Color::from_rgb8(120, 180, 255)
-                } else {
-                    Color::from_rgb8(120, 255, 180)
-                })
-            }),
-            text(msg.timestamp.clone()).style(move |s| {
-                s.font_size(10.0)
-                    .color(config.get().color(LapceColor::EDITOR_DIM))
-            }),
-        ))
-        .style(|s| s.items_center().justify_between().padding_bottom(6.0)),
-        v_stack((
-            // Message content
-            text(msg.content).style(|s| s.width_full().padding_top(4.0)),
-            // Optional Diff Preview
-            dyn_stack(
-                move || {
-                    if let Some(diff) = &msg.diff_content {
-                        vec![diff.clone()]
-                    } else {
-                        vec![]
-                    }
-                },
-                |diff| diff.clone(),
-                move |diff| {
-                    let chat_data_for_accept = chat_data.clone();
-                    let chat_data_for_reject = chat_data.clone();
-                    let chat_data_for_discuss = chat_data.clone();
-                    // We need a unique ID for the message, using timestamp for now
-                    let msg_id_accept = msg.timestamp.clone();
-                    let msg_id_reject = msg.timestamp.clone();
-                    let msg_id_discuss = msg.timestamp.clone();
+    let bubble_bg = if is_user {
+        Color::from_rgb8(37, 99, 235)
+    } else if msg.is_error {
+        Color::from_rgba8(110, 20, 20, 80)
+    } else {
+        Color::from_rgb8(24, 24, 37)
+    };
 
-                    v_stack((
-                        diff_view(diff, config),
-                        // Decision Buttons
-                        h_stack((
-                            label(|| "Apply")
-                                .style(|s| {
-                                    s.padding_horiz(10.0)
-                                        .padding_vert(6.0)
-                                        .border_radius(4.0)
-                                        .background(Color::from_rgb8(50, 150, 50))
-                                        .color(Color::WHITE)
-                                        .cursor(CursorStyle::Pointer)
-                                })
-                                .on_click_stop(move |_| {
-                                    chat_data_for_accept
-                                        .send_decision("accept", &msg_id_accept);
-                                }),
-                            label(|| "Reject")
-                                .style(|s| {
-                                    s.padding_horiz(10.0)
-                                        .padding_vert(6.0)
-                                        .border_radius(4.0)
-                                        .background(Color::from_rgb8(150, 50, 50))
-                                        .color(Color::WHITE)
-                                        .cursor(CursorStyle::Pointer)
-                                })
-                                .on_click_stop(move |_| {
-                                    chat_data_for_reject
-                                        .send_decision("reject", &msg_id_reject);
-                                }),
-                            label(|| "Discuss")
-                                .style(|s| {
-                                    s.padding_horiz(10.0)
-                                        .padding_vert(6.0)
-                                        .border_radius(4.0)
-                                        .background(Color::from_rgb8(50, 50, 150))
-                                        .color(Color::WHITE)
-                                        .cursor(CursorStyle::Pointer)
-                                })
-                                .on_click_stop(move |_| {
-                                    chat_data_for_discuss
-                                        .send_decision("discuss", &msg_id_discuss);
-                                }),
-                        ))
-                        .style(|s| s.padding_top(8.0).gap(10.0)),
+    let bubble_border = if is_user {
+        Color::TRANSPARENT
+    } else if msg.is_error {
+        Color::from_rgba8(239, 68, 68, 120)
+    } else {
+        Color::from_rgba8(30, 30, 46, 150)
+    };
+
+    let text_color = if is_user {
+        Color::WHITE
+    } else {
+        Color::from_rgb8(203, 213, 225)
+    };
+
+    let role_dot_color = if msg.is_error {
+        Color::from_rgb8(250, 204, 21)
+    } else {
+        match msg.sub_role.as_deref() {
+            Some("Critic") => Color::from_rgb8(248, 113, 113),
+            Some("System") => Color::from_rgb8(156, 163, 175),
+            _ => Color::from_rgb8(96, 165, 250),
+        }
+    };
+
+    let role_label_text = if msg.is_error {
+        if msg.content.contains("KILL-SWITCH") {
+            "SYSTEM ALERT".to_string()
+        } else {
+            "HEALER".to_string()
+        }
+    } else if msg.role == ChatRole::System {
+        "SYSTEM".to_string()
+    } else {
+        msg.sub_role.clone().unwrap_or_else(|| "WORKER".to_string()).to_uppercase()
+    };
+
+    let header = if !is_user {
+        h_stack((
+                label(|| "".to_string()).style(move |s| {
+                    s.width(6.0)
+                        .height(6.0)
+                        .border_radius(99.0)
+                        .background(role_dot_color)
+                        .margin_right(5.0)
+                }),
+                label(move || role_label_text.clone()).style(move |s| {
+                    s.font_size(10.0)
+                        .font_weight(Weight::BOLD)
+                        .color(Color::from_rgb8(100, 116, 139))
+                }),
+            ))
+            .style(|s| s.items_center().padding_bottom(6.0).padding_left(2.0))
+            .into_any()
+    } else {
+        empty().into_any()
+    };
+
+    let tool_block = if let Some(tool_res) = &msg.tool_result {
+        let diff_block = if let Some(target) = &msg.diff_target {
+            let chat_for_click = chat_data.clone();
+            let target_clone = target.clone();
+            h_stack((
+                    h_stack((
+                        label(|| "📄 ").style(|s| s.margin_right(4.0).font_size(10.0)),
+                        label(move || target_clone.clone()).style(|s| {
+                            s.color(Color::from_rgb8(203, 213, 225)).font_size(12.0)
+                        }),
                     ))
-                },
-            ),
-        ))
-        .style(move |s| {
-            let config = config.get();
-            s.width_full()
-                .padding(10.0)
-                .border_radius(8.0)
-                .background(if is_user {
-                    config.color(LapceColor::PANEL_BACKGROUND)
-                } else {
-                    config.color(LapceColor::EDITOR_BACKGROUND)
+                    .style(|s| s.items_center()),
+                    label(|| "Review Diff")
+                        .style(|s| {
+                            s.padding_horiz(8.0)
+                                .padding_vert(4.0)
+                                .border_radius(4.0)
+                                .background(Color::from_rgba8(37, 99, 235, 50))
+                                .color(Color::from_rgb8(96, 165, 250))
+                                .font_size(10.0)
+                                .font_weight(Weight::SEMIBOLD)
+                                .cursor(CursorStyle::Pointer)
+                                .hover(|s| s.background(Color::from_rgba8(37, 99, 235, 100)))
+                        })
+                        .on_click_stop(move |_| {
+                            // Can be hooked up later
+                        }),
+                ))
+                .style(|s| {
+                    s.width_full()
+                        .justify_between()
+                        .items_center()
+                        .margin_top(8.0)
+                        .padding(8.0)
+                        .border(1.0)
+                        .border_radius(4.0)
+                        .border_color(Color::from_rgba8(51, 65, 85, 120))
+                        .background(Color::from_rgb8(17, 17, 27))
+                        .hover(|s| s.border_color(Color::from_rgba8(59, 130, 246, 120)))
                 })
+                .into_any()
+        } else {
+            empty().into_any()
+        };
+
+        let tool_res_clone = tool_res.clone();
+        let diff_block = diff_block.into_any();
+        v_stack((
+            h_stack((
+                    label(|| "✓").style(|s| {
+                        s.color(Color::from_rgb8(52, 211, 153))
+                            .font_weight(Weight::BOLD)
+                            .margin_right(6.0)
+                    }),
+                    label(move || tool_res_clone.clone()).style(|s| {
+                        s.color(Color::from_rgba8(52, 211, 153, 230))
+                            .font_size(12.0)
+                            .font_weight(Weight::SEMIBOLD)
+                    }),
+                ))
+                .style(|s| s.items_center()),
+                diff_block,
+            ))
+            .style(|s| {
+                s.width_full()
+                    .margin_top(12.0)
+                    .padding_top(12.0)
+                    .border_top(1.0)
+                    .border_color(Color::from_rgba8(51, 65, 85, 120))
+            })
+            .into_any()
+    } else {
+        empty().into_any()
+    };
+
+    let main_content = v_stack((
+        header,
+        text(msg.content.clone()).style(move |s| {
+            s.width_full()
+                .color(text_color)
+                .line_height(1.6)
+                .font_size(13.0)
         }),
+        tool_block,
+        dyn_stack(
+            move || {
+                if let Some(diff) = &msg.diff_content {
+                    vec![diff.clone()]
+                } else {
+                    vec![]
+                }
+            },
+            |diff| diff.clone(),
+            move |diff| diff_view(diff, config),
+        ),
     ))
-    .style(|s| s.width_full().padding_bottom(10.0))
+    .style(move |s| {
+        let align = if is_user {
+            floem::style::AlignItems::FlexEnd
+        } else {
+            floem::style::AlignItems::FlexStart
+        };
+        let s = s.padding(14.0)
+            .border_top_left_radius(if is_user { 12.0 } else { 4.0 })
+            .border_top_right_radius(if is_user { 4.0 } else { 12.0 })
+            .border_bottom_left_radius(12.0)
+            .border_bottom_right_radius(12.0)
+            .background(bubble_bg)
+            .border(if is_user { 0.0 } else { 1.0 })
+            .border_color(bubble_border)
+            .align_items(align);
+            
+        if is_user {
+            s.margin_left(40.0)
+        } else {
+            s.width_full()
+        }
+    });
+
+    v_stack((main_content,))
+        .style(move |s| {
+            let s = s.width_full().padding_bottom(12.0);
+            if is_user {
+                s.items_end()
+            } else {
+                s.items_start()
+            }
+        })
 }
 
 fn diff_view(
@@ -782,15 +1300,7 @@ fn diff_view(
 }
 
 fn chrono_now() -> String {
-    // Use a simple counter-based approach since we can't easily add chrono
-    // In production, this would use proper timestamps
-    format!(
-        "{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    )
+    chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
 fn extract_code_block(content: &str) -> Option<String> {

@@ -1,16 +1,16 @@
 use std::{
     rc::Rc,
-    sync::{Arc, atomic::AtomicU64},
+    sync::{atomic::AtomicU64, Arc},
 };
 
 use floem::{
-    View,
     event::EventPropagation,
     reactive::{
-        Memo, ReadSignal, RwSignal, SignalGet, SignalUpdate, SignalWith, create_memo,
+        create_memo, Memo, ReadSignal, RwSignal, SignalGet, SignalUpdate, SignalWith,
     },
     style::{AlignItems, CursorStyle, Display},
-    views::{Decorators, dyn_stack, label, stack, svg},
+    views::{dyn_stack, label, stack, svg, Decorators},
+    View,
 };
 use indexmap::IndexMap;
 use lapce_core::mode::{Mode, VisualMode};
@@ -19,7 +19,7 @@ use lsp_types::{DiagnosticSeverity, ProgressToken};
 use crate::{
     app::clickable_icon,
     command::LapceWorkbenchCommand,
-    config::{LapceConfig, color::LapceColor, icon::LapceIcons},
+    config::{color::LapceColor, icon::LapceIcons, LapceConfig},
     editor::EditorData,
     listener::Listener,
     palette::kind::PaletteKind,
@@ -297,6 +297,28 @@ pub fn status(
                                 )
                                 .cursor(CursorStyle::Pointer)
                         }),
+                    label(|| "Settings".to_string())
+                        .on_click_stop({
+                            let workbench_command = workbench_command.clone();
+                            move |_| {
+                                workbench_command
+                                    .send(LapceWorkbenchCommand::OpenSettings);
+                            }
+                        })
+                        .style(move |s| {
+                            s.padding_horiz(8.0)
+                                .padding_vert(2.0)
+                                .margin_right(8.0)
+                                .border(1.0)
+                                .border_radius(6.0)
+                                .border_color(
+                                    config.get().color(LapceColor::LAPCE_BORDER),
+                                )
+                                .color(
+                                    config.get().color(LapceColor::STATUS_FOREGROUND),
+                                )
+                                .cursor(CursorStyle::Pointer)
+                        }),
                     {
                         let ownstack_mode_label = ownstack_style.clone();
                         let ownstack_mode_color = ownstack_style.clone();
@@ -331,6 +353,174 @@ pub fn status(
                         s.color(config.get().color(LapceColor::STATUS_FOREGROUND))
                             .selectable(false)
                     }),
+                    {
+                        let tokens_label = ownstack_style.clone();
+                        let tokens_level = ownstack_style.clone();
+                        label(move || tokens_label.tokens_badge_label()).style(
+                            move |s| {
+                                let config = config.get();
+                                let (fg, bg, border) =
+                                    match tokens_level.tokens_budget_level() {
+                                        crate::ownstack_status::BudgetLevel::Healthy => (
+                                            config.color(
+                                                LapceColor::SOURCE_CONTROL_ADDED,
+                                            ),
+                                            config
+                                                .color(LapceColor::SOURCE_CONTROL_ADDED)
+                                                .multiply_alpha(0.18),
+                                            config.color(
+                                                LapceColor::SOURCE_CONTROL_ADDED,
+                                            ),
+                                        ),
+                                        crate::ownstack_status::BudgetLevel::Warning => (
+                                            config.color(LapceColor::LAPCE_WARN),
+                                            config
+                                                .color(LapceColor::LAPCE_WARN)
+                                                .multiply_alpha(0.18),
+                                            config.color(LapceColor::LAPCE_WARN),
+                                        ),
+                                        crate::ownstack_status::BudgetLevel::Critical => (
+                                            config.color(LapceColor::LAPCE_ERROR),
+                                            config
+                                                .color(LapceColor::LAPCE_ERROR)
+                                                .multiply_alpha(0.18),
+                                            config.color(LapceColor::LAPCE_ERROR),
+                                        ),
+                                        crate::ownstack_status::BudgetLevel::Unknown => (
+                                            config
+                                                .color(LapceColor::STATUS_FOREGROUND),
+                                            config
+                                                .color(LapceColor::STATUS_BACKGROUND)
+                                                .multiply_alpha(0.7),
+                                            config.color(LapceColor::LAPCE_BORDER),
+                                        ),
+                                    };
+
+                                s.padding_horiz(6.0)
+                                    .padding_vert(2.0)
+                                    .margin_left(6.0)
+                                    .border(1.0)
+                                    .border_radius(999.0)
+                                    .border_color(border)
+                                    .background(bg)
+                                    .color(fg)
+                                    .font_size(10.0)
+                                    .selectable(false)
+                            },
+                        )
+                    },
+                    {
+                        let steps_label = ownstack_style.clone();
+                        let steps_level = ownstack_style.clone();
+                        label(move || steps_label.steps_badge_label()).style(
+                            move |s| {
+                                let config = config.get();
+                                let (fg, bg, border) =
+                                    match steps_level.steps_budget_level() {
+                                        crate::ownstack_status::BudgetLevel::Healthy => (
+                                            config.color(
+                                                LapceColor::SOURCE_CONTROL_ADDED,
+                                            ),
+                                            config
+                                                .color(LapceColor::SOURCE_CONTROL_ADDED)
+                                                .multiply_alpha(0.18),
+                                            config.color(
+                                                LapceColor::SOURCE_CONTROL_ADDED,
+                                            ),
+                                        ),
+                                        crate::ownstack_status::BudgetLevel::Warning => (
+                                            config.color(LapceColor::LAPCE_WARN),
+                                            config
+                                                .color(LapceColor::LAPCE_WARN)
+                                                .multiply_alpha(0.18),
+                                            config.color(LapceColor::LAPCE_WARN),
+                                        ),
+                                        crate::ownstack_status::BudgetLevel::Critical => (
+                                            config.color(LapceColor::LAPCE_ERROR),
+                                            config
+                                                .color(LapceColor::LAPCE_ERROR)
+                                                .multiply_alpha(0.18),
+                                            config.color(LapceColor::LAPCE_ERROR),
+                                        ),
+                                        crate::ownstack_status::BudgetLevel::Unknown => (
+                                            config
+                                                .color(LapceColor::STATUS_FOREGROUND),
+                                            config
+                                                .color(LapceColor::STATUS_BACKGROUND)
+                                                .multiply_alpha(0.7),
+                                            config.color(LapceColor::LAPCE_BORDER),
+                                        ),
+                                    };
+
+                                s.padding_horiz(6.0)
+                                    .padding_vert(2.0)
+                                    .margin_left(4.0)
+                                    .border(1.0)
+                                    .border_radius(999.0)
+                                    .border_color(border)
+                                    .background(bg)
+                                    .color(fg)
+                                    .font_size(10.0)
+                                    .selectable(false)
+                            },
+                        )
+                    },
+                    {
+                        let calls_label = ownstack_style.clone();
+                        let calls_level = ownstack_style.clone();
+                        label(move || calls_label.calls_badge_label()).style(
+                            move |s| {
+                                let config = config.get();
+                                let (fg, bg, border) =
+                                    match calls_level.calls_budget_level() {
+                                        crate::ownstack_status::BudgetLevel::Healthy => (
+                                            config.color(
+                                                LapceColor::SOURCE_CONTROL_ADDED,
+                                            ),
+                                            config
+                                                .color(LapceColor::SOURCE_CONTROL_ADDED)
+                                                .multiply_alpha(0.18),
+                                            config.color(
+                                                LapceColor::SOURCE_CONTROL_ADDED,
+                                            ),
+                                        ),
+                                        crate::ownstack_status::BudgetLevel::Warning => (
+                                            config.color(LapceColor::LAPCE_WARN),
+                                            config
+                                                .color(LapceColor::LAPCE_WARN)
+                                                .multiply_alpha(0.18),
+                                            config.color(LapceColor::LAPCE_WARN),
+                                        ),
+                                        crate::ownstack_status::BudgetLevel::Critical => (
+                                            config.color(LapceColor::LAPCE_ERROR),
+                                            config
+                                                .color(LapceColor::LAPCE_ERROR)
+                                                .multiply_alpha(0.18),
+                                            config.color(LapceColor::LAPCE_ERROR),
+                                        ),
+                                        crate::ownstack_status::BudgetLevel::Unknown => (
+                                            config
+                                                .color(LapceColor::STATUS_FOREGROUND),
+                                            config
+                                                .color(LapceColor::STATUS_BACKGROUND)
+                                                .multiply_alpha(0.7),
+                                            config.color(LapceColor::LAPCE_BORDER),
+                                        ),
+                                    };
+
+                                s.padding_horiz(6.0)
+                                    .padding_vert(2.0)
+                                    .margin_left(4.0)
+                                    .border(1.0)
+                                    .border_radius(999.0)
+                                    .border_color(border)
+                                    .background(bg)
+                                    .color(fg)
+                                    .font_size(10.0)
+                                    .selectable(false)
+                            },
+                        )
+                    },
                 ))
                     .on_click_stop(move |_| {
                         panel.show_panel(&PanelKind::OwnStackChat);

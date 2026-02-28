@@ -514,6 +514,10 @@ fn panel_view(
                     )
                     .into_any()
                 }
+                PanelKind::OwnStackMcp => {
+                    crate::ownstack_mcp::mcp_panel(window_tab_data.clone(), position)
+                        .into_any()
+                }
             };
             view.style(|s| s.size_pct(100.0, 100.0))
         },
@@ -571,6 +575,7 @@ fn panel_picker(
                 PanelKind::References => "References",
                 PanelKind::Implementation => "Implementation",
                 PanelKind::OwnStackChat => "OwnStack AI",
+                PanelKind::OwnStackMcp => "MCP Servers",
             };
             let icon = p.svg_name();
             let is_active = {

@@ -39,7 +39,8 @@ pub fn default_panel_order() -> PanelOrder {
             PanelKind::Problem,
             PanelKind::CallHierarchy,
             PanelKind::References,
-            PanelKind::Implementation
+            PanelKind::Implementation,
+            PanelKind::OwnStackMcp,
         ],
     );
     order.insert(

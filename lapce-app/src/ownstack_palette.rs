@@ -1,8 +1,57 @@
 use floem::prelude::{SignalGet, SignalUpdate};
-use floem::reactive::{RwSignal, create_rw_signal};
+use floem::reactive::{create_rw_signal, RwSignal};
 use lapce_rpc::ownstack::OwnStackRpc;
 
+use crate::command::LapceWorkbenchCommand;
 use crate::window_tab::CommonData;
+
+#[derive(Clone)]
+enum SuggestedActionKind {
+    Prompt(&'static str),
+    Workbench(LapceWorkbenchCommand),
+}
+
+#[derive(Clone)]
+struct SuggestedAction {
+    title: &'static str,
+    keywords: &'static [&'static str],
+    action: SuggestedActionKind,
+}
+
+fn suggested_actions() -> Vec<SuggestedAction> {
+    vec![
+        SuggestedAction {
+            title: "Analyze Active File",
+            keywords: &["analyze", "active", "file", "review"],
+            action: SuggestedActionKind::Prompt(
+                "Analyze the active file and summarize key risks and improvements.",
+            ),
+        },
+        SuggestedAction {
+            title: "Simulate Policy: npm publish",
+            keywords: &["policy", "npm", "publish", "security"],
+            action: SuggestedActionKind::Prompt(
+                "Simulate policy evaluation for command `npm publish` and explain the decision.",
+            ),
+        },
+        SuggestedAction {
+            title: "Open Settings",
+            keywords: &["settings", "preferences", "config"],
+            action: SuggestedActionKind::Workbench(
+                LapceWorkbenchCommand::OpenSettings,
+            ),
+        },
+    ]
+}
+
+fn action_matches_query(action: &SuggestedAction, query: &str) -> bool {
+    if query.trim().is_empty() {
+        return true;
+    }
+    let q = query.to_ascii_lowercase();
+    action.title.to_ascii_lowercase().contains(&q)
+        || action.keywords.iter().any(|k| k.contains(&q))
+}
 
 #[derive(Clone)]
 pub struct OwnStackPaletteData {
@@ -35,12 +84,26 @@ impl OwnStackPaletteData {
             return;
         }
 
-        // Send AI prompt via RPC
+        self.send_prompt(prompt);
+    }
+
+    fn send_prompt(&self, prompt: String) {
         let message = OwnStackRpc::AiPrompt { prompt };
         self.common.proxy.ownstack(message);
         tracing::info!("OwnStack Palette: AiPrompt sent");
-
         self.hide();
+    }
+
+    fn apply_suggested_action(&self, action: SuggestedAction) {
+        match action.action {
+            SuggestedActionKind::Prompt(prompt) => {
+                self.send_prompt(prompt.to_string());
+            }
+            SuggestedActionKind::Workbench(command) => {
+                self.common.workbench_command.send(command);
+                self.hide();
+            }
+        }
     }
 }
 
@@ -51,7 +114,10 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
     use floem::peniko::Color;
     use floem::prelude::SignalGet;
     use floem::style::{CursorStyle, Display, Position};
-    use floem::views::{Decorators, h_stack, label, text, text_input, v_stack};
+    use floem::text::Weight;
+    use floem::views::{
+        dyn_stack, h_stack, label, text, text_input, v_stack, Decorators,
+    };
 
     let active = palette_data.active;
     let input = palette_data.input;
@@ -60,28 +126,28 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
         // Row 1: title + hint
         h_stack((
             text("⚡ OwnStack — AI Command")
-                .style(|s| s.font_size(13.0).color(Color::from_rgb8(180, 220, 255))),
+                .style(|s| s.font_size(13.0).font_weight(Weight::BOLD).color(Color::from_rgb8(180, 220, 255))),
             label(|| "Esc: close  Enter: send").style(|s| {
                 s.font_size(10.0)
-                    .color(Color::from_rgba8(180, 200, 255, 160))
+                    .color(Color::from_rgba8(180, 200, 255, 140))
             }),
         ))
-        .style(|s| s.justify_between().items_center().padding_bottom(8.0)),
+        .style(|s| s.justify_between().items_center().padding_bottom(10.0)),
         // Row 2: input + send button
         h_stack((
             text_input(input)
                 .placeholder("Ask AI anything…")
                 .style(|s| {
                     s.width_full()
-                        .padding(9.0)
+                        .padding(10.0)
                         .border(1.5)
-                        .border_radius(8.0)
-                        .border_color(Color::from_rgb8(74, 158, 255))
+                        .border_radius(10.0)
+                        .border_color(Color::from_rgba8(74, 158, 255, 180))
                         .background(Color::from_rgb8(18, 22, 32))
                         .color(Color::WHITE)
                         .font_size(13.0)
-                        .box_shadow_blur(6.0)
-                        .box_shadow_color(Color::from_rgba8(74, 158, 255, 50))
+                        .box_shadow_blur(8.0)
+                        .box_shadow_color(Color::from_rgba8(74, 158, 255, 40))
                 })
                 .on_event_stop(floem::event::EventListener::KeyDown, {
                     let pd = palette_data.clone();
@@ -98,26 +164,75 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                 }),
             label(|| "➜")
                 .style(|s| {
-                    s.padding_horiz(14.0)
-                        .padding_vert(9.0)
-                        .border_radius(8.0)
+                    s.padding_horiz(16.0)
+                        .padding_vert(10.0)
+                        .border_radius(10.0)
                         .background(Color::from_rgb8(74, 158, 255))
                         .color(Color::WHITE)
                         .font_size(14.0)
                         .cursor(CursorStyle::Pointer)
-                        .hover(|s| s.background(Color::from_rgb8(100, 180, 255)))
+                        .hover(|s| s.background(Color::from_rgb8(100, 180, 255)).box_shadow_blur(12.0).box_shadow_color(Color::from_rgba8(74, 158, 255, 120)))
                 })
                 .on_click_stop({
                     let pd = palette_data.clone();
                     move |_| pd.submit()
                 }),
         ))
-        .style(|s| s.width_full().items_center().gap(10.0)),
-        // Row 3: hint
-        text("Tip: prefix with /plan, /auto or /ask to set mode").style(|s| {
+        .style(|s| s.width_full().items_center().gap(12.0)),
+        
+        // Row 3: suggested quick actions with basic filtering.
+        v_stack((
+            text("Suggested Actions").style(|s| s.font_size(10.0).font_weight(Weight::BOLD).color(Color::from_rgb8(120, 140, 180)).padding_top(12.0).padding_bottom(6.0)),
+            dyn_stack(
+                {
+                    let palette_data = palette_data.clone();
+                    move || {
+                        let query = palette_data.input.get();
+                        suggested_actions()
+                            .into_iter()
+                            .filter(|action| action_matches_query(action, &query))
+                            .collect::<Vec<_>>()
+                    }
+                },
+                |action| action.title.to_string(),
+                {
+                    let palette_data = palette_data.clone();
+                    move |action| {
+                        let on_click_data = palette_data.clone();
+                        let action_for_click = action.clone();
+                        h_stack((
+                            text("✦").style(|s| s.margin_right(8.0).color(Color::from_rgb8(74, 158, 255))),
+                            text(action.title.clone()),
+                        ))
+                        .on_click_stop(move |_| {
+                            on_click_data
+                                .apply_suggested_action(action_for_click.clone());
+                        })
+                        .style(move |s| {
+                            s.width_full()
+                                .padding_horiz(10.0)
+                                .padding_vert(7.0)
+                                .border_radius(8.0)
+                                .background(Color::from_rgba8(40, 50, 80, 120))
+                                .color(Color::from_rgb8(200, 220, 255))
+                                .font_size(11.5)
+                                .cursor(CursorStyle::Pointer)
+                                .hover(|s| {
+                                    s.background(Color::from_rgba8(74, 158, 255, 100))
+                                     .color(Color::WHITE)
+                                })
+                        })
+                    }
+                },
+            ),
+        ))
+        .style(|s| s.width_full().gap(6.0)),
+        
+        // Final Hint
+        text("Tip: try '/plan' to switch agent to planning mode").style(|s| {
             s.font_size(10.0)
-                .color(Color::from_rgba8(160, 180, 255, 130))
-                .padding_top(6.0)
+                .color(Color::from_rgba8(160, 180, 255, 110))
+                .padding_top(12.0)
         }),
     ))
     .style(move |s| {
@@ -127,16 +242,16 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
             Display::None
         })
         .position(Position::Absolute)
-        .margin_top(48.0)
+        .margin_top(64.0)
         .margin_horiz(16.0)
-        .max_width(720.0)
+        .max_width(640.0)
         .width_pct(100.0)
-        .padding(14.0)
-        .background(Color::from_rgb8(14, 18, 28))
+        .padding(18.0)
+        .background(Color::from_rgba8(14, 18, 28, 230)) // Glassmorphism base
         .border(1.5)
-        .border_color(Color::from_rgb8(74, 158, 255))
-        .border_radius(10.0)
-        .box_shadow_blur(18.0)
-        .box_shadow_color(Color::from_rgba8(74, 158, 255, 70))
+        .border_color(Color::from_rgba8(74, 158, 255, 150))
+        .border_radius(16.0)
+        .box_shadow_blur(40.0)
+        .box_shadow_color(Color::from_rgba8(0, 0, 0, 200))
     })
 }

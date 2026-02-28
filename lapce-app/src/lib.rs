@@ -51,5 +51,8 @@ pub mod window;
 pub mod window_tab;
 pub mod workspace;
 
+pub mod ownstack_mcp;
+pub mod ownstack_tests;
+
 #[cfg(windows)]
 extern crate windows_sys as windows;

@@ -1,5 +1,5 @@
 use floem::prelude::{SignalGet, SignalUpdate};
-use floem::reactive::{RwSignal, create_rw_signal};
+use floem::reactive::{create_rw_signal, RwSignal};
 
 use crate::ownstack_chat::AgentMode;
 use crate::window_tab::CommonData;
@@ -9,6 +9,14 @@ pub enum OwnStackRunState {
     Running,
     Idle,
     Disconnected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BudgetLevel {
+    Healthy,
+    Warning,
+    Critical,
+    Unknown,
 }
 
 /// OwnStack status bar state.
@@ -24,6 +32,13 @@ pub struct OwnStackStatusData {
     pub bridge_connected: RwSignal<bool>,
     /// Number of pending operations.
     pub pending_ops: RwSignal<u32>,
+    /// Runtime budget consumption metrics.
+    pub budget_tokens: RwSignal<u64>,
+    pub budget_max_tokens: RwSignal<u64>,
+    pub budget_steps: RwSignal<u64>,
+    pub budget_max_steps: RwSignal<u64>,
+    pub budget_calls: RwSignal<u64>,
+    pub budget_max_calls: RwSignal<u64>,
     #[allow(dead_code)]
     common: CommonData,
 }
@@ -36,6 +51,12 @@ impl OwnStackStatusData {
             status_text: create_rw_signal("idle".to_string()),
             bridge_connected: create_rw_signal(false),
             pending_ops: create_rw_signal(0),
+            budget_tokens: create_rw_signal(0),
+            budget_max_tokens: create_rw_signal(0),
+            budget_steps: create_rw_signal(0),
+            budget_max_steps: create_rw_signal(0),
+            budget_calls: create_rw_signal(0),
+            budget_max_calls: create_rw_signal(0),
             common,
         }
     }
@@ -113,6 +134,60 @@ impl OwnStackStatusData {
             }
         });
     }
+
+    /// Update runtime budgets from RPC stream.
+    pub fn set_budget(
+        &self,
+        tokens: u64,
+        max_tokens: u64,
+        steps: u32,
+        max_steps: u32,
+        calls: u32,
+        max_calls: u32,
+    ) {
+        self.budget_tokens.set(tokens);
+        self.budget_max_tokens.set(max_tokens);
+        self.budget_steps.set(steps as u64);
+        self.budget_max_steps.set(max_steps as u64);
+        self.budget_calls.set(calls as u64);
+        self.budget_max_calls.set(max_calls as u64);
+    }
+
+    pub fn tokens_badge_label(&self) -> String {
+        format_budget_badge(
+            "tok",
+            self.budget_tokens.get(),
+            self.budget_max_tokens.get(),
+        )
+    }
+
+    pub fn steps_badge_label(&self) -> String {
+        format_budget_badge(
+            "steps",
+            self.budget_steps.get(),
+            self.budget_max_steps.get(),
+        )
+    }
+
+    pub fn calls_badge_label(&self) -> String {
+        format_budget_badge(
+            "calls",
+            self.budget_calls.get(),
+            self.budget_max_calls.get(),
+        )
+    }
+
+    pub fn tokens_budget_level(&self) -> BudgetLevel {
+        budget_level(self.budget_tokens.get(), self.budget_max_tokens.get())
+    }
+
+    pub fn steps_budget_level(&self) -> BudgetLevel {
+        budget_level(self.budget_steps.get(), self.budget_max_steps.get())
+    }
+
+    pub fn calls_budget_level(&self) -> BudgetLevel {
+        budget_level(self.budget_calls.get(), self.budget_max_calls.get())
+    }
 }
 
 fn mode_label(mode: &AgentMode) -> &'static str {
@@ -128,6 +203,29 @@ fn run_state_label(state: OwnStackRunState) -> &'static str {
         OwnStackRunState::Running => "running",
         OwnStackRunState::Idle => "idle",
         OwnStackRunState::Disconnected => "disconnected",
+    }
+}
+
+fn format_budget_badge(prefix: &str, used: u64, max: u64) -> String {
+    if max == 0 {
+        format!("{prefix}:{used}")
+    } else {
+        format!("{prefix}:{used}/{max}")
+    }
+}
+
+fn budget_level(used: u64, max: u64) -> BudgetLevel {
+    if max == 0 {
+        return BudgetLevel::Unknown;
+    }
+
+    let ratio = used as f64 / max as f64;
+    if ratio >= 0.95 {
+        BudgetLevel::Critical
+    } else if ratio >= 0.80 {
+        BudgetLevel::Warning
+    } else {
+        BudgetLevel::Healthy
     }
 }
 
@@ -174,7 +272,9 @@ pub(crate) fn compose_detail_label(
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_detail_label, compose_display_label};
+    use super::{
+        budget_level, compose_detail_label, compose_display_label, BudgetLevel,
+    };
     use crate::ownstack_chat::AgentMode;
 
     #[test]
@@ -206,5 +306,18 @@ mod tests {
     fn compose_detail_without_mode() {
         let label = compose_detail_label(false, true, "idle", 1);
         assert_eq!(label, "idle | ops:1");
+    }
+
+    #[test]
+    fn budget_levels_follow_thresholds() {
+        assert_eq!(budget_level(10, 100), BudgetLevel::Healthy);
+        assert_eq!(budget_level(80, 100), BudgetLevel::Warning);
+        assert_eq!(budget_level(95, 100), BudgetLevel::Critical);
+    }
+
+    #[test]
+    fn budget_level_unknown_when_max_missing() {
+        assert_eq!(budget_level(0, 0), BudgetLevel::Unknown);
+        assert_eq!(budget_level(12, 0), BudgetLevel::Unknown);
     }
 }
