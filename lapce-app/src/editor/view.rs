@@ -1343,6 +1343,28 @@ pub fn editor_container_view(
                 is_active,
             )
             .debug_name("find view"),
+            // OwnStack: empty editor overlay when scratch/local doc has no content
+            {
+                let doc_overlay = doc;
+                crate::ownstack_empty_state::empty_editor_placeholder()
+                    .style(move |s| {
+                        let doc_data = doc_overlay.get();
+                        let content = doc_data.content.get();
+                        let is_empty_doc = matches!(content, DocContent::Scratch { .. } | DocContent::Local);
+                        let rope_len = doc_data.buffer.with(|b| b.len());
+                        // New buffers may have 0 or 1 byte (trailing newline)
+                        let show = is_empty_doc && rope_len <= 1;
+                        s.absolute()
+                            .size_pct(100.0, 100.0)
+                            .z_index(10)
+                            .background(
+                                config
+                                    .get()
+                                    .color(LapceColor::EDITOR_BACKGROUND),
+                            )
+                            .apply_if(!show, |s| s.hide())
+                    })
+            },
         ))
         .style(|s| s.width_full().flex_basis(0).flex_grow(1.0)),
     ))

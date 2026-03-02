@@ -379,12 +379,15 @@ pub fn onboarding_view(
             h_stack((
                 {
                     let data = data_nav.clone();
+                    let data_vis = data_nav.clone();
                     label(|| "Skip")
                         .on_click_stop(move |_| {
                             data.skip();
                         })
                         .style(move |s| {
                             let config = config.get();
+                            let is_last = data_vis.current_step.get() + 1
+                                == ONBOARDING_STEPS.len();
                             s.padding_horiz(20.0)
                                 .padding_vert(10.0)
                                 .cursor(CursorStyle::Pointer)
@@ -398,6 +401,7 @@ pub fn onboarding_view(
                                         .border_color(Color::from_rgba8(120, 140, 170, 80))
                                         .background(Color::from_rgba8(255, 255, 255, 8))
                                 })
+                                .apply_if(is_last, |s| s.hide())
                         })
                 },
                 empty().style(|s| s.flex_grow(1.0)),

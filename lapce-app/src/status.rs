@@ -10,7 +10,7 @@ use floem::{
     },
     style::{AlignItems, CursorStyle, Display},
     text::Weight,
-    views::{dyn_stack, label, stack, svg, Decorators},
+    views::{dyn_stack, empty, label, stack, svg, Decorators},
     View,
 };
 use indexmap::IndexMap;
@@ -249,7 +249,19 @@ pub fn status(
                         )
                         .style(|s| s.margin_right(10.0))
                     },
-                    label(|| "\u{26A1} AI Cmd".to_string())
+                    // Vertical separator between Lapce and OwnStack zones
+                    empty().style(move |s| {
+                        s.width(1.0)
+                            .height(16.0)
+                            .margin_horiz(6.0)
+                            .background(
+                                config
+                                    .get()
+                                    .color(LapceColor::LAPCE_BORDER)
+                                    .multiply_alpha(0.6),
+                            )
+                    }),
+                    label(|| "AI Cmd".to_string())
                         .on_click_stop({
                             let ownstack_palette = ownstack_palette.clone();
                             move |_| {
@@ -291,7 +303,7 @@ pub fn status(
                                     )
                                 })
                         }),
-                    label(|| "\u{1F6E1} Audit".to_string())
+                    label(|| "Audit".to_string())
                         .on_click_stop({
                             let ownstack_audit = ownstack_audit.clone();
                             move |_| {
@@ -332,7 +344,7 @@ pub fn status(
                                     )
                                 })
                         }),
-                    label(|| "\u{2699} Settings".to_string())
+                    label(|| "Settings".to_string())
                         .on_click_stop({
                             let workbench_command = workbench_command.clone();
                             move |_| {
