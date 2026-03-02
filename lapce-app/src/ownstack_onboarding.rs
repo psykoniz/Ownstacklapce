@@ -467,8 +467,11 @@ pub fn onboarding_view(
     })
     .style(move |s| {
         let config = config.get();
+        // padding_left compensates for left sidebar so the card
+        // appears centred in the editor area, not the whole window.
         s.absolute()
             .size_pct(100.0, 100.0)
+            .padding_left(180.0)
             .items_center()
             .justify_center()
             .z_index(50)
