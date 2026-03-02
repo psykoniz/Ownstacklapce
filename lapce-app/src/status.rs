@@ -415,7 +415,8 @@ pub fn status(
                             })
                     },
                     label(move || ownstack_status.detail_label()).style(move |s| {
-                        s.color(config.get().color(LapceColor::STATUS_FOREGROUND))
+                        s.margin_left(4.0)
+                            .color(config.get().color(LapceColor::STATUS_FOREGROUND))
                             .selectable(false)
                     }),
                     {

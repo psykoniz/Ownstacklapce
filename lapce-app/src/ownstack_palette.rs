@@ -123,16 +123,45 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
 
     // ── Palette card content ─────────────────────────────────────────────
     let palette_card = v_stack((
-        // Row 1: title + hint
-        h_stack((
-            text("OwnStack — AI Command")
-                .style(|s| s.font_size(13.0).font_weight(Weight::BOLD).color(Color::from_rgb8(180, 220, 255))),
-            label(|| "Esc: close  Enter: send").style(|s| {
-                s.font_size(10.0)
-                    .color(Color::from_rgba8(180, 200, 255, 140))
+        // Row 1: header with icon + title + shortcut hints
+        v_stack((
+            h_stack((
+                text("\u{27D0}")
+                    .style(|s| s.font_size(18.0).color(Color::from_rgb8(74, 158, 255)).margin_right(8.0)),
+                text("AI Command Palette")
+                    .style(|s| s.font_size(15.0).font_weight(Weight::BOLD).color(Color::from_rgb8(200, 225, 255))),
+                // Spacer
+                label(|| "").style(|s| s.flex_grow(1.0)),
+                label(|| "Esc").style(|s| {
+                    s.font_size(10.0)
+                        .padding_horiz(6.0)
+                        .padding_vert(2.0)
+                        .border(1.0)
+                        .border_radius(4.0)
+                        .border_color(Color::from_rgba8(120, 140, 180, 80))
+                        .color(Color::from_rgba8(150, 170, 210, 180))
+                        .margin_right(4.0)
+                }),
+                label(|| "Enter").style(|s| {
+                    s.font_size(10.0)
+                        .padding_horiz(6.0)
+                        .padding_vert(2.0)
+                        .border(1.0)
+                        .border_radius(4.0)
+                        .border_color(Color::from_rgba8(120, 140, 180, 80))
+                        .color(Color::from_rgba8(150, 170, 210, 180))
+                }),
+            ))
+            .style(|s| s.items_center().width_full()),
+            // Separator line under the header
+            label(|| "").style(|s| {
+                s.width_full()
+                    .height(1.0)
+                    .margin_top(10.0)
+                    .background(Color::from_rgba8(74, 158, 255, 40))
             }),
         ))
-        .style(|s| s.justify_between().items_center().padding_bottom(10.0)),
+        .style(|s| s.width_full().padding_bottom(12.0)),
         // Row 2: input + send button
         h_stack((
             text_input(input)
@@ -182,7 +211,15 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
 
         // Row 3: suggested quick actions with basic filtering + "No results" state.
         v_stack((
-            text("Suggested Actions").style(|s| s.font_size(10.0).font_weight(Weight::BOLD).color(Color::from_rgb8(120, 140, 180)).padding_top(12.0).padding_bottom(6.0)),
+            text("Suggested Actions").style(|s| {
+                s.font_size(10.0)
+                    .font_weight(Weight::BOLD)
+                    .color(Color::from_rgb8(120, 140, 180))
+                    .padding_top(12.0)
+                    .padding_bottom(6.0)
+                    .border_top(1.0)
+                    .border_color(Color::from_rgba8(74, 158, 255, 25))
+            }),
             dyn_stack(
                 {
                     let palette_data = palette_data.clone();

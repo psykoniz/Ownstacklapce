@@ -490,8 +490,8 @@ pub fn onboarding_view(
             .apply_if(!data_active.active.get(), |s| s.hide())
             .background(
                 config
-                    .color(LapceColor::LAPCE_DROPDOWN_SHADOW)
-                    .multiply_alpha(0.8),
+                    .color(LapceColor::EDITOR_BACKGROUND)
+                    .multiply_alpha(0.92),
             )
     })
 }
