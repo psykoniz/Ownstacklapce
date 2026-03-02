@@ -408,6 +408,7 @@ pub fn onboarding_view(
                 {
                     let data_label = data_nav.clone();
                     let data_click = data_nav.clone();
+                    let data_style = data_nav.clone();
                     label(move || {
                         if data_label.current_step.get() + 1
                             == ONBOARDING_STEPS.len()
@@ -421,18 +422,29 @@ pub fn onboarding_view(
                         data_click.next();
                     })
                     .style(move |s| {
-                        let config = config.get();
+                        let is_finish = data_style.current_step.get() + 1
+                            == ONBOARDING_STEPS.len();
+                        let (bg, bg_hover) = if is_finish {
+                            (
+                                Color::from_rgb8(50, 180, 100),
+                                Color::from_rgb8(60, 200, 115),
+                            )
+                        } else {
+                            (
+                                Color::from_rgb8(74, 158, 255),
+                                Color::from_rgb8(95, 172, 255),
+                            )
+                        };
                         s.padding_horiz(30.0)
                             .padding_vert(10.0)
-                            .background(config.color(LapceColor::PANEL_BACKGROUND))
-                            .border(1.0)
-                            .border_color(config.color(LapceColor::LAPCE_BORDER))
-                            .border_radius(4.0)
+                            .background(bg)
+                            .border(0.0)
+                            .border_radius(6.0)
                             .cursor(CursorStyle::Pointer)
-                            .color(config.color(LapceColor::EDITOR_FOREGROUND))
-                            .hover(|s| {
-                                s.background(Color::from_rgba8(74, 158, 255, 30))
-                                    .border_color(Color::from_rgba8(74, 158, 255, 120))
+                            .color(Color::WHITE)
+                            .font_bold()
+                            .hover(move |s| {
+                                s.background(bg_hover)
                             })
                     })
                 },
@@ -831,22 +843,21 @@ fn provider_button(
             let selected = is_selected();
             s.padding(15.0)
                 .width_full()
-                .border(1.0)
                 .border_radius(6.0)
-                .border_color(if selected {
-                    config.color(LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE)
-                } else {
-                    config.color(LapceColor::LAPCE_BORDER)
-                })
-                .background(if selected {
-                    Color::from_rgba8(74, 158, 255, 15)
-                } else {
-                    config.color(LapceColor::PANEL_BACKGROUND)
-                })
                 .cursor(CursorStyle::Pointer)
                 .items_center()
+                .apply_if(selected, |s| {
+                    s.border(2.0)
+                        .border_color(Color::from_rgb8(74, 158, 255))
+                        .background(Color::from_rgba8(74, 158, 255, 25))
+                })
+                .apply_if(!selected, |s| {
+                    s.border(1.0)
+                        .border_color(config.color(LapceColor::LAPCE_BORDER))
+                        .background(config.color(LapceColor::PANEL_BACKGROUND))
+                })
                 .hover(|s| {
-                    s.background(Color::from_rgba8(74, 158, 255, 25))
+                    s.background(Color::from_rgba8(74, 158, 255, 20))
                         .border_color(Color::from_rgba8(74, 158, 255, 100))
                 })
         })
@@ -882,21 +893,20 @@ fn mode_button(
         s.flex_col()
             .width_full()
             .padding(15.0)
-            .border(1.0)
             .border_radius(6.0)
-            .border_color(if selected {
-                config.color(LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE)
-            } else {
-                config.color(LapceColor::LAPCE_BORDER)
-            })
-            .background(if selected {
-                Color::from_rgba8(74, 158, 255, 15)
-            } else {
-                config.color(LapceColor::PANEL_BACKGROUND)
-            })
             .cursor(CursorStyle::Pointer)
+            .apply_if(selected, |s| {
+                s.border(2.0)
+                    .border_color(Color::from_rgb8(74, 158, 255))
+                    .background(Color::from_rgba8(74, 158, 255, 25))
+            })
+            .apply_if(!selected, |s| {
+                s.border(1.0)
+                    .border_color(config.color(LapceColor::LAPCE_BORDER))
+                    .background(config.color(LapceColor::PANEL_BACKGROUND))
+            })
             .hover(|s| {
-                s.background(Color::from_rgba8(74, 158, 255, 25))
+                s.background(Color::from_rgba8(74, 158, 255, 20))
                     .border_color(Color::from_rgba8(74, 158, 255, 100))
             })
     })
