@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 
 use crate::context::ContextManager;
 use crate::provider::{FinishReason, LlmMessage, LlmProvider, ToolDefinition};
+use crate::routing::ModelRouter;
 use crate::toolkits::{ToolResult, Toolkit, ToolkitError};
 
 // ─── Tool-args Safety Constants ────────────────────────────────────
@@ -175,9 +176,42 @@ impl Default for AgentBudget {
             max_llm_calls: 100,
             max_files_modified: 20,
             max_duration_minutes: 30,
-            max_consecutive_failures: 3,
+            max_consecutive_failures: 10,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRunMode {
+    Ask,
+    Auto,
+    Plan,
+}
+
+impl AgentRunMode {
+    pub fn from_str(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "plan" => Self::Plan,
+            _ => Self::Ask,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeBudgetSnapshot {
+    pub tokens: u64,
+    pub max_tokens: u64,
+    pub steps: u32,
+    pub max_steps: u32,
+    pub calls: u32,
+    pub max_calls: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeContextSnapshot {
+    pub current: u64,
+    pub max: u64,
 }
 
 #[derive(Debug, Default)]
@@ -268,6 +302,8 @@ pub struct AgentOrchestrator {
     workspace: PathBuf,
     memory: crate::project_memory::ProjectMemory,
     index: crate::index::SemanticIndex,
+    model_router: ModelRouter,
+    mode: AgentRunMode,
     current_mission: Option<Mission>,
     started_at: Option<Instant>,
     /// Tracks consecutive identical tool-parse errors for anti-loop detection.
@@ -284,6 +320,7 @@ impl AgentOrchestrator {
     ) -> Self {
         let memory = crate::project_memory::ProjectMemory::new(workspace.clone());
         let index = crate::index::SemanticIndex::new(workspace.clone());
+        let model_router = ModelRouter::new(&workspace);
         Self {
             provider,
             toolkits: Vec::new(),
@@ -293,6 +330,8 @@ impl AgentOrchestrator {
             workspace,
             memory,
             index,
+            model_router,
+            mode: AgentRunMode::Ask,
             current_mission: None,
             started_at: None,
             parse_error_tracker: ParseErrorTracker::default(),
@@ -360,6 +399,32 @@ impl AgentOrchestrator {
         self.toolkits.push(toolkit);
     }
 
+    pub fn set_mode(&mut self, mode: AgentRunMode) {
+        self.mode = mode;
+    }
+
+    pub fn mode(&self) -> AgentRunMode {
+        self.mode
+    }
+
+    pub fn budget_snapshot(&self) -> RuntimeBudgetSnapshot {
+        RuntimeBudgetSnapshot {
+            tokens: self.context.estimated_tokens() as u64,
+            max_tokens: self.context.max_tokens() as u64,
+            steps: self.counters.steps,
+            max_steps: self.budget.max_steps,
+            calls: self.counters.llm_calls,
+            max_calls: self.budget.max_llm_calls,
+        }
+    }
+
+    pub fn context_snapshot(&self) -> RuntimeContextSnapshot {
+        RuntimeContextSnapshot {
+            current: self.context.estimated_tokens() as u64,
+            max: self.context.max_tokens() as u64,
+        }
+    }
+
     pub fn current_mission(&self) -> Option<&Mission> {
         self.current_mission.as_ref()
     }
@@ -404,19 +469,111 @@ impl AgentOrchestrator {
         Self::execute_tool_shared(&self.toolkits, name, args).await
     }
 
-    fn route_model(&self, task_type: &str) -> Option<String> {
+    fn provider_default_model(
+        &self,
+        role: &str,
+        task_type: Option<&str>,
+    ) -> Option<String> {
         let provider_name = self.provider.name();
-        match (provider_name, task_type) {
-            ("anthropic", "planning") => Some("claude-sonnet-4-6".to_string()),
-            ("anthropic", "critique") => Some("claude-sonnet-4-6".to_string()),
-            ("anthropic", "worker") => Some("claude-sonnet-4-6".to_string()),
-            ("anthropic", "fast") => Some("claude-haiku-4-5-20251001".to_string()),
-            ("openrouter", "planning") => Some("anthropic/claude-sonnet-4-6".to_string()),
-            ("openrouter", "critique") => Some("anthropic/claude-sonnet-4-6".to_string()),
-            ("openrouter", "worker") => Some("anthropic/claude-sonnet-4-6".to_string()),
-            ("openrouter", "fast") => Some("anthropic/claude-haiku-4-5-20251001".to_string()),
+        match (provider_name, role, task_type) {
+            ("anthropic", _, Some("fast")) => {
+                Some("claude-3-5-haiku-latest".to_string())
+            }
+            ("anthropic", "planner", _) | ("anthropic", "critic", _) | ("anthropic", "worker", _) => {
+                Some("claude-3-5-sonnet-latest".to_string())
+            }
+            ("openrouter", _, Some("fast")) => {
+                Some("deepseek/deepseek-chat-v3-0324".to_string())
+            }
+            ("openrouter", "planner", _) | ("openrouter", "critic", _) | ("openrouter", "worker", _) => {
+                Some("deepseek/deepseek-chat-v3-0324".to_string())
+            }
             _ => None, // use default from config
         }
+    }
+
+    fn route_model(
+        &mut self,
+        role: &str,
+        task_type: Option<&str>,
+    ) -> Option<String> {
+        self.model_router.reload();
+        self.model_router
+            .route(role, task_type)
+            .or_else(|| self.provider_default_model(role, task_type))
+    }
+
+    fn parse_streamed_tool_calls(
+        tool_calls_deltas: &std::collections::HashMap<
+            usize,
+            (Option<String>, Option<String>, String),
+        >,
+    ) -> (
+        Vec<crate::provider::ToolCall>,
+        Vec<(crate::provider::ToolCall, ToolResult)>,
+    ) {
+        let mut parsed = Vec::new();
+        let mut parse_failures = Vec::new();
+        let mut sorted_indices: Vec<usize> =
+            tool_calls_deltas.keys().copied().collect();
+        sorted_indices.sort_unstable();
+
+        for idx in sorted_indices {
+            let Some((id, name, args_str)) = tool_calls_deltas.get(&idx) else {
+                continue;
+            };
+
+            let call_id = id.clone().unwrap_or_else(|| format!("call_{}", idx));
+            let call_name = name.clone().unwrap_or_default();
+
+            match serde_json::from_str::<serde_json::Value>(args_str) {
+                Ok(arguments) => {
+                    parsed.push(crate::provider::ToolCall {
+                        id: call_id,
+                        name: call_name,
+                        arguments,
+                    });
+                }
+                Err(err) => {
+                    warn!(
+                        tool_call_id = %call_id,
+                        tool_name = %call_name,
+                        parse_error = %err,
+                        "Invalid streamed tool-call JSON arguments"
+                    );
+
+                    let mut result = ToolResult::failure(
+                        format!(
+                            "Tool args JSON parse error for '{}': {}. \
+                             Re-send a valid JSON object for this tool call. Raw args attempted: {}",
+                            call_name, err, args_str
+                        ),
+                        Some(2),
+                    );
+                    result.metadata.insert(
+                        "error_kind".to_string(),
+                        "tool_args_json_parse".to_string(),
+                    );
+                    result
+                        .metadata
+                        .insert("tool_name".to_string(), call_name.clone());
+                    result
+                        .metadata
+                        .insert("raw_arguments".to_string(), args_str.clone());
+
+                    parse_failures.push((
+                        crate::provider::ToolCall {
+                            id: call_id,
+                            name: call_name,
+                            arguments: serde_json::Value::Null,
+                        },
+                        result,
+                    ));
+                }
+            }
+        }
+
+        (parsed, parse_failures)
     }
 
     fn check_budget(&self) -> Option<String> {
@@ -469,7 +626,7 @@ impl AgentOrchestrator {
             LlmMessage::user(user_goal),
         ];
 
-        let model = self.route_model("planning");
+        let model = self.route_model("planner", Some("planning"));
         let response = self
             .provider
             .complete(messages, None, model)
@@ -517,7 +674,7 @@ impl AgentOrchestrator {
         let messages =
             vec![LlmMessage::system(CRITIC_PROMPT), LlmMessage::user(prompt)];
 
-        let model = self.route_model("critique");
+        let model = self.route_model("critic", Some("critique"));
         let response = self
             .provider
             .complete(messages, None, model)
@@ -539,15 +696,17 @@ impl AgentOrchestrator {
     // ─── Worker Phase (main agent loop) ────────────────────────────
 
     /// Process a single prompt through the agent loop with streaming
-    pub async fn stream_process<F, M>(
+    pub async fn stream_process<F, M, T>(
         &mut self,
         user_prompt: &str,
         mut on_chunk: F,
         mut on_mission: M,
+        mut on_runtime: T,
     ) -> Result<String, String>
     where
         F: FnMut(crate::provider::StreamChunk) + Send,
         M: FnMut(Mission) + Send,
+        T: FnMut(RuntimeBudgetSnapshot, RuntimeContextSnapshot) + Send,
     {
         use futures::StreamExt;
 
@@ -587,10 +746,14 @@ impl AgentOrchestrator {
         }
 
         self.context.add_message(LlmMessage::user(user_prompt));
+        on_runtime(self.budget_snapshot(), self.context_snapshot());
 
-        // Create mission if in Plan mode or if specified
-        if let Ok(mission) = self.plan(user_prompt).await {
-            on_mission(mission);
+        // Plan mode explicitly runs the Planner before worker execution.
+        if self.mode == AgentRunMode::Plan {
+            if let Ok(mission) = self.plan(user_prompt).await {
+                on_mission(mission);
+                on_runtime(self.budget_snapshot(), self.context_snapshot());
+            }
         }
 
         loop {
@@ -618,7 +781,7 @@ impl AgentOrchestrator {
             let mut final_finish_reason = None;
             let mut _final_usage = None;
 
-            let model = self.route_model("worker");
+            let model = self.route_model("worker", Some("worker"));
             let mut stream = self
                 .provider
                 .stream(messages.clone(), tools, model)
@@ -659,6 +822,7 @@ impl AgentOrchestrator {
                 if chunk.usage.is_some() {
                     _final_usage = chunk.usage;
                 }
+                on_runtime(self.budget_snapshot(), self.context_snapshot());
             }
 
             let finish_reason = final_finish_reason.unwrap_or(FinishReason::Stop);
@@ -668,6 +832,7 @@ impl AgentOrchestrator {
                     self.context
                         .add_message(LlmMessage::assistant(&full_content));
                     self.counters.consecutive_failures = 0;
+                    on_runtime(self.budget_snapshot(), self.context_snapshot());
                     info!(
                         "Worker completed: {} steps, {} tool calls",
                         self.counters.steps, self.counters.tool_calls
@@ -676,6 +841,8 @@ impl AgentOrchestrator {
                 }
                 FinishReason::ToolCalls => {
                     let mut tool_calls = Vec::new();
+                    let mut parse_failures =
+                        Vec::<(crate::provider::ToolCall, ToolResult)>::new();
                     let mut sorted_indices: Vec<_> =
                         tool_calls_deltas.keys().collect();
                     sorted_indices.sort();
@@ -685,10 +852,16 @@ impl AgentOrchestrator {
                             tool_calls_deltas.get(idx).unwrap();
                         let tool_name = name.clone().unwrap_or_default();
 
-                        let arguments = match validate_and_parse_tool_args(&tool_name, args_str) {
+                        match validate_and_parse_tool_args(&tool_name, args_str) {
                             Ok(v) => {
                                 self.parse_error_tracker.reset();
-                                v
+                                tool_calls.push(crate::provider::ToolCall {
+                                    id: id.clone().unwrap_or_else(|| {
+                                        format!("call_{}", idx)
+                                    }),
+                                    name: tool_name,
+                                    arguments: v,
+                                });
                             }
                             Err(parse_err) => {
                                 // Classify and build the signature for dedup
@@ -728,22 +901,50 @@ impl AgentOrchestrator {
                                     "Tool '{}' parse error (attempt {}/{}): {}",
                                     tool_name, count, REPEATED_PARSE_ERROR_LIMIT, parse_err
                                 );
-                                // Use Null as fallback — tool will return an error
-                                serde_json::Value::Null
-                            }
-                        };
 
-                        tool_calls.push(crate::provider::ToolCall {
-                            id: id
-                                .clone()
-                                .unwrap_or_else(|| format!("call_{}", idx)),
-                            name: tool_name,
-                            arguments,
-                        });
+                                let mut result = ToolResult::failure(
+                                    format!(
+                                        "Tool args JSON parse error for '{}': {}. \
+                                         Re-send a valid JSON object for this tool call.",
+                                        tool_name, parse_err
+                                    ),
+                                    Some(2),
+                                );
+                                result.metadata.insert(
+                                    "error_kind".to_string(),
+                                    "tool_args_json_parse".to_string(),
+                                );
+                                result.metadata.insert(
+                                    "tool_name".to_string(),
+                                    tool_name.clone(),
+                                );
+                                result.metadata.insert(
+                                    "raw_arguments".to_string(),
+                                    args_str.clone(),
+                                );
+
+                                parse_failures.push((
+                                    crate::provider::ToolCall {
+                                        id: id.clone().unwrap_or_else(|| {
+                                            format!("call_{}", idx)
+                                        }),
+                                        name: tool_name,
+                                        arguments: serde_json::Value::Null,
+                                    },
+                                    result,
+                                ));
+                            }
+                        }
                     }
 
                     let mut assistant_msg = LlmMessage::assistant(&full_content);
-                    assistant_msg.tool_calls = Some(tool_calls.clone());
+                    let mut all_tool_calls = tool_calls.clone();
+                    all_tool_calls.extend(
+                        parse_failures
+                            .iter()
+                            .map(|(tool_call, _)| tool_call.clone()),
+                    );
+                    assistant_msg.tool_calls = Some(all_tool_calls);
                     self.context.add_message(assistant_msg);
 
                     let toolkits = self.toolkits.clone();
@@ -758,6 +959,15 @@ impl AgentOrchestrator {
 
                     let results = futures::future::join_all(futures).await;
 
+                    for (tool_call, result) in parse_failures {
+                        self.counters.tool_calls += 1;
+                        self.counters.consecutive_failures += 1;
+                        let result_json =
+                            serde_json::to_string(&result).unwrap_or_default();
+                        self.context
+                            .add_message(LlmMessage::tool_result(&tool_call.id, result_json));
+                        on_runtime(self.budget_snapshot(), self.context_snapshot());
+                    }
                     for (tool_call, result) in results {
                         self.counters.tool_calls += 1;
                         if !result.success {
@@ -794,6 +1004,7 @@ impl AgentOrchestrator {
                             LlmMessage::tool_result(&tool_call.id, result_json)
                         };
                         self.context.add_message(result_msg);
+                        on_runtime(self.budget_snapshot(), self.context_snapshot());
                     }
                     // G1+G2: emit live metrics after each tool round-trip
                     self.emit_budget_update();
@@ -833,7 +1044,7 @@ impl AgentOrchestrator {
                 self.counters.steps, self.counters.llm_calls
             );
 
-            let model = self.route_model("worker");
+            let model = self.route_model("worker", Some("worker"));
             let response = self
                 .provider
                 .complete(messages, tools, model)
@@ -1060,7 +1271,7 @@ mod tests {
         assert_eq!(budget.max_llm_calls, 100);
         assert_eq!(budget.max_files_modified, 20);
         assert_eq!(budget.max_duration_minutes, 30);
-        assert_eq!(budget.max_consecutive_failures, 3);
+        assert_eq!(budget.max_consecutive_failures, 10);
     }
 
     #[test]
@@ -1226,6 +1437,52 @@ mod tests {
         assert_eq!(c.tool_calls, 0);
         assert_eq!(c.llm_calls, 0);
         assert_eq!(c.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn test_parse_streamed_tool_calls_success() {
+        let mut deltas = std::collections::HashMap::new();
+        deltas.insert(
+            0,
+            (
+                Some("call_1".to_string()),
+                Some("read_file".to_string()),
+                r#"{"path":"src/main.rs"}"#.to_string(),
+            ),
+        );
+
+        let (parsed, failures) = AgentOrchestrator::parse_streamed_tool_calls(&deltas);
+        assert_eq!(parsed.len(), 1);
+        assert!(failures.is_empty());
+        assert_eq!(parsed[0].id, "call_1");
+        assert_eq!(parsed[0].name, "read_file");
+    }
+
+    #[test]
+    fn test_parse_streamed_tool_calls_invalid_json() {
+        let mut deltas = std::collections::HashMap::new();
+        deltas.insert(
+            0,
+            (
+                Some("call_bad".to_string()),
+                Some("git_add".to_string()),
+                r#"{"files":["a.rs",]}"#.to_string(),
+            ),
+        );
+
+        let (parsed, failures) = AgentOrchestrator::parse_streamed_tool_calls(&deltas);
+        assert!(parsed.is_empty());
+        assert_eq!(failures.len(), 1);
+
+        let (tool_call, result) = &failures[0];
+        assert_eq!(tool_call.id, "call_bad");
+        assert_eq!(tool_call.name, "git_add");
+        assert!(!result.success);
+        assert!(result.stderr.contains("Tool args JSON parse error"));
+        assert_eq!(
+            result.metadata.get("error_kind").map(String::as_str),
+            Some("tool_args_json_parse")
+        );
     }
 
     // ─── Stress Tests ────────────────────────────────────────────

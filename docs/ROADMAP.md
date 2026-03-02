@@ -1,98 +1,69 @@
-# OwnStackLapce Roadmap (Executable)
+# OwnStackLapce Roadmap
 
-Date: 2026-02-22
+Date: 2026-03-02
 
-This roadmap is written to match `GEMINI.md` security requirements and the
-current phase in `.ownstack/current_phase.json`.
+This roadmap is aligned with:
 
-## Current State
+- `GEMINI.md`
+- `AGENTS.md`
+- `.ownstack/current_phase.json`
 
-- Phase file: `.ownstack/current_phase.json` reports `current_phase = 12`.
-- Phases 0-11 completed and verified. Phase 12 (Team Orchestration & Ecosystem)
-  is in progress: multi-agent planner, dynamic model routing, signed WASI plugins,
-  self-healing loop, and native Rust toolkit migration are active.
+## 1. Current baseline
 
-## Milestone 0 (P0): End-to-End Prompt Works
+From `.ownstack/current_phase.json`:
 
-Goal: user prompt -> proxy -> agent -> streaming response visible in IDE.
+- `current_phase = 12`
+- `phase_0_complete` through `phase_12_complete` are `true`
 
-- [x] Send `OwnStackRpc::AiPrompt` from chat panel via `proxy.ownstack(...)`
-  - file: `lapce-app/src/ownstack_chat.rs`
-- [x] Send `OwnStackRpc::AiPrompt` from palette via `proxy.ownstack(...)`
-  - file: `lapce-app/src/ownstack_palette.rs`
-- [x] Route OwnStack notifications in the UI (stream chunk + mission + tool/audit/policy)
-  - file: `lapce-app/src/window_tab.rs`
+The project is in post-phase stabilization, not in feature bootstrap.
 
-Acceptance:
-- Chat prompt triggers agent spawn and streams tokens back into the chat panel.
+## 2. Completed milestones (high level)
 
-## Milestone 1 (P0 Security): Ask-Mode + Audit
+Delivered in the current baseline:
 
-Goal: `PolicyDecision::Ask` never executes silently; everything is auditable.
+- Agent-first runtime mode/state loop (`Ask/Auto/Plan`, run-state deltas)
+- Security path enforced (`Policy -> Path -> Sandbox -> ToolResult -> Audit`)
+- Policy E2E with correlation IDs and timeout behavior
+- Anti-loop guard and tool-args size hard-limit in orchestrator
+- MCP runtime config + integration tests
+- Workspace sandbox path-safety hardening
+- UI state surfaces updated (status/chat/onboarding/empty states)
 
-- [x] Implement a Policy approval handshake agent <-> IDE UI
-  - new: `ownstack-agent/src/policy_approval.rs`
-  - agent: `ownstack-agent/src/main.rs` (stdin reader + work queue; avoids deadlock)
-  - UI: `lapce-app/src/window_tab.rs` (Approve/Deny modal -> `PolicyResponse`)
-- [x] Enforce Ask-mode in toolkits:
-  - `ownstack-agent/src/toolkits/core.rs`
-  - `ownstack-agent/src/toolkits/git.rs`
-- [x] Write JSONL audit entries for core + git tool execution
-  - files: `ownstack-agent/src/toolkits/core.rs`, `ownstack-agent/src/toolkits/git.rs`
+## 3. Active priorities (next execution window)
 
-Acceptance:
-- A command classified as Ask triggers an approval modal.
-- Deny => tool fails, and an audit entry is written.
-- Approve => tool runs, and an audit entry is written.
+### P0 - Stabilize and release hardening
 
-## Milestone 2 (P0 Anti-Runaway): Budgets + Duration
+1. Keep CI gates strict and reproducible:
+   - `cargo check --workspace --all-targets`
+   - key crate tests
+   - `scripts/healthcheck.py`
+2. Validate release pipeline with real signing/notarization secrets.
+3. Keep cross-platform executable path handling stable (`EXE_SUFFIX` path logic).
 
-Goal: load budgets and stop runaway agent loops.
+### P1 - E2E depth and mission reliability
 
-- [x] Load budgets from `.ownstack/budgets.json` at agent startup (subset mapped)
-  - file: `ownstack-agent/src/main.rs`
-- [x] Enforce `max_duration_minutes` during agent loop
-  - file: `ownstack-agent/src/orchestrator.rs`
+1. Run complex mission E2E in controlled environments:
+   - `tests/e2e/test_mini_project_mission.py`
+   - `tests/e2e/test_scraper_bot_mission.py`
+2. Track failures by model/provider class and keep parser feedback actionable.
+3. Preserve no-regression behavior for policy, MCP, and sandbox scripts.
 
-Acceptance:
-- If runtime exceeds `max_duration_minutes`, the agent stops with a budget error.
+### P1 - Agent-first UI consistency
 
-## Milestone 2b (P0 Safety): Kill-Switch
+1. Ensure all UI mode/status surfaces derive from runtime deltas.
+2. Keep chat/status/panel rendering thin (no duplicated business logic in UI).
+3. Continue UX polish only when it does not bypass runtime/security invariants.
 
-Goal: user can stop the agent immediately; proxy kills agent + bridge processes.
+## 4. Deferred items (not blocking baseline)
 
-- [x] Add `OwnStackRpc::KillSwitch`
-  - file: `lapce-rpc/src/ownstack.rs`
-- [x] Chat "Stop" button triggers `KillSwitch`
-  - file: `lapce-app/src/ownstack_chat.rs`
-- [x] Proxy handles `KillSwitch` by killing child processes and not auto-restarting
-  - file: `lapce-proxy/src/dispatch.rs`
+- Further specialist toolkit depth (v2+ logic quality)
+- Additional packaging polish for all distro channels
+- Extended docs and go-live communication material
 
-Acceptance:
-- While the agent is generating or running a tool, press Stop => agent is killed and
-  the IDE returns to an idle state.
+## 5. Definition of done for this cycle
 
-## Milestone 3 (P0 Windows Reliability): Sandbox Parsing
+1. Branch builds with no compile errors on workspace.
+2. No regression in core test suites and healthcheck scripts.
+3. Updated docs reflect current runtime contract and phase status.
+4. Release branch is push-ready with reproducible validation commands.
 
-Goal: Windows sandbox tests pass; quoting works.
-
-- [x] Replace whitespace splitting with a quote-aware command splitter
-  - file: `ownstack-engine/src/sandbox/process.rs`
-- [x] Update stress tests to be deterministic on Windows environments
-  - file: `ownstack-engine/tests/sandbox_stress.rs`
-
-Acceptance:
-- `cargo test -p ownstack-engine` passes on Windows.
-
-## Next (Planned)
-
-- [x] Kill-Switch (stop agent + kill subprocesses) wired from UI -> proxy -> agent.
-- [x] Replace `grep | head` search tool with a Rust-native search (cross-platform).
-- [x] OwnStack status bar integration (mode + running state) + better tool/audit panels.
-- [x] Phase 4 distribution (bundle agent, MSI pipeline, onboarding).
-- [x] Phase 5-11 completed (Security, Sandbox, Flow, Polish, Milestones, RAG).
-- [/] Phase 12 in progress:
-  - [x] Dynamic Model Routing
-  - [x] Native Rust Toolkit Migration (PM, QA, Security, Reviewer, Docs, Designer)
-  - [x] Self-Healing Agent Loop
-  - [ ] Final production polish & launch prep

@@ -52,6 +52,9 @@ impl ModelRouter {
             }
         };
 
+        // Accept UTF-8 BOM produced by some Windows editors/tools.
+        let content = content.trim_start_matches('\u{feff}');
+
         if content.trim().is_empty() {
             debug!(
                 "ModelRouter: config at {:?} is empty, using defaults",
@@ -176,5 +179,30 @@ mod tests {
 
         let router = ModelRouter::new(temp.path());
         assert_eq!(router.route("worker", Some("documentation")), None);
+    }
+
+    #[test]
+    fn reload_supports_utf8_bom() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ownstack_dir = temp.path().join(".ownstack");
+        std::fs::create_dir_all(&ownstack_dir).expect("create .ownstack");
+
+        let with_bom = format!(
+            "{}{}",
+            '\u{feff}',
+            r#"{
+                "default": "model-with-bom",
+                "roles": {"worker": "worker-with-bom"},
+                "tasks": {}
+            }"#
+        );
+        std::fs::write(ownstack_dir.join("routing.json"), with_bom)
+            .expect("write bom config");
+
+        let router = ModelRouter::new(temp.path());
+        assert_eq!(
+            router.route("worker", Some("unknown")),
+            Some("worker-with-bom".to_string())
+        );
     }
 }

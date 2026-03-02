@@ -430,15 +430,15 @@ fn parse_sse_chunk(
 
     let choices = json.get("choices")?.as_array()?;
     let choice = choices.first()?;
-    let delta = choice.get("delta")?;
+    let delta = choice.get("delta");
 
     let delta_content = delta
-        .get("content")
+        .and_then(|d| d.get("content"))
         .and_then(|c| c.as_str())
         .map(|s| s.to_string());
 
     let delta_tool_calls: Vec<ToolCallDelta> = delta
-        .get("tool_calls")
+        .and_then(|d| d.get("tool_calls"))
         .and_then(|tc| tc.as_array())
         .map(|arr| {
             arr.iter()

@@ -599,6 +599,9 @@ impl ProxyHandler for Dispatcher {
                         lapce_rpc::ownstack::OwnStackRpc::AiPrompt { .. } => {
                             "ai.prompt"
                         }
+                        lapce_rpc::ownstack::OwnStackRpc::SetAgentMode { .. } => {
+                            "agent.set_mode"
+                        }
                         lapce_rpc::ownstack::OwnStackRpc::ToolExec { .. } => {
                             "tools.exec"
                         }

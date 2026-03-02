@@ -91,6 +91,7 @@ mod tests {
                     received += 1;
                 },
                 |_| {},
+                |_, _| {},
             )
             .await;
 
@@ -115,6 +116,7 @@ mod tests {
                     received += 1;
                 },
                 |_| {},
+                |_, _| {},
             )
             .await;
 

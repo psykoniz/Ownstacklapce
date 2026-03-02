@@ -1,121 +1,192 @@
 # OwnStack Operations Runbook
 
-## Scope
-This document defines the production execution path, security checks, credential handling, and release validation for OwnStack IDE.
+Last updated: 2026-03-02
 
-## Mandatory Security Execution Flow
-Every tool execution must follow this chain, in order:
+## 1. Scope
+
+This runbook covers runtime behavior for:
+
+- Agent execution and UI interaction
+- Security chain enforcement
+- Secret handling
+- E2E/CI validation and release checks
+
+## 2. Mandatory security execution flow
+
+Every tool action must follow:
 
 `Command -> PolicyEngine -> PathValidator -> Sandbox -> ToolResult -> AuditLog`
 
-Operational rules:
+Hard requirements:
 
-- Never bypass policy approval in `Ask` mode.
-- Never execute a tool directly from UI without proxy and policy checks.
-- Always write resulting tool/audit events back to the RPC stream.
-- Keep dangerous commands blocked by policy defaults.
+- No direct tool execution from UI bypassing proxy/agent flow
+- `Ask` decisions must require explicit approve/deny handling
+- Blocked command classes remain blocked by policy defaults
+- Audit entries must be produced for execution outcomes
 
-## Credential and Secret Handling
-OwnStack credentials are stored in the OS-native secure store through `keyring`:
+## 3. Runtime process wiring
 
-- Windows: Credential Manager
-- macOS: Keychain
-- Linux: Secret Service / Keyring backend
+Primary process path:
 
-Current entries:
+1. `lapce-app` sends `OwnStackRpc`
+2. `lapce-proxy` dispatches and manages process lifecycle
+3. `ownstack-agent` executes orchestration/tool calls
+
+Bridge path is available via `ownstack-bridge` and `ownstack-python` when enabled.
+
+Kill-switch behavior:
+
+- `OwnStackRpc::KillSwitch` is handled in proxy dispatch
+- Agent and bridge subprocesses are stopped immediately
+
+## 4. Secret and onboarding handling
+
+Secrets use OS keyring:
 
 - Service: `OwnStack IDE`
-- Username/key: `openrouter_api_key`
-- Username/key: `anthropic_api_key`
+- Keys: `openrouter_api_key`, `anthropic_api_key`
 
-Storage and load path:
+Relevant paths:
 
-- UI wizard save path: `lapce-app/src/ownstack_onboarding.rs`
-- Runtime secret load path: `lapce-proxy/src/dispatch.rs`
+- Onboarding state file: `ownstack-onboarding.json`
+- Onboarding UI and save: `lapce-app/src/ownstack_onboarding.rs`
+- Secret read and env hydration into agent process: `lapce-proxy/src/dispatch.rs`
 
-Security requirements:
+Operational rules:
 
-- Do not log secret values.
-- Do not persist API keys in JSON config files.
-- Keep onboarding state (`ownstack-onboarding.json`) non-secret.
+- Never log secret values
+- Never persist API keys in plain JSON project config
+- Keep onboarding state non-secret
 
-## First-Launch Onboarding
-On first launch, onboarding is displayed from `lapce-app/src/app.rs`.
+## 5. Agent mode and runtime state
 
-Steps:
+Agent mode is runtime-owned:
 
-1. Provider setup (OpenRouter / Anthropic / Local Ollama).
-2. Secure key input for cloud providers.
-3. Default mode selection (`Ask`, `Auto`, `Plan`).
-4. Workspace policy/budget guidance.
-5. Persist runtime state and keyring secrets on `Finish`.
+- `ask`
+- `auto`
+- `plan`
 
-## Status Bar and Agent State
-The status bar is the operator signal surface:
+Run states:
 
-- Mode: `Ask | Auto | Plan`
-- Runtime state: `running | idle | disconnected`
-- Optional detail: stream/mission/audit/policy states
+- `disconnected`
+- `idle`
+- `running`
+- `awaiting_approval`
+- `stopped`
+- `error`
 
-Code paths:
+UI must reflect runtime state from RPC, not local-only toggles.
 
-- State model: `lapce-app/src/ownstack_status.rs`
-- UI rendering: `lapce-app/src/status.rs`
-- Event updates: `lapce-app/src/window_tab.rs`
+## 6. Policy approval operations
 
-## E2E and Regression Scripts
-E2E scripts live in `tests/e2e/`.
+Policy approval is handled by `PolicyApprovalManager`:
 
-Primary checks:
+- Correlation ID enforced on prompt/response matching
+- Timeout constant: `15s`
+- Mismatched responses are ignored safely
+- Timeout resolves as deny
 
-- `tests/e2e/verify_agent_spawn.py`
-- `tests/e2e/verify_sandbox_exec.py`
-- `tests/e2e/verify_escape_mitigation.py`
-- `tests/e2e/verify_llm_e2e.py`
-- `tests/e2e/test_policy_approval.py`
-- `tests/e2e/test_wasi_plugin.py`
-- `tests/e2e/test_agent_rpc.py`
+RPC variants used:
 
-Quick run:
+- `PolicyPrompt { command, reason, cwd, correlation_id, timeout_secs }`
+- `PolicyResponse { approved, correlation_id }`
 
-```bash
-python scripts/healthcheck.py
-```
+## 7. Runtime deltas and UI reducer
 
-## MCP Client Runtime Config
-When present, the agent auto-loads MCP servers from:
+Agent emits semantic UI deltas through `UiStateDelta`:
+
+- `mode`, `run_state`
+- `budget`, `context`
+- `mission`
+- `pending_approval`
+- `tool_event`
+- `alert`
+
+Reducer path:
+
+- `lapce-app/src/window_tab.rs` (`apply_ownstack_ui_delta`)
+
+Legacy budget/context update variants are still consumed for compatibility:
+
+- `BudgetUpdate`
+- `ContextUpdate`
+
+## 8. MCP operations
+
+MCP config file:
 
 - `.ownstack/mcp_servers.json`
 
-Example:
+Load path:
 
-```json
-{
-  "servers": [
-    {
-      "name": "filesystem",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "env": {},
-      "enabled": true
-    }
-  ]
-}
+- `ownstack-agent/src/main.rs` (`load_mcp_server_configs`)
+
+UI panel path:
+
+- `lapce-app/src/ownstack_mcp.rs`
+
+## 9. Vision/snapshot operations
+
+UI snapshot and capture messages:
+
+- `UiSnapshotRequest`
+- `UiSnapshot`
+- `CaptureScreenshot`
+
+Toolkit and engine paths:
+
+- `ownstack-agent/src/toolkits/vision.rs`
+- `ownstack-engine/src/vision.rs`
+
+## 10. Validation commands
+
+Core local checks:
+
+```bash
+cargo check --workspace --all-targets
+cargo test -p ownstack-agent
+cargo test -p ownstack-engine
+cargo test -p lapce-app ownstack_tests
+python scripts/healthcheck.py
 ```
 
-## Release Validation (Cross-Platform)
-Release orchestration is in `.github/workflows/release.yml`.
+Healthcheck script set currently includes:
 
-Validation targets:
+- `verify_agent_spawn.py`
+- `verify_sandbox_exec.py`
+- `verify_escape_mitigation.py`
+- `test_wasi_plugin.py`
+- `test_policy_approval.py`
+- `test_agent_rpc.py`
+- `test_mcp_handshake.py`
+- `test_packaging_install_run.py`
+- `verify_llm_e2e.py`
 
-- Windows: `.msi` + portable zip (+ optional code signing verification)
-- macOS: signed/notarized `.dmg` + staple validation
-- Linux: `.deb`, `.rpm`, `.AppImage`, `.flatpak`
-- Artifact presence gate: `validate-artifacts` job
+Optional heavy missions (enabled by `OWNSTACK_RUN_COMPLEX_MISSIONS=1`):
 
-## Incident Notes
-Windows-specific operational caveats:
+- `test_mini_project_mission.py`
+- `test_scraper_bot_mission.py`
 
-- If `ownstack-agent.exe` is running, builds may fail with access denied (`os error 5`).
-- If Cargo lock files are stale, terminate orphan `cargo` processes before retry.
-- If E2E output is silent, verify the script is executing `target/debug/ownstack-agent(.exe)` and not a stale `target/debug/deps` binary.
+## 11. Release operations
+
+Release workflow:
+
+- `.github/workflows/release.yml`
+
+Expected artifact families:
+
+- Windows: MSI + portable zip
+- macOS: DMG (signed/notarized path)
+- Linux: tar/deb/rpm/AppImage/Flatpak variants
+
+Recommended gate before publish:
+
+- run CI checks and healthcheck locally
+- confirm artifact validation job passes
+
+## 12. Incident notes (Windows-heavy)
+
+- Build can fail with `os error 5` when `ownstack-agent.exe` remains running
+- Cargo file-lock waits usually indicate concurrent or stale cargo processes
+- If E2E appears silent, verify script points to the correct fresh agent binary
+

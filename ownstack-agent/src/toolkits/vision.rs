@@ -5,11 +5,12 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
-use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
-
-use ownstack_engine::{AuditEntry, AuditLogger, PathValidator, PolicyDecision};
 use std::time::Instant;
 use tracing::warn;
+
+use ownstack_engine::{AuditEntry, AuditLogger, PathValidator, PolicyDecision};
+
+use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
 
 pub struct VisionToolkit {
     workspace: PathBuf,
@@ -67,7 +68,7 @@ struct AnalyzeImageArgs {
 
 #[derive(Deserialize)]
 struct CaptureUiArgs {
-    _panel: Option<String>,
+    panel: Option<String>,
 }
 
 #[async_trait]
@@ -122,10 +123,9 @@ impl Toolkit for VisionToolkit {
                 let start = Instant::now();
                 let parsed: AnalyzeImageArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
-                
+
                 let image_path = std::path::Path::new(&parsed.image_path);
-                
-                // Step 2: Path validation (GEMINI.md 6.3)
+
                 let validated_path = self.path_validator.validate(image_path).map_err(|e| {
                     self.audit(
                         "read_image",
@@ -139,20 +139,19 @@ impl Toolkit for VisionToolkit {
                     ToolkitError::SecurityViolation(e.to_string())
                 })?;
 
-                let data = std::fs::read(&validated_path)
-                    .map_err(|e| {
-                        self.audit(
-                            "read_image",
-                            &parsed.image_path,
-                            PolicyDecision::Auto,
-                            "vision.analyze_image",
-                            false,
-                            start.elapsed().as_millis() as u64,
-                            vec![validated_path.to_string_lossy().to_string()],
-                        );
-                        ToolkitError::ExecutionFailed(format!("Failed to read image: {}", e))
-                    })?;
-                
+                let data = std::fs::read(&validated_path).map_err(|e| {
+                    self.audit(
+                        "read_image",
+                        &parsed.image_path,
+                        PolicyDecision::Auto,
+                        "vision.analyze_image",
+                        false,
+                        start.elapsed().as_millis() as u64,
+                        vec![validated_path.to_string_lossy().to_string()],
+                    );
+                    ToolkitError::ExecutionFailed(format!("Failed to read image: {}", e))
+                })?;
+
                 let b64 = base64_simd::STANDARD.encode_to_string(&data);
                 let media_type = match validated_path.extension().and_then(|s| s.to_str()) {
                     Some("png") => "image/png",
@@ -160,10 +159,15 @@ impl Toolkit for VisionToolkit {
                     _ => "image/png",
                 };
 
-                let mut result = ToolResult::success(format!("Image loaded: {}. Prompt: {}", parsed.image_path, parsed.prompt));
+                let mut result = ToolResult::success(format!(
+                    "Image loaded: {}. Prompt: {}",
+                    parsed.image_path, parsed.prompt
+                ));
                 result.metadata.insert("image_data".to_string(), b64);
-                result.metadata.insert("media_type".to_string(), media_type.to_string());
-                
+                result
+                    .metadata
+                    .insert("media_type".to_string(), media_type.to_string());
+
                 self.audit(
                     "read_image",
                     &parsed.image_path,
@@ -177,15 +181,118 @@ impl Toolkit for VisionToolkit {
                 Ok(result)
             }
             "capture_ui" => {
-                let _parsed: CaptureUiArgs = serde_json::from_value(args)
+                let start = Instant::now();
+                let parsed: CaptureUiArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
 
-                Ok(ToolResult::failure(
-                    "capture_ui is not yet implemented — requires IDE frontend IPC".to_string(),
-                    None,
-                ))
+                let ownstack_dir = self.workspace.join(".ownstack");
+                let snapshot_rel = std::path::Path::new(".ownstack/ui_snapshot.json");
+                let screenshot_rel = std::path::Path::new(".ownstack/ui_screenshot.png");
+
+                let snapshot_path = self
+                    .path_validator
+                    .validate(snapshot_rel)
+                    .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?;
+                let screenshot_path = self
+                    .path_validator
+                    .validate(screenshot_rel)
+                    .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?;
+
+                if let Err(err) = std::fs::create_dir_all(&ownstack_dir) {
+                    return Ok(ToolResult::failure(
+                        format!("Failed to create .ownstack directory: {}", err),
+                        None,
+                    ));
+                }
+
+                let snapshot_json = match std::fs::read_to_string(&snapshot_path) {
+                    Ok(content) => content,
+                    Err(err) => {
+                        self.audit(
+                            "capture_ui",
+                            "capture_ui",
+                            PolicyDecision::Auto,
+                            "vision.capture_ui",
+                            false,
+                            start.elapsed().as_millis() as u64,
+                            vec![snapshot_path.to_string_lossy().to_string()],
+                        );
+                        return Ok(ToolResult::failure(
+                            format!(
+                                "UI snapshot metadata missing: {}. Trigger UiSnapshotRequest first.",
+                                err
+                            ),
+                            None,
+                        ));
+                    }
+                };
+
+                let screenshot_result =
+                    ownstack_engine::vision::capture_active_window(&screenshot_path);
+
+                let panel_name = parsed.panel.unwrap_or_else(|| "all".to_string());
+                let mut result = if screenshot_result.is_ok() {
+                    ToolResult::success(format!("UI capture ready (panel: {}).", panel_name))
+                } else {
+                    ToolResult::success(format!(
+                        "UI snapshot metadata captured (panel: {}). Screenshot unavailable on this platform.",
+                        panel_name
+                    ))
+                };
+
+                result.metadata.insert(
+                    "snapshot_path".to_string(),
+                    snapshot_path.to_string_lossy().to_string(),
+                );
+                result
+                    .metadata
+                    .insert("snapshot_json".to_string(), snapshot_json);
+                result.metadata.insert(
+                    "screenshot_path".to_string(),
+                    screenshot_path.to_string_lossy().to_string(),
+                );
+                if let Err(err) = screenshot_result {
+                    result
+                        .metadata
+                        .insert("screenshot_error".to_string(), err);
+                }
+
+                self.audit(
+                    "capture_ui",
+                    "capture_ui",
+                    PolicyDecision::Auto,
+                    "vision.capture_ui",
+                    true,
+                    start.elapsed().as_millis() as u64,
+                    vec![
+                        snapshot_path.to_string_lossy().to_string(),
+                        screenshot_path.to_string_lossy().to_string(),
+                    ],
+                );
+
+                Ok(result)
             }
             _ => Err(ToolkitError::ToolNotFound(tool_name.to_string())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VisionToolkit;
+    use crate::toolkits::Toolkit;
+
+    #[tokio::test]
+    async fn capture_ui_reports_missing_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let toolkit = VisionToolkit::new(dir.path().to_path_buf(), "sess-test".to_string());
+
+        let result = toolkit
+            .execute("capture_ui", serde_json::json!({}))
+            .await
+            .expect("capture_ui call should not fail at protocol layer");
+
+        assert!(!result.success);
+        assert!(result.stderr.contains("UI snapshot metadata missing"));
     }
 }

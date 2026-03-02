@@ -12,6 +12,8 @@ This directory contains interactive/regression scripts used to validate the full
 - `test_wasi_plugin.py`: validates WASI plugin execution and JSON output.
 - `test_agent_rpc.py`: validates raw agent RPC contract behavior.
 - `test_mcp_handshake.py`: validates MCP initialize/tools handshake with a mock server.
+- `test_mini_project_mission.py`: validates a complex mission that generates a Rust mini project and runs tests.
+- `test_scraper_bot_mission.py`: validates a complex mission that generates an offline scraper-style Rust project and runs tests.
 - `test_packaging_install_run.py`: validates packaging artifacts install/run smoke checks per OS.
 
 ## Packaging Smoke Env Vars
@@ -34,4 +36,10 @@ From repository root:
 
 ```bash
 python scripts/healthcheck.py
+```
+
+Run the scraper mission E2E directly:
+
+```bash
+python tests/e2e/test_scraper_bot_mission.py --workspace .
 ```

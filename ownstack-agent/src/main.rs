@@ -1,5 +1,11 @@
-use lapce_rpc::ownstack::OwnStackRpc;
-use ownstack_agent::orchestrator::{AgentBudget, AgentOrchestrator};
+use lapce_rpc::ownstack::{
+    AgentModeState, AgentRunState, BudgetSnapshot, ContextSnapshot, MissionSnapshot,
+    OwnStackRpc, PendingApprovalSnapshot, ToolEventSnapshot, UiStateDelta,
+};
+use ownstack_agent::orchestrator::{
+    AgentBudget, AgentOrchestrator, AgentRunMode, RuntimeBudgetSnapshot,
+    RuntimeContextSnapshot,
+};
 use ownstack_agent::policy_approval::{PolicyApprovalManager, RpcSink};
 use ownstack_agent::provider::LlmProvider;
 use ownstack_agent::providers::anthropic::AnthropicProvider;
@@ -97,6 +103,94 @@ fn load_mcp_server_configs(workspace: &std::path::Path) -> Vec<McpServerConfig> 
         .collect()
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeUiState {
+    mode: AgentModeState,
+    run_state: AgentRunState,
+}
+
+impl RuntimeUiState {
+    fn from_env() -> Self {
+        let mode = match std::env::var("OWNSTACK_AGENT_MODE")
+            .ok()
+            .map(|v| v.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("auto") => AgentModeState::Auto,
+            Some("plan") => AgentModeState::Plan,
+            _ => AgentModeState::Ask,
+        };
+
+        Self {
+            mode,
+            run_state: AgentRunState::Idle,
+        }
+    }
+}
+
+fn runtime_mode_from_rpc(mode: &AgentModeState) -> AgentRunMode {
+    match mode {
+        AgentModeState::Ask => AgentRunMode::Ask,
+        AgentModeState::Auto => AgentRunMode::Auto,
+        AgentModeState::Plan => AgentRunMode::Plan,
+    }
+}
+
+fn send_ui_delta(delta: UiStateDelta) {
+    send_rpc_notification(OwnStackRpc::UiStateDelta { delta });
+}
+
+fn send_budget_context_updates(
+    budget: RuntimeBudgetSnapshot,
+    context: RuntimeContextSnapshot,
+) {
+    send_rpc_notification(OwnStackRpc::BudgetUpdate {
+        tokens: budget.tokens,
+        max_tokens: budget.max_tokens,
+        steps: u64::from(budget.steps),
+        max_steps: u64::from(budget.max_steps),
+        calls: u64::from(budget.calls),
+        max_calls: u64::from(budget.max_calls),
+    });
+    send_rpc_notification(OwnStackRpc::ContextUpdate {
+        current: context.current,
+        max: context.max,
+    });
+    send_ui_delta(UiStateDelta {
+        mode: None,
+        run_state: None,
+        budget: Some(BudgetSnapshot {
+            tokens: budget.tokens,
+            max_tokens: budget.max_tokens,
+            steps: u64::from(budget.steps),
+            max_steps: u64::from(budget.max_steps),
+            calls: u64::from(budget.calls),
+            max_calls: u64::from(budget.max_calls),
+        }),
+        context: Some(ContextSnapshot {
+            current: context.current,
+            max: context.max,
+        }),
+        mission: None,
+        pending_approval: None,
+        tool_event: None,
+        alert: None,
+    });
+}
+
+fn emit_runtime_state(state: &RuntimeUiState) {
+    send_ui_delta(UiStateDelta {
+        mode: Some(state.mode.clone()),
+        run_state: Some(state.run_state.clone()),
+        budget: None,
+        context: None,
+        mission: None,
+        pending_approval: None,
+        tool_event: None,
+        alert: None,
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -171,6 +265,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut orchestrator =
         AgentOrchestrator::new(provider.clone(), workspace.clone(), 128000);
+    let mut runtime_state = RuntimeUiState::from_env();
+    orchestrator.set_mode(runtime_mode_from_rpc(&runtime_state.mode));
 
     // Load budgets from .ownstack/budgets.json when available.
     let budgets_path = workspace.join(".ownstack").join("budgets.json");
@@ -210,7 +306,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let rpc_sink: RpcSink = Arc::new(send_rpc_notification);
+    let rpc_sink: RpcSink = Arc::new(|rpc: OwnStackRpc| {
+        if let OwnStackRpc::PolicyPrompt {
+            command, reason, ..
+        } = &rpc
+        {
+            send_ui_delta(UiStateDelta {
+                mode: None,
+                run_state: Some(AgentRunState::AwaitingApproval),
+                budget: None,
+                context: None,
+                mission: None,
+                pending_approval: Some(PendingApprovalSnapshot {
+                    command: command.clone(),
+                    reason: reason.clone(),
+                    timeout_ms: Some(300_000),
+                }),
+                tool_event: None,
+                alert: None,
+            });
+        }
+        send_rpc_notification(rpc);
+    });
     let approval_manager = if args.mcp {
         None
     } else {
@@ -328,6 +445,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mcp_server.run_stdio().await.map_err(|e| e.into())
     } else {
         info!("Starting in IDE RPC mode");
+        runtime_state.run_state = AgentRunState::Idle;
+        emit_runtime_state(&runtime_state);
+        send_budget_context_updates(
+            orchestrator.budget_snapshot(),
+            orchestrator.context_snapshot(),
+        );
         let (work_tx, mut work_rx) = mpsc::unbounded_channel::<OwnStackRpc>();
         let work_tx_reader = work_tx.clone();
         let approval_for_reader = approval_manager.clone();
@@ -348,13 +471,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         match serde_json::from_str::<OwnStackRpc>(trimmed) {
                             Ok(rpc) => match rpc {
-                                OwnStackRpc::PolicyResponse { approved, correlation_id } => {
+                                OwnStackRpc::PolicyResponse {
+                                    approved,
+                                    correlation_id,
+                                } => {
                                     if let Some(mgr) = approval_for_reader.as_ref() {
                                         mgr.resolve(approved, &correlation_id).await;
                                     }
                                 }
                                 OwnStackRpc::AiPrompt { .. }
                                 | OwnStackRpc::ToolExec { .. }
+                                | OwnStackRpc::SetAgentMode { .. }
                                 | OwnStackRpc::SuggestionDecision { .. }
                                 | OwnStackRpc::UiSnapshot { .. }
                                 | OwnStackRpc::CaptureScreenshot
@@ -384,6 +511,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(rpc) = work_rx.recv().await {
             match rpc {
                 OwnStackRpc::AiPrompt { prompt } => {
+                    runtime_state.run_state = AgentRunState::Running;
+                    emit_runtime_state(&runtime_state);
+                    send_budget_context_updates(
+                        orchestrator.budget_snapshot(),
+                        orchestrator.context_snapshot(),
+                    );
                     let result = orchestrator
                         .stream_process(
                             &prompt,
@@ -404,11 +537,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .map(|r| format!("{:?}", r)),
                                 };
                                 send_rpc_notification(chunk_rpc);
+
+                                if let Some(name) = chunk
+                                    .delta_tool_calls
+                                    .iter()
+                                    .find_map(|tc| tc.name.clone())
+                                {
+                                    send_ui_delta(UiStateDelta {
+                                        mode: None,
+                                        run_state: None,
+                                        budget: None,
+                                        context: None,
+                                        mission: None,
+                                        pending_approval: None,
+                                        tool_event: Some(ToolEventSnapshot {
+                                            tool_name: name,
+                                            status: "streaming".to_string(),
+                                            summary: None,
+                                            duration_ms: None,
+                                        }),
+                                        alert: None,
+                                    });
+                                }
                             },
                             |mission| {
-                                let mission_rpc = OwnStackRpc::MissionUpdate {
-                                    goal: mission.goal,
-                                    steps: mission
+                                let goal = mission.goal;
+                                let steps: Vec<(String, String)> = mission
                                         .steps
                                         .iter()
                                         .map(|s| {
@@ -417,16 +571,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 format!("{:?}", s.status),
                                             )
                                         })
-                                        .collect(),
+                                        .collect();
+                                let mission_rpc = OwnStackRpc::MissionUpdate {
+                                    goal: goal.clone(),
+                                    steps: steps.clone(),
                                 };
                                 send_rpc_notification(mission_rpc);
+                                send_ui_delta(UiStateDelta {
+                                    mode: None,
+                                    run_state: None,
+                                    budget: None,
+                                    context: None,
+                                    mission: Some(MissionSnapshot {
+                                        goal,
+                                        steps,
+                                    }),
+                                    pending_approval: None,
+                                    tool_event: None,
+                                    alert: None,
+                                });
+                            },
+                            |budget, context| {
+                                send_budget_context_updates(budget, context);
                             },
                         )
                         .await;
 
                     if let Err(e) = result {
                         error!("Process error: {}", e);
+                        runtime_state.run_state = AgentRunState::Error;
+                        emit_runtime_state(&runtime_state);
+                        send_ui_delta(UiStateDelta {
+                            mode: None,
+                            run_state: None,
+                            budget: None,
+                            context: None,
+                            mission: None,
+                            pending_approval: None,
+                            tool_event: None,
+                            alert: Some(lapce_rpc::ownstack::AlertSnapshot {
+                                severity: lapce_rpc::ownstack::AlertSeverity::Error,
+                                message: format!("Agent run failed: {}", e),
+                            }),
+                        });
+                    } else {
+                        runtime_state.run_state = AgentRunState::Idle;
+                        emit_runtime_state(&runtime_state);
+                        send_budget_context_updates(
+                            orchestrator.budget_snapshot(),
+                            orchestrator.context_snapshot(),
+                        );
                     }
+                }
+                OwnStackRpc::SetAgentMode { mode } => {
+                    runtime_state.mode = mode.clone();
+                    orchestrator.set_mode(runtime_mode_from_rpc(&mode));
+                    emit_runtime_state(&runtime_state);
+                    info!("Agent runtime mode set to {:?}", mode);
                 }
                 OwnStackRpc::ToolExec { command, tool_name } => {
                     info!(
@@ -447,6 +648,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     send_rpc_notification(OwnStackRpc::ToolResultMsg {
                         json_result,
                     });
+                    send_ui_delta(UiStateDelta {
+                        mode: None,
+                        run_state: None,
+                        budget: None,
+                        context: None,
+                        mission: None,
+                        pending_approval: None,
+                        tool_event: Some(ToolEventSnapshot {
+                            tool_name,
+                            status: if result.success {
+                                "completed".to_string()
+                            } else {
+                                "failed".to_string()
+                            },
+                            summary: if result.success {
+                                Some(result.stdout.clone())
+                            } else {
+                                Some(result.stderr.clone())
+                            },
+                            duration_ms: None,
+                        }),
+                        alert: None,
+                    });
+                    send_budget_context_updates(
+                        orchestrator.budget_snapshot(),
+                        orchestrator.context_snapshot(),
+                    );
                 }
                 OwnStackRpc::SuggestionDecision {
                     decision,
