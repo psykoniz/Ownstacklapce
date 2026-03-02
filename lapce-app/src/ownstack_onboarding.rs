@@ -211,7 +211,7 @@ pub fn onboarding_view(
     let data_progress = data.clone();
     let total_steps = ONBOARDING_STEPS.len();
 
-    container(container(
+    container(
         v_stack((
             // ── Title row + step badge ───────────────────────────────────
             h_stack((
@@ -443,17 +443,16 @@ pub fn onboarding_view(
             let config = config.get();
             s.flex_col()
                 .items_start()
-                .min_width(360.0)
-                .max_width(560.0)
-                .width_full()
-                .padding_horiz(24.0)
-                .padding_vert(20.0)
+                .min_width(340.0)
+                .max_width(460.0)
+                .padding_horiz(28.0)
+                .padding_vert(24.0)
                 .background(config.color(LapceColor::PANEL_BACKGROUND))
                 .border(1.0)
                 .border_color(config.color(LapceColor::LAPCE_BORDER))
-                .border_radius(8.0)
+                .border_radius(10.0)
         }),
-    ))
+    )
     .keyboard_navigable()
     .on_event_stop(EventListener::PointerDown, |_| {})
     .on_event_stop(EventListener::KeyDown, {
@@ -472,6 +471,7 @@ pub fn onboarding_view(
             .size_pct(100.0, 100.0)
             .items_center()
             .justify_center()
+            .z_index(50)
             .apply_if(!data_active.active.get(), |s| s.hide())
             .background(
                 config
@@ -563,20 +563,73 @@ fn mode_selection_step(
 
 fn workspace_step(config: RwSignal<Arc<LapceConfig>>) -> impl View {
     v_stack((
-        label(|| "Recommended workspace files:".to_string()).style(move |s| {
+        // Folder icon
+        label(|| "\u{1F4C1}".to_string()).style(|s| {
+            s.font_size(28.0).margin_bottom(4.0)
+        }),
+        label(|| "Project configuration".to_string()).style(move |s| {
             s.font_bold()
+                .font_size(14.0)
                 .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
         }),
-        label(|| "- .ownstack/budgets.json".to_string()).style(move |s| {
+        label(|| {
+            "A .ownstack/ directory will be created in your project \
+             root with these files:"
+                .to_string()
+        })
+        .style(move |s| {
             s.font_size(12.0)
+                .line_height(1.4)
                 .color(config.get().color(LapceColor::EDITOR_DIM))
+                .margin_bottom(6.0)
         }),
-        label(|| "- .ownstack/policy.json".to_string()).style(move |s| {
+        // File list with descriptions
+        workspace_file_row("budgets.json", "Token & cost limits per session", config),
+        workspace_file_row("policy.json", "Allowed tools, file access rules", config),
+        workspace_file_row("mcp_servers.json", "MCP server configurations", config),
+        // Hint
+        label(|| {
+            "These files can be committed to version control to share settings with your team."
+                .to_string()
+        })
+        .style(move |s| {
+            s.font_size(11.0)
+                .line_height(1.4)
+                .color(config.get().color(LapceColor::EDITOR_DIM).with_alpha(0.7))
+                .margin_top(8.0)
+        }),
+    ))
+    .style(|s| s.width_full().gap(4.0))
+}
+
+fn workspace_file_row(
+    filename: &'static str,
+    desc: &'static str,
+    config: RwSignal<Arc<LapceConfig>>,
+) -> impl View {
+    h_stack((
+        label(move || filename.to_string()).style(move |s| {
+            s.font_size(12.0)
+                .font_bold()
+                .color(Color::from_rgb8(74, 158, 255))
+                .min_width(130.0)
+        }),
+        label(move || desc.to_string()).style(move |s| {
             s.font_size(12.0)
                 .color(config.get().color(LapceColor::EDITOR_DIM))
         }),
     ))
-    .style(|s| s.width_full().gap(6.0))
+    .style(move |s| {
+        let config = config.get();
+        s.items_center()
+            .gap(8.0)
+            .padding_horiz(10.0)
+            .padding_vert(6.0)
+            .border(1.0)
+            .border_radius(4.0)
+            .border_color(config.color(LapceColor::LAPCE_BORDER).multiply_alpha(0.5))
+            .width_full()
+    })
 }
 
 fn finish_step(
@@ -772,18 +825,27 @@ fn provider_button(
         })
         .style(move |s| {
             let config = config.get();
+            let selected = is_selected();
             s.padding(15.0)
                 .width_full()
                 .border(1.0)
-                .border_radius(4.0)
-                .border_color(if is_selected() {
+                .border_radius(6.0)
+                .border_color(if selected {
                     config.color(LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE)
                 } else {
                     config.color(LapceColor::LAPCE_BORDER)
                 })
-                .background(config.color(LapceColor::PANEL_BACKGROUND))
+                .background(if selected {
+                    Color::from_rgba8(74, 158, 255, 15)
+                } else {
+                    config.color(LapceColor::PANEL_BACKGROUND)
+                })
                 .cursor(CursorStyle::Pointer)
                 .items_center()
+                .hover(|s| {
+                    s.background(Color::from_rgba8(74, 158, 255, 25))
+                        .border_color(Color::from_rgba8(74, 158, 255, 100))
+                })
         })
 }
 
@@ -796,7 +858,11 @@ fn mode_button(
     let is_selected = move || data.chosen_mode.get() == name;
 
     v_stack((
-        label(move || name.to_string()).style(|s| s.font_bold()),
+        label(move || name.to_string()).style(move |s| {
+            s.font_bold().apply_if(is_selected(), |s| {
+                s.color(Color::from_rgb8(74, 158, 255))
+            })
+        }),
         label(move || desc.to_string()).style(move |s| {
             let config = config.get();
             s.font_size(12.0)
@@ -809,18 +875,27 @@ fn mode_button(
     })
     .style(move |s| {
         let config = config.get();
+        let selected = is_selected();
         s.flex_col()
             .width_full()
             .padding(15.0)
             .border(1.0)
-            .border_radius(4.0)
-            .border_color(if is_selected() {
+            .border_radius(6.0)
+            .border_color(if selected {
                 config.color(LapceColor::LAPCE_TAB_ACTIVE_UNDERLINE)
             } else {
                 config.color(LapceColor::LAPCE_BORDER)
             })
-            .background(config.color(LapceColor::PANEL_BACKGROUND))
+            .background(if selected {
+                Color::from_rgba8(74, 158, 255, 15)
+            } else {
+                config.color(LapceColor::PANEL_BACKGROUND)
+            })
             .cursor(CursorStyle::Pointer)
+            .hover(|s| {
+                s.background(Color::from_rgba8(74, 158, 255, 25))
+                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+            })
     })
 }
 
