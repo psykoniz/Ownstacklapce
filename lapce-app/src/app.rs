@@ -126,9 +126,19 @@ struct Cli {
     #[clap(short, long, action)]
     wait: bool,
 
-    /// Path(s) to plugins to load.  
+    /// Enable E2E testing mode: starts a JSON-RPC control server on localhost,
+    /// uses isolated config directory, disables animations, fixed window size.
+    /// Also enabled by env OWNSTACK_E2E=1.
+    #[clap(long, action, env = "OWNSTACK_E2E")]
+    e2e: bool,
+
+    /// Port for the E2E control server (default: 0 = random).
+    #[clap(long, default_value = "0", env = "OWNSTACK_E2E_PORT")]
+    e2e_port: u16,
+
+    /// Path(s) to plugins to load.
     /// This is primarily used for plugin development to make it easier to test changes to the
-    /// plugin without needing to copy the plugin to the plugins directory.  
+    /// plugin without needing to copy the plugin to the plugins directory.
     /// This will cause any plugin with the same author & name to not run.
     #[clap(long, action)]
     plugin_path: Vec<PathBuf>,
@@ -3780,9 +3790,13 @@ pub fn launch() {
         load_shell_env();
     }
 
+    // In E2E mode, treat as if --wait was passed (no fork).
+    let is_e2e = cli.e2e;
+    let e2e_port = cli.e2e_port;
+
     // small hack to unblock terminal if launched from it
     // launch it as a separate process that waits
-    if !cli.wait {
+    if !cli.wait && !is_e2e {
         let mut args = std::env::args().collect::<Vec<_>>();
         args.push("--wait".to_string());
         let mut cmd = std::process::Command::new(&args[0]);
@@ -3909,10 +3923,33 @@ pub fn launch() {
         onboarding: crate::ownstack_onboarding::OnboardingData::new(scope),
     };
 
-    // First-launch onboarding (OwnStack specific).
-    app_data.onboarding.start();
+    // First-launch onboarding (OwnStack specific) — skip in E2E mode.
+    if is_e2e {
+        app_data.onboarding.mark_complete();
+    } else {
+        app_data.onboarding.start();
+    }
+
+    // Start E2E control server if requested.
+    let _e2e_handle = if is_e2e {
+        Some(crate::e2e_driver::start_e2e_server(e2e_port))
+    } else {
+        None
+    };
 
     let app = app_data.create_windows(db.clone(), cli.paths);
+
+    // Register the first tab with the E2E driver if in E2E mode.
+    if is_e2e {
+        for (_, window) in app_data.windows.get_untracked() {
+            if let Some((_, tab)) = window.window_tabs.with_untracked(|tabs| {
+                tabs.front().cloned()
+            }) {
+                crate::e2e_driver::register_tab_data(&tab);
+                break;
+            }
+        }
+    }
 
     {
         let app_data = app_data.clone();

@@ -55,5 +55,7 @@ pub mod workspace;
 pub mod ownstack_mcp;
 pub mod ownstack_tests;
 
+pub mod e2e_driver;
+
 #[cfg(windows)]
 extern crate windows_sys as windows;

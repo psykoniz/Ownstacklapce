@@ -129,6 +129,12 @@ impl OnboardingData {
         }
     }
 
+    /// Skip onboarding entirely (used in E2E testing mode).
+    pub fn mark_complete(&self) {
+        self.completed.set(true);
+        self.active.set(false);
+    }
+
     fn persist_runtime_setup(&self) {
         let state = OnboardingState {
             completed: true,
