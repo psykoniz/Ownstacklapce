@@ -1,5 +1,7 @@
 use futures::StreamExt;
-use ownstack_agent::provider::{FinishReason, LlmMessage, LlmProvider};
+use ownstack_agent::provider::{
+    FinishReason, LlmMessage, LlmProvider, ProviderOptions,
+};
 use ownstack_agent::providers::openrouter::OpenRouterProvider;
 use std::io::Write;
 use std::time::Instant;
@@ -28,7 +30,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut first_token_ms: Option<u128> = None;
     let mut final_reason: Option<FinishReason> = None;
 
-    let mut stream = provider.stream(messages, None, None).await?;
+    let mut stream = provider
+        .stream(messages, None, ProviderOptions::default())
+        .await?;
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
         if let Some(delta) = chunk.delta_content {

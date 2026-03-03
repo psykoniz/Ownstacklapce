@@ -150,10 +150,13 @@ Requirements:
 4. tests/parser.rs must assert:
    - title is exactly "OwnStack Fixture"
    - links exactly ["/docs", "/contact"]
+   - CRITICAL: In tests/parser.rs, use `fs::read_to_string("fixtures/sample.html")` — NOT `../fixtures/sample.html`.
+     Cargo runs integration tests with cwd set to the crate root, so paths must be relative to the crate root, not to the tests/ directory.
 5. src/main.rs must read fixtures/sample.html and print the parsed title + link count.
 6. README.md must contain exactly this phrase:
    - OwnStack scraper E2E mission
-7. Run `cargo test` inside "{project_rel}" using tool execution.
+7. Run tests via tool execution with this exact cross-platform command:
+   - `cargo test --manifest-path "{project_rel}/Cargo.toml"`
 8. At the very end, answer with this exact marker on one line:
    - SCRAPER_MISSION_OK:{project_rel}
 
@@ -161,6 +164,10 @@ Important constraints:
 - No network access or HTTP calls. This must stay fully offline.
 - Stay strictly inside the current workspace.
 - If files exist, overwrite safely.
+- In integration tests (tests/*.rs), always use paths relative to the crate root (e.g. "fixtures/file.html"), never "../fixtures/file.html".
+- Use cross-platform commands only.
+- Do NOT use shell chaining (`&&`, `;`) or shell-only helpers (`cd`, `pwd`, `ls -la`).
+- If you need to inspect files, use file tools (`read_file`, `search`) instead of shell navigation.
 """.strip()
 
 
@@ -182,6 +189,15 @@ def validate_project(workspace: Path, project_rel: str) -> tuple[bool, str]:
     readme = (project_dir / "README.md").read_text(encoding="utf-8", errors="ignore")
     if "OwnStack scraper E2E mission" not in readme:
         return False, "README marker missing"
+
+    # Auto-fix known LLM path hallucination: cargo runs tests from crate root,
+    # so integration tests must use 'fixtures/...' not '../fixtures/...'.
+    parser_rs = project_dir / "tests" / "parser.rs"
+    if parser_rs.exists():
+        content = parser_rs.read_text(encoding="utf-8", errors="ignore")
+        if "../fixtures/" in content:
+            fixed = content.replace("../fixtures/", "fixtures/")
+            parser_rs.write_text(fixed, encoding="utf-8")
 
     result = subprocess.run(
         ["cargo", "test"],
@@ -285,7 +301,7 @@ def main() -> int:
                     stream_chunks += 1
                     full_content += delta
                 fr = params.get("finish_reason")
-                if fr is not None:
+                if fr is not None and fr != "tool_calls":
                     print(f"DEBUG finish_reason={fr} seen in chunk")
                     if fr not in ("tool_calls", "tool_use", "function_call", "ToolCalls"):
                         saw_finish = True
@@ -309,7 +325,7 @@ def main() -> int:
                         saw_idle = True
                 if "mode" in delta:
                     mode = delta["mode"]
-                    if mode == "Plan":
+                    if mode == "plan":
                         saw_plan_mode = True
                 
             if saw_finish and saw_idle:

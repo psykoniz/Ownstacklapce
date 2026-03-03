@@ -3,6 +3,7 @@
 //! Tools that the AI agent can use to interact with the codebase
 //! and development environment.
 
+pub mod browser;
 pub mod core;
 pub mod extra;
 pub mod git;
@@ -11,6 +12,7 @@ pub mod lsp;
 pub mod mcp;
 pub mod multivers;
 pub mod specialists;
+pub mod time_machine;
 pub mod vision;
 
 use async_trait::async_trait;
@@ -19,6 +21,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 pub use self::core::CoreToolkit;
+pub use browser::BrowserToolkit;
 pub use extra::ExtraToolkit;
 pub use git::GitToolkit;
 pub use healer::HealerToolkit;

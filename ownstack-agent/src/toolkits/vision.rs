@@ -81,7 +81,8 @@ impl Toolkit for VisionToolkit {
         vec![
             ToolDef {
                 name: "analyze_image".to_string(),
-                description: "Analyze an image file using the multi-modal agent".to_string(),
+                description: "Analyze an image file using the multi-modal agent"
+                    .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -99,7 +100,9 @@ impl Toolkit for VisionToolkit {
             },
             ToolDef {
                 name: "capture_ui".to_string(),
-                description: "Capture the current IDE UI state (panel or full window)".to_string(),
+                description:
+                    "Capture the current IDE UI state (panel or full window)"
+                        .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -126,18 +129,19 @@ impl Toolkit for VisionToolkit {
 
                 let image_path = std::path::Path::new(&parsed.image_path);
 
-                let validated_path = self.path_validator.validate(image_path).map_err(|e| {
-                    self.audit(
-                        "read_image",
-                        &parsed.image_path,
-                        PolicyDecision::Blocked,
-                        "vision.analyze_image",
-                        false,
-                        start.elapsed().as_millis() as u64,
-                        vec![parsed.image_path.clone()],
-                    );
-                    ToolkitError::SecurityViolation(e.to_string())
-                })?;
+                let validated_path =
+                    self.path_validator.validate(image_path).map_err(|e| {
+                        self.audit(
+                            "read_image",
+                            &parsed.image_path,
+                            PolicyDecision::Blocked,
+                            "vision.analyze_image",
+                            false,
+                            start.elapsed().as_millis() as u64,
+                            vec![parsed.image_path.clone()],
+                        );
+                        ToolkitError::SecurityViolation(e.to_string())
+                    })?;
 
                 let data = std::fs::read(&validated_path).map_err(|e| {
                     self.audit(
@@ -149,15 +153,19 @@ impl Toolkit for VisionToolkit {
                         start.elapsed().as_millis() as u64,
                         vec![validated_path.to_string_lossy().to_string()],
                     );
-                    ToolkitError::ExecutionFailed(format!("Failed to read image: {}", e))
+                    ToolkitError::ExecutionFailed(format!(
+                        "Failed to read image: {}",
+                        e
+                    ))
                 })?;
 
                 let b64 = base64_simd::STANDARD.encode_to_string(&data);
-                let media_type = match validated_path.extension().and_then(|s| s.to_str()) {
-                    Some("png") => "image/png",
-                    Some("jpg") | Some("jpeg") => "image/jpeg",
-                    _ => "image/png",
-                };
+                let media_type =
+                    match validated_path.extension().and_then(|s| s.to_str()) {
+                        Some("png") => "image/png",
+                        Some("jpg") | Some("jpeg") => "image/jpeg",
+                        _ => "image/png",
+                    };
 
                 let mut result = ToolResult::success(format!(
                     "Image loaded: {}. Prompt: {}",
@@ -186,17 +194,19 @@ impl Toolkit for VisionToolkit {
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
 
                 let ownstack_dir = self.workspace.join(".ownstack");
-                let snapshot_rel = std::path::Path::new(".ownstack/ui_snapshot.json");
-                let screenshot_rel = std::path::Path::new(".ownstack/ui_screenshot.png");
+                let snapshot_rel =
+                    std::path::Path::new(".ownstack/ui_snapshot.json");
+                let screenshot_rel =
+                    std::path::Path::new(".ownstack/ui_screenshot.png");
 
                 let snapshot_path = self
                     .path_validator
                     .validate(snapshot_rel)
                     .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?;
-                let screenshot_path = self
-                    .path_validator
-                    .validate(screenshot_rel)
-                    .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?;
+                let screenshot_path =
+                    self.path_validator.validate(screenshot_rel).map_err(|e| {
+                        ToolkitError::SecurityViolation(e.to_string())
+                    })?;
 
                 if let Err(err) = std::fs::create_dir_all(&ownstack_dir) {
                     return Ok(ToolResult::failure(
@@ -232,7 +242,10 @@ impl Toolkit for VisionToolkit {
 
                 let panel_name = parsed.panel.unwrap_or_else(|| "all".to_string());
                 let mut result = if screenshot_result.is_ok() {
-                    ToolResult::success(format!("UI capture ready (panel: {}).", panel_name))
+                    ToolResult::success(format!(
+                        "UI capture ready (panel: {}).",
+                        panel_name
+                    ))
                 } else {
                     ToolResult::success(format!(
                         "UI snapshot metadata captured (panel: {}). Screenshot unavailable on this platform.",
@@ -252,9 +265,7 @@ impl Toolkit for VisionToolkit {
                     screenshot_path.to_string_lossy().to_string(),
                 );
                 if let Err(err) = screenshot_result {
-                    result
-                        .metadata
-                        .insert("screenshot_error".to_string(), err);
+                    result.metadata.insert("screenshot_error".to_string(), err);
                 }
 
                 self.audit(
@@ -285,7 +296,8 @@ mod tests {
     #[tokio::test]
     async fn capture_ui_reports_missing_snapshot() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let toolkit = VisionToolkit::new(dir.path().to_path_buf(), "sess-test".to_string());
+        let toolkit =
+            VisionToolkit::new(dir.path().to_path_buf(), "sess-test".to_string());
 
         let result = toolkit
             .execute("capture_ui", serde_json::json!({}))

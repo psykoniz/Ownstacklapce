@@ -1,6 +1,9 @@
 use ownstack_agent::orchestrator::AgentOrchestrator;
-use ownstack_agent::provider::{LlmMessage, LlmProvider, ToolCall, ToolDefinition};
+use ownstack_agent::provider::{
+    LlmMessage, LlmProvider, ProviderOptions, ToolCall, ToolDefinition,
+};
 use ownstack_agent::providers::openrouter::OpenRouterProvider;
+use ownstack_agent::routing::ModelRouter;
 use ownstack_agent::toolkits::{CoreToolkit, Toolkit};
 use std::sync::Arc;
 
@@ -44,9 +47,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(CoreToolkit::new(workspace.clone(), session_id, None));
     let tool_defs = to_tool_definitions(core_toolkit.as_ref());
 
-    let mut orchestrator =
-        AgentOrchestrator::new(provider.clone(), workspace.clone(), 64_000);
+    let mut orchestrator = AgentOrchestrator::new(
+        provider.clone(),
+        workspace.clone(),
+        64_000,
+        "test-session",
+    );
     orchestrator.register_toolkit(core_toolkit);
+    let mut router = ModelRouter::new(&workspace);
 
     let mut messages = vec![
         LlmMessage::system(
@@ -59,8 +67,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for round in 1..=4 {
         println!("round={round}");
+        router.reload();
+        let options = ProviderOptions {
+            model: router.route("worker", Some("worker")),
+            openrouter: router.openrouter_provider_prefs(),
+        };
+        println!(
+            "routed_model={}",
+            options.model.as_deref().unwrap_or("<provider_default>")
+        );
         let response = provider
-            .complete(messages.clone(), Some(tool_defs.clone()), None)
+            .complete(messages.clone(), Some(tool_defs.clone()), options)
             .await?;
 
         if response.tool_calls.is_empty() {

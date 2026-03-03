@@ -8,7 +8,7 @@ use tracing::debug;
 
 use crate::provider::{
     FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig,
-    ProviderError, Role, TokenUsage, ToolCall, ToolDefinition,
+    ProviderError, ProviderOptions, Role, TokenUsage, ToolCall, ToolDefinition,
 };
 use crate::resilience::ResilientClient;
 
@@ -132,9 +132,9 @@ impl LlmProvider for LocalProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
-        model_override: Option<String>,
+        options: ProviderOptions,
     ) -> Result<LlmResponse, ProviderError> {
-        let model = model_override.unwrap_or_else(|| self.config.model.clone());
+        let model = options.model.unwrap_or_else(|| self.config.model.clone());
         let api_messages: Vec<OllamaMessage> = messages
             .into_iter()
             .map(|m| OllamaMessage {
@@ -228,9 +228,9 @@ impl LlmProvider for LocalProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
-        model_override: Option<String>,
+        options: ProviderOptions,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
-        let model = model_override.unwrap_or_else(|| self.config.model.clone());
+        let model = options.model.unwrap_or_else(|| self.config.model.clone());
         use crate::provider::{FinishReason, StreamChunk};
 
         let api_messages: Vec<OllamaMessage> = messages

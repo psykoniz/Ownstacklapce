@@ -1,4 +1,6 @@
-use ownstack_agent::provider::{LlmMessage, LlmProvider, ProviderError};
+use ownstack_agent::provider::{
+    LlmMessage, LlmProvider, ProviderError, ProviderOptions,
+};
 use ownstack_agent::providers::openrouter::OpenRouterProvider;
 
 fn classify_error(err: &ProviderError) -> &'static str {
@@ -58,7 +60,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         LlmMessage::user(prompt),
     ];
 
-    let response = match provider.complete(messages, None, None).await {
+    let response = match provider
+        .complete(messages, None, ProviderOptions::default())
+        .await
+    {
         Ok(r) => r,
         Err(err) => {
             eprintln!("error_class={}", classify_error(&err));

@@ -4,15 +4,16 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
-        mpsc::{channel, Sender},
         Arc,
+        mpsc::{Sender, channel},
     },
     time::{Duration, Instant},
 };
 
 use alacritty_terminal::vte::ansi::Handler;
 use floem::{
-    action::{exec_after, open_file, remove_overlay, TimerToken},
+    ViewId,
+    action::{TimerToken, exec_after, open_file, remove_overlay},
     ext_event::{create_ext_action, create_signal_from_channel},
     file::FileDialogOptions,
     keyboard::Modifiers,
@@ -20,12 +21,11 @@ use floem::{
     peniko::kurbo::{Point, Rect, Vec2},
     prelude::SignalTrack,
     reactive::{
-        use_context, Memo, ReadSignal, RwSignal, Scope, SignalGet, SignalUpdate,
-        SignalWith, WriteSignal,
+        Memo, ReadSignal, RwSignal, Scope, SignalGet, SignalUpdate, SignalWith,
+        WriteSignal, use_context,
     },
     text::{Attrs, AttrsList, FamilyOwned, LineHeightValue, TextLayout},
     views::editor::core::buffer::rope_text::RopeText,
-    ViewId,
 };
 use im::HashMap;
 use indexmap::IndexMap;
@@ -35,6 +35,7 @@ use lapce_core::{
     mode::Mode, register::Register,
 };
 use lapce_rpc::{
+    RpcError,
     core::CoreNotification,
     dap_types::{ConfigSource, RunDebugConfig},
     file::{Naming, PathObject},
@@ -43,14 +44,13 @@ use lapce_rpc::{
     proxy::{ProxyResponse, ProxyRpcHandler, ProxyStatus},
     source_control::FileDiff,
     terminal::TermId,
-    RpcError,
 };
 use lsp_types::{
     CodeActionOrCommand, CodeLens, Diagnostic, MessageType, ProgressParams,
     ProgressToken, ShowMessageParams,
 };
 use serde_json::Value;
-use tracing::{debug, error, event, Level};
+use tracing::{Level, debug, error, event};
 
 use crate::{
     about::AboutData,
@@ -73,23 +73,23 @@ use crate::{
     hover::HoverData,
     id::WindowTabId,
     inline_completion::InlineCompletionData,
-    keypress::{condition::Condition, EventRef, KeyPressData, KeyPressFocus},
+    keypress::{EventRef, KeyPressData, KeyPressFocus, condition::Condition},
     listener::Listener,
     lsp::path_from_url,
     main_split::{MainSplitData, SplitData, SplitDirection, SplitMoveDirection},
-    palette::{kind::PaletteKind, PaletteData, PaletteStatus, DEFAULT_RUN_TOML},
+    palette::{DEFAULT_RUN_TOML, PaletteData, PaletteStatus, kind::PaletteKind},
     panel::{
         call_hierarchy_view::{CallHierarchyData, CallHierarchyItemData},
-        data::{default_panel_order, PanelData, PanelSection},
+        data::{PanelData, PanelSection, default_panel_order},
         kind::PanelKind,
         position::PanelContainerPosition,
     },
     plugin::PluginData,
-    proxy::{new_proxy, ProxyData},
+    proxy::{ProxyData, new_proxy},
     rename::RenameData,
     source_control::SourceControlData,
     terminal::{
-        event::{terminal_update_process, TermEvent, TermNotification},
+        event::{TermEvent, TermNotification, terminal_update_process},
         panel::TerminalPanelData,
     },
     tracing::*,
@@ -2368,7 +2368,7 @@ impl WindowTabData {
                 target,
             } => {
                 use lapce_rpc::core::LogLevel;
-                use tracing_log::log::{log, Level};
+                use tracing_log::log::{Level, log};
 
                 let target = target.clone().unwrap_or(String::from("unknown"));
 
@@ -2392,7 +2392,7 @@ impl WindowTabData {
             }
             CoreNotification::LogMessage { message, target } => {
                 use lsp_types::MessageType;
-                use tracing_log::log::{log, Level};
+                use tracing_log::log::{Level, log};
                 match message.typ {
                     MessageType::ERROR => {
                         log!(target: target, Level::Error, "{}", message.message)
@@ -2562,22 +2562,26 @@ impl WindowTabData {
                         self.alert_data.active.set(true);
 
                         // Auto-dismiss after `timeout_secs` and default to deny.
-                        let auto_secs = if timeout_secs == 0 { 15 } else { timeout_secs };
-                        exec_after(Duration::from_secs(u64::from(auto_secs)), move |_| {
-                            if active_timeout.get_untracked()
-                                && policy_prompt_seq.get_untracked() == seq
-                            {
-                                proxy_timeout.ownstack(
-                                    OwnStackRpc::PolicyResponse {
-                                        approved: false,
-                                        correlation_id: corr_timeout.clone(),
-                                    },
-                                );
-                                status_timeout.set_active(false);
-                                status_timeout.set_status("idle");
-                                active_timeout.set(false);
-                            }
-                        });
+                        let auto_secs =
+                            if timeout_secs == 0 { 15 } else { timeout_secs };
+                        exec_after(
+                            Duration::from_secs(u64::from(auto_secs)),
+                            move |_| {
+                                if active_timeout.get_untracked()
+                                    && policy_prompt_seq.get_untracked() == seq
+                                {
+                                    proxy_timeout.ownstack(
+                                        OwnStackRpc::PolicyResponse {
+                                            approved: false,
+                                            correlation_id: corr_timeout.clone(),
+                                        },
+                                    );
+                                    status_timeout.set_active(false);
+                                    status_timeout.set_status("idle");
+                                    active_timeout.set(false);
+                                }
+                            },
+                        );
                     }
                     OwnStackRpc::CaptureScreenshot => {
                         if let Some(workspace_root) =
@@ -2666,7 +2670,8 @@ impl WindowTabData {
 
     fn apply_ownstack_ui_delta(&self, delta: lapce_rpc::ownstack::UiStateDelta) {
         if let Some(mode) = delta.mode {
-            let ui_mode = crate::ownstack_chat::AgentMode::from_runtime(mode.clone());
+            let ui_mode =
+                crate::ownstack_chat::AgentMode::from_runtime(mode.clone());
             self.ownstack_chat.set_mode_from_runtime(mode);
             self.ownstack_status.set_mode(ui_mode);
         }
@@ -2737,10 +2742,7 @@ impl WindowTabData {
             let details = if summary.is_empty() {
                 format!("Tool {}: {}", event.tool_name, event.status)
             } else {
-                format!(
-                    "Tool {}: {} ({})",
-                    event.tool_name, event.status, summary
-                )
+                format!("Tool {}: {} ({})", event.tool_name, event.status, summary)
             };
             self.ownstack_chat.add_system_message(details);
         }

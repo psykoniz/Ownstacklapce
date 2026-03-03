@@ -263,8 +263,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut orchestrator =
-        AgentOrchestrator::new(provider.clone(), workspace.clone(), 128000);
+    let mut orchestrator = AgentOrchestrator::new(
+        provider.clone(),
+        workspace.clone(),
+        128000,
+        &session_id,
+    );
     let mut runtime_state = RuntimeUiState::from_env();
     orchestrator.set_mode(runtime_mode_from_rpc(&runtime_state.mode));
 
@@ -380,6 +384,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     orchestrator
         .register_toolkit(Arc::new(ownstack_agent::toolkits::extra::ExtraToolkit));
     orchestrator.register_toolkit(Arc::new(
+        ownstack_agent::toolkits::browser::BrowserToolkit,
+    ));
+    orchestrator.register_toolkit(Arc::new(
+        ownstack_agent::toolkits::time_machine::TimeMachineToolkit::new(
+            workspace.clone(),
+        ),
+    ));
+    orchestrator.register_toolkit(Arc::new(
         ownstack_agent::toolkits::specialists::PMToolkit,
     ));
     orchestrator.register_toolkit(Arc::new(
@@ -432,6 +444,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         orchestrator.register_toolkit(tk.clone());
     }
 
+    // Run InfraSense health check at startup
+    let health_warnings =
+        ownstack_agent::infra_sense::InfraSense::health_check(&workspace);
+    for warning in &health_warnings {
+        warn!("InfraSense: {}", warning);
+    }
+
     if args.mcp {
         info!("Starting in MCP Server mode");
         let mut mcp_server =
@@ -445,6 +464,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mcp_server.run_stdio().await.map_err(|e| e.into())
     } else {
         info!("Starting in IDE RPC mode");
+
+        // Emit any InfraSense warnings to the UI
+        for warning in &health_warnings {
+            send_ui_delta(UiStateDelta {
+                mode: None,
+                run_state: None,
+                budget: None,
+                context: None,
+                mission: None,
+                pending_approval: None,
+                tool_event: None,
+                alert: Some(lapce_rpc::ownstack::AlertSnapshot {
+                    severity: lapce_rpc::ownstack::AlertSeverity::Warning,
+                    message: warning.clone(),
+                }),
+            });
+        }
+
         runtime_state.run_state = AgentRunState::Idle;
         emit_runtime_state(&runtime_state);
         send_budget_context_updates(
@@ -563,15 +600,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             |mission| {
                                 let goal = mission.goal;
                                 let steps: Vec<(String, String)> = mission
-                                        .steps
-                                        .iter()
-                                        .map(|s| {
-                                            (
-                                                s.description.clone(),
-                                                format!("{:?}", s.status),
-                                            )
-                                        })
-                                        .collect();
+                                    .steps
+                                    .iter()
+                                    .map(|s| {
+                                        (
+                                            s.description.clone(),
+                                            format!("{:?}", s.status),
+                                        )
+                                    })
+                                    .collect();
                                 let mission_rpc = OwnStackRpc::MissionUpdate {
                                     goal: goal.clone(),
                                     steps: steps.clone(),
@@ -582,10 +619,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     run_state: None,
                                     budget: None,
                                     context: None,
-                                    mission: Some(MissionSnapshot {
-                                        goal,
-                                        steps,
-                                    }),
+                                    mission: Some(MissionSnapshot { goal, steps }),
                                     pending_approval: None,
                                     tool_event: None,
                                     alert: None,

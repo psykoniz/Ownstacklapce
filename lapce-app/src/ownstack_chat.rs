@@ -2,16 +2,16 @@ use crate::app::clickable_icon;
 use crate::config::{color::LapceColor, icon::LapceIcons};
 use crate::panel::position::PanelPosition;
 use floem::prelude::*;
-use floem::reactive::{create_rw_signal, RwSignal};
+use floem::reactive::{RwSignal, create_rw_signal};
 use floem::{
+    View,
+    ext_event::create_ext_action,
     peniko::Color,
     style::CursorStyle,
     views::{
         container, dyn_stack, h_stack, label, scroll, stack, text, text_input,
         v_stack,
     },
-    View,
-    ext_event::create_ext_action,
 };
 use lapce_rpc::ownstack::{AgentModeState, OwnStackRpc};
 use lsp_types::DiagnosticSeverity;
@@ -339,7 +339,6 @@ impl OwnStackChatData {
             send(diff);
         });
     }
-
 
     /// Receive a mission update
     pub fn receive_mission(&self, goal: String, steps: Vec<(String, String)>) {
@@ -1094,26 +1093,29 @@ fn message_view(
     } else if msg.role == ChatRole::System {
         "SYSTEM".to_string()
     } else {
-        msg.sub_role.clone().unwrap_or_else(|| "WORKER".to_string()).to_uppercase()
+        msg.sub_role
+            .clone()
+            .unwrap_or_else(|| "WORKER".to_string())
+            .to_uppercase()
     };
 
     let header = if !is_user {
         h_stack((
-                label(|| "".to_string()).style(move |s| {
-                    s.width(6.0)
-                        .height(6.0)
-                        .border_radius(99.0)
-                        .background(role_dot_color)
-                        .margin_right(5.0)
-                }),
-                label(move || role_label_text.clone()).style(move |s| {
-                    s.font_size(10.0)
-                        .font_weight(Weight::BOLD)
-                        .color(Color::from_rgb8(100, 116, 139))
-                }),
-            ))
-            .style(|s| s.items_center().padding_bottom(6.0).padding_left(2.0))
-            .into_any()
+            label(|| "".to_string()).style(move |s| {
+                s.width(6.0)
+                    .height(6.0)
+                    .border_radius(99.0)
+                    .background(role_dot_color)
+                    .margin_right(5.0)
+            }),
+            label(move || role_label_text.clone()).style(move |s| {
+                s.font_size(10.0)
+                    .font_weight(Weight::BOLD)
+                    .color(Color::from_rgb8(100, 116, 139))
+            }),
+        ))
+        .style(|s| s.items_center().padding_bottom(6.0).padding_left(2.0))
+        .into_any()
     } else {
         empty().into_any()
     };
@@ -1123,42 +1125,44 @@ fn message_view(
             let _chat_for_click = chat_data.clone();
             let target_clone = target.clone();
             h_stack((
-                    h_stack((
-                        label(|| "📄 ").style(|s| s.margin_right(4.0).font_size(10.0)),
-                        label(move || target_clone.clone()).style(|s| {
-                            s.color(Color::from_rgb8(203, 213, 225)).font_size(12.0)
-                        }),
-                    ))
-                    .style(|s| s.items_center()),
-                    label(|| "Review Diff")
-                        .style(|s| {
-                            s.padding_horiz(8.0)
-                                .padding_vert(4.0)
-                                .border_radius(4.0)
-                                .background(Color::from_rgba8(37, 99, 235, 50))
-                                .color(Color::from_rgb8(96, 165, 250))
-                                .font_size(10.0)
-                                .font_weight(Weight::SEMIBOLD)
-                                .cursor(CursorStyle::Pointer)
-                                .hover(|s| s.background(Color::from_rgba8(37, 99, 235, 100)))
-                        })
-                        .on_click_stop(move |_| {
-                            // Can be hooked up later
-                        }),
+                h_stack((
+                    label(|| "📄 ").style(|s| s.margin_right(4.0).font_size(10.0)),
+                    label(move || target_clone.clone()).style(|s| {
+                        s.color(Color::from_rgb8(203, 213, 225)).font_size(12.0)
+                    }),
                 ))
-                .style(|s| {
-                    s.width_full()
-                        .justify_between()
-                        .items_center()
-                        .margin_top(8.0)
-                        .padding(8.0)
-                        .border(1.0)
-                        .border_radius(4.0)
-                        .border_color(Color::from_rgba8(51, 65, 85, 120))
-                        .background(Color::from_rgb8(17, 17, 27))
-                        .hover(|s| s.border_color(Color::from_rgba8(59, 130, 246, 120)))
-                })
-                .into_any()
+                .style(|s| s.items_center()),
+                label(|| "Review Diff")
+                    .style(|s| {
+                        s.padding_horiz(8.0)
+                            .padding_vert(4.0)
+                            .border_radius(4.0)
+                            .background(Color::from_rgba8(37, 99, 235, 50))
+                            .color(Color::from_rgb8(96, 165, 250))
+                            .font_size(10.0)
+                            .font_weight(Weight::SEMIBOLD)
+                            .cursor(CursorStyle::Pointer)
+                            .hover(|s| {
+                                s.background(Color::from_rgba8(37, 99, 235, 100))
+                            })
+                    })
+                    .on_click_stop(move |_| {
+                        // Can be hooked up later
+                    }),
+            ))
+            .style(|s| {
+                s.width_full()
+                    .justify_between()
+                    .items_center()
+                    .margin_top(8.0)
+                    .padding(8.0)
+                    .border(1.0)
+                    .border_radius(4.0)
+                    .border_color(Color::from_rgba8(51, 65, 85, 120))
+                    .background(Color::from_rgb8(17, 17, 27))
+                    .hover(|s| s.border_color(Color::from_rgba8(59, 130, 246, 120)))
+            })
+            .into_any()
         } else {
             empty().into_any()
         };
@@ -1167,28 +1171,28 @@ fn message_view(
         let diff_block = diff_block.into_any();
         v_stack((
             h_stack((
-                    label(|| "✓").style(|s| {
-                        s.color(Color::from_rgb8(52, 211, 153))
-                            .font_weight(Weight::BOLD)
-                            .margin_right(6.0)
-                    }),
-                    label(move || tool_res_clone.clone()).style(|s| {
-                        s.color(Color::from_rgba8(52, 211, 153, 230))
-                            .font_size(12.0)
-                            .font_weight(Weight::SEMIBOLD)
-                    }),
-                ))
-                .style(|s| s.items_center()),
-                diff_block,
+                label(|| "✓").style(|s| {
+                    s.color(Color::from_rgb8(52, 211, 153))
+                        .font_weight(Weight::BOLD)
+                        .margin_right(6.0)
+                }),
+                label(move || tool_res_clone.clone()).style(|s| {
+                    s.color(Color::from_rgba8(52, 211, 153, 230))
+                        .font_size(12.0)
+                        .font_weight(Weight::SEMIBOLD)
+                }),
             ))
-            .style(|s| {
-                s.width_full()
-                    .margin_top(12.0)
-                    .padding_top(12.0)
-                    .border_top(1.0)
-                    .border_color(Color::from_rgba8(51, 65, 85, 120))
-            })
-            .into_any()
+            .style(|s| s.items_center()),
+            diff_block,
+        ))
+        .style(|s| {
+            s.width_full()
+                .margin_top(12.0)
+                .padding_top(12.0)
+                .border_top(1.0)
+                .border_color(Color::from_rgba8(51, 65, 85, 120))
+        })
+        .into_any()
     } else {
         empty().into_any()
     };
@@ -1220,7 +1224,8 @@ fn message_view(
         } else {
             floem::style::AlignItems::FlexStart
         };
-        let s = s.padding(14.0)
+        let s = s
+            .padding(14.0)
             .border_top_left_radius(if is_user { 12.0 } else { 4.0 })
             .border_top_right_radius(if is_user { 4.0 } else { 12.0 })
             .border_bottom_left_radius(12.0)
@@ -1229,7 +1234,7 @@ fn message_view(
             .border(if is_user { 0.0 } else { 1.0 })
             .border_color(bubble_border)
             .align_items(align);
-            
+
         if is_user {
             s.margin_left(40.0)
         } else {
@@ -1237,15 +1242,14 @@ fn message_view(
         }
     });
 
-    v_stack((main_content,))
-        .style(move |s| {
-            let s = s.width_full().padding_bottom(12.0);
-            if is_user {
-                s.items_end()
-            } else {
-                s.items_start()
-            }
-        })
+    v_stack((main_content,)).style(move |s| {
+        let s = s.width_full().padding_bottom(12.0);
+        if is_user {
+            s.items_end()
+        } else {
+            s.items_start()
+        }
+    })
 }
 
 fn diff_view(

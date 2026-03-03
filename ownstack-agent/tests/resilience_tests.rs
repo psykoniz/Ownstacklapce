@@ -11,8 +11,8 @@
 
 use ownstack_agent::provider::{
     FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig,
-    ProviderError, Role, StreamChunk, TokenUsage, ToolCall, ToolCallDelta,
-    ToolDefinition,
+    ProviderError, ProviderOptions, Role, StreamChunk, TokenUsage, ToolCall,
+    ToolCallDelta, ToolDefinition,
 };
 use ownstack_agent::resilience::{ResilientClient, RetryConfig};
 
@@ -657,7 +657,7 @@ async fn test_stream_default_fallback() {
             &self,
             _messages: Vec<LlmMessage>,
             _tools: Option<Vec<ToolDefinition>>,
-            _model_override: Option<String>,
+            _options: ProviderOptions,
         ) -> Result<LlmResponse, ProviderError> {
             Ok(LlmResponse {
                 content: Some("Hello from mock".to_string()),
@@ -680,7 +680,11 @@ async fn test_stream_default_fallback() {
 
     // Use the default stream() which falls back to complete()
     let mut stream = provider
-        .stream(vec![LlmMessage::user("test")], None, None)
+        .stream(
+            vec![LlmMessage::user("test")],
+            None,
+            ProviderOptions::default(),
+        )
         .await
         .unwrap();
 
@@ -707,7 +711,7 @@ async fn test_stream_default_fallback_with_tool_calls() {
             &self,
             _messages: Vec<LlmMessage>,
             _tools: Option<Vec<ToolDefinition>>,
-            _model_override: Option<String>,
+            _options: ProviderOptions,
         ) -> Result<LlmResponse, ProviderError> {
             Ok(LlmResponse {
                 content: None,
@@ -728,7 +732,11 @@ async fn test_stream_default_fallback_with_tool_calls() {
 
     let provider = MockToolProvider;
     let mut stream = provider
-        .stream(vec![LlmMessage::user("search for test")], None, None)
+        .stream(
+            vec![LlmMessage::user("search for test")],
+            None,
+            ProviderOptions::default(),
+        )
         .await
         .unwrap();
 
@@ -754,7 +762,7 @@ async fn test_stream_default_fallback_error() {
             &self,
             _messages: Vec<LlmMessage>,
             _tools: Option<Vec<ToolDefinition>>,
-            _model_override: Option<String>,
+            _options: ProviderOptions,
         ) -> Result<LlmResponse, ProviderError> {
             Err(ProviderError::RequestFailed("network down".to_string()))
         }
@@ -766,7 +774,11 @@ async fn test_stream_default_fallback_error() {
 
     let provider = FailingProvider;
     let result = provider
-        .stream(vec![LlmMessage::user("test")], None, None)
+        .stream(
+            vec![LlmMessage::user("test")],
+            None,
+            ProviderOptions::default(),
+        )
         .await;
 
     assert!(result.is_err());
@@ -796,7 +808,7 @@ async fn test_stress_many_concurrent_streams() {
             &self,
             _messages: Vec<LlmMessage>,
             _tools: Option<Vec<ToolDefinition>>,
-            _model_override: Option<String>,
+            _options: ProviderOptions,
         ) -> Result<LlmResponse, ProviderError> {
             Ok(LlmResponse {
                 content: Some("response".to_string()),
@@ -820,7 +832,11 @@ async fn test_stress_many_concurrent_streams() {
         handles.push(tokio::spawn(async move {
             let mut stream = p
                 .as_ref()
-                .stream(vec![LlmMessage::user("test")], None, None)
+                .stream(
+                    vec![LlmMessage::user("test")],
+                    None,
+                    ProviderOptions::default(),
+                )
                 .await
                 .unwrap();
             let chunk: StreamChunk = stream.next().await.unwrap().unwrap();

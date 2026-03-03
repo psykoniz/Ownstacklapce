@@ -391,11 +391,10 @@ pub fn ownstack_audit_overlay(
                             .background(config.color(LapceColor::EDITOR_BACKGROUND))
                     }),
                 // Empty state when no entries
-                crate::ownstack_empty_state::audit_empty_state()
-                    .style(move |s| {
-                        let has_entries = !list_data.entries.get().is_empty();
-                        s.apply_if(has_entries, |s| s.hide())
-                    }),
+                crate::ownstack_empty_state::audit_empty_state().style(move |s| {
+                    let has_entries = !list_data.entries.get().is_empty();
+                    s.apply_if(has_entries, |s| s.hide())
+                }),
                 scroll(
                     dyn_stack(
                         move || list_data.filtered_entries(),

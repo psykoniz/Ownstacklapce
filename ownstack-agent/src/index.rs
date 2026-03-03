@@ -74,7 +74,9 @@ impl SemanticIndex {
 
         let model_dir = self.workspace.join(".ownstack").join("models");
         if !model_dir.exists() {
-            return Err("Model directory not found. Please run bootstrap.".to_string());
+            return Err(
+                "Model directory not found. Please run bootstrap.".to_string()
+            );
         }
 
         info!("Loading BERT model from {:?}", model_dir);
@@ -83,14 +85,22 @@ impl SemanticIndex {
         let tokenizer_filename = model_dir.join("tokenizer.json");
         let weights_filename = model_dir.join("model.safetensors");
 
-        let config = std::fs::read_to_string(&config_filename).map_err(|e| e.to_string())?;
-        let config: Config = serde_json::from_str(&config).map_err(|e| e.to_string())?;
+        let config =
+            std::fs::read_to_string(&config_filename).map_err(|e| e.to_string())?;
+        let config: Config =
+            serde_json::from_str(&config).map_err(|e| e.to_string())?;
 
-        let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(|e| e.to_string())?;
+        let tokenizer =
+            Tokenizer::from_file(tokenizer_filename).map_err(|e| e.to_string())?;
         let vb = {
-            let tensors = candle_core::safetensors::load(&weights_filename, &self.device)
-                .map_err(|e| e.to_string())?;
-            candle_nn::VarBuilder::from_tensors(tensors, candle_core::DType::F32, &self.device)
+            let tensors =
+                candle_core::safetensors::load(&weights_filename, &self.device)
+                    .map_err(|e| e.to_string())?;
+            candle_nn::VarBuilder::from_tensors(
+                tensors,
+                candle_core::DType::F32,
+                &self.device,
+            )
         };
 
         let model = BertModel::load(vb, &config).map_err(|e| e.to_string())?;
@@ -99,7 +109,10 @@ impl SemanticIndex {
         self.tokenizer = Some(tokenizer);
 
         if let Err(e) = self.load().await {
-            debug!("No existing index found or failed to load: {}. Initializing fresh.", e);
+            debug!(
+                "No existing index found or failed to load: {}. Initializing fresh.",
+                e
+            );
             let hnsw = Hnsw::new(384, 100000, 16, 200, DistCosine {});
             if let Ok(mut lock) = self.index_store.write() {
                 *lock = Some(hnsw);
@@ -178,7 +191,8 @@ impl SemanticIndex {
         let mut new_metadata = Vec::new();
         let mut new_embeddings = Vec::new();
 
-        let mut current_fingerprints: HashMap<String, FileFingerprint> = HashMap::new();
+        let mut current_fingerprints: HashMap<String, FileFingerprint> =
+            HashMap::new();
         for file in &files {
             let rel_path = file
                 .strip_prefix(&self.workspace)
@@ -189,8 +203,13 @@ impl SemanticIndex {
             current_fingerprints.insert(rel_path, fp);
         }
 
-        let (changed, removed) = compute_changed_paths(&old_manifest.files, &current_fingerprints);
-        debug!("Semantic index delta: changed={} removed={}", changed.len(), removed.len());
+        let (changed, removed) =
+            compute_changed_paths(&old_manifest.files, &current_fingerprints);
+        debug!(
+            "Semantic index delta: changed={} removed={}",
+            changed.len(),
+            removed.len()
+        );
 
         for file in files {
             let rel_path = file
@@ -203,7 +222,9 @@ impl SemanticIndex {
                 .get(&rel_path)
                 .cloned()
                 .ok_or_else(|| "missing fingerprint for file".to_string())?;
-            new_manifest.files.insert(rel_path.clone(), fingerprint.clone());
+            new_manifest
+                .files
+                .insert(rel_path.clone(), fingerprint.clone());
 
             let unchanged = old_manifest.files.get(&rel_path) == Some(&fingerprint);
             if unchanged {
@@ -289,7 +310,8 @@ impl SemanticIndex {
             .manifest
             .read()
             .map_err(|_| "manifest lock poisoned".to_string())?;
-        let manifest_json = serde_json::to_string(&*manifest).map_err(|e| e.to_string())?;
+        let manifest_json =
+            serde_json::to_string(&*manifest).map_err(|e| e.to_string())?;
         std::fs::write(&manifest_path, manifest_json).map_err(|e| e.to_string())?;
 
         info!("Index saved: {} chunks", meta.len());
@@ -306,8 +328,10 @@ impl SemanticIndex {
             return Err("Index files not found".to_string());
         }
 
-        let meta_json = std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
-        let meta: Vec<ChunkMetadata> = serde_json::from_str(&meta_json).map_err(|e| e.to_string())?;
+        let meta_json =
+            std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
+        let meta: Vec<ChunkMetadata> =
+            serde_json::from_str(&meta_json).map_err(|e| e.to_string())?;
         {
             let mut lock = self
                 .metadata
@@ -317,8 +341,10 @@ impl SemanticIndex {
         }
 
         if embeddings_path.exists() {
-            let embs_json = std::fs::read_to_string(&embeddings_path).map_err(|e| e.to_string())?;
-            let embs: Vec<Vec<f32>> = serde_json::from_str(&embs_json).map_err(|e| e.to_string())?;
+            let embs_json = std::fs::read_to_string(&embeddings_path)
+                .map_err(|e| e.to_string())?;
+            let embs: Vec<Vec<f32>> =
+                serde_json::from_str(&embs_json).map_err(|e| e.to_string())?;
             let mut lock = self
                 .embeddings
                 .write()
@@ -327,7 +353,8 @@ impl SemanticIndex {
         }
 
         if manifest_path.exists() {
-            let manifest_json = std::fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
+            let manifest_json = std::fs::read_to_string(&manifest_path)
+                .map_err(|e| e.to_string())?;
             let manifest: IndexManifest =
                 serde_json::from_str(&manifest_json).map_err(|e| e.to_string())?;
             let mut lock = self
@@ -341,7 +368,11 @@ impl SemanticIndex {
         Ok(())
     }
 
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<ChunkMetadata>, String> {
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ChunkMetadata>, String> {
         if self.model.is_none() {
             return Err("Index not initialized. Call init() first.".to_string());
         }
@@ -352,9 +383,7 @@ impl SemanticIndex {
             .index_store
             .read()
             .map_err(|_| "index lock poisoned".to_string())?;
-        let hnsw = hnsw_lock
-            .as_ref()
-            .ok_or("Index store not initialized")?;
+        let hnsw = hnsw_lock.as_ref().ok_or("Index store not initialized")?;
 
         let results = hnsw.search(&query_embedding, limit, 16);
         let meta_lock = self
@@ -379,11 +408,8 @@ impl SemanticIndex {
             .embeddings
             .read()
             .map_err(|_| "embeddings lock poisoned".to_string())?;
-        let indexed: Vec<(&Vec<f32>, usize)> = embs
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (e, i))
-            .collect();
+        let indexed: Vec<(&Vec<f32>, usize)> =
+            embs.iter().enumerate().map(|(i, e)| (e, i)).collect();
         if !indexed.is_empty() {
             hnsw.parallel_insert(&indexed);
         }
@@ -396,7 +422,10 @@ impl SemanticIndex {
         Ok(())
     }
 
-    fn compute_file_fingerprint(&self, path: &Path) -> Result<FileFingerprint, String> {
+    fn compute_file_fingerprint(
+        &self,
+        path: &Path,
+    ) -> Result<FileFingerprint, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
         let modified_unix_secs = metadata
@@ -413,13 +442,18 @@ impl SemanticIndex {
         ))
     }
 
-    fn collect_files(&self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    fn collect_files(
+        &self,
+        dir: &Path,
+        files: &mut Vec<PathBuf>,
+    ) -> Result<(), String> {
         if dir.is_dir() {
             for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
                 let entry = entry.map_err(|e| e.to_string())?;
                 let path = entry.path();
                 if path.is_dir() {
-                    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                    let name =
+                        path.file_name().and_then(|s| s.to_str()).unwrap_or("");
                     if name == ".git" || name == "target" || name == "node_modules" {
                         continue;
                     }
@@ -484,7 +518,9 @@ fn compute_changed_paths(
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_changed_paths, file_fingerprint_from_bytes, FileFingerprint};
+    use super::{
+        compute_changed_paths, file_fingerprint_from_bytes, FileFingerprint,
+    };
     use std::collections::HashMap;
 
     #[test]
@@ -517,7 +553,10 @@ mod tests {
         );
 
         let (changed, removed) = compute_changed_paths(&previous, &current);
-        assert_eq!(changed, vec!["src/a.rs".to_string(), "src/c.rs".to_string()]);
+        assert_eq!(
+            changed,
+            vec!["src/a.rs".to_string(), "src/c.rs".to_string()]
+        );
         assert_eq!(removed, vec!["src/b.rs".to_string()]);
     }
 }

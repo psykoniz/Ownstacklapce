@@ -12,6 +12,9 @@ pub struct ModelRoutingConfig {
     pub roles: HashMap<String, String>,
     /// Model mapping based on task type (refactoring, docs, etc.)
     pub tasks: HashMap<String, String>,
+    /// OpenRouter provider routing preferences (order, sort, allow_fallbacks, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openrouter_provider: Option<serde_json::Value>,
 }
 
 pub struct ModelRouter {
@@ -101,6 +104,11 @@ impl ModelRouter {
         }
 
         None
+    }
+
+    /// Get OpenRouter specific provider routing preferences if any
+    pub fn openrouter_provider_prefs(&self) -> Option<serde_json::Value> {
+        self.config.openrouter_provider.clone()
     }
 }
 

@@ -29,7 +29,10 @@ fn python3_cmd() -> Option<&'static str> {
 
     for &candidate in candidates {
         if let Ok(output) = StdCommand::new(candidate)
-            .args(["-c", "import sys; sys.exit(0 if sys.version_info.major >= 3 else 1)"])
+            .args([
+                "-c",
+                "import sys; sys.exit(0 if sys.version_info.major >= 3 else 1)",
+            ])
             .output()
         {
             if output.status.success() {
@@ -126,14 +129,13 @@ async fn i3_mcp_tool_call_add_returns_sum() {
     };
 
     let mut client = McpClient::new();
-    client.connect(fixture_config(python)).await.expect("connect");
+    client
+        .connect(fixture_config(python))
+        .await
+        .expect("connect");
 
     let result = client
-        .call_tool(
-            "test-fixture",
-            "add",
-            serde_json::json!({"a": 21, "b": 21}),
-        )
+        .call_tool("test-fixture", "add", serde_json::json!({"a": 21, "b": 21}))
         .await
         .expect("add tool call should succeed");
 
@@ -157,21 +159,17 @@ async fn i4_mcp_unknown_tool_returns_error() {
     };
 
     let mut client = McpClient::new();
-    client.connect(fixture_config(python)).await.expect("connect");
+    client
+        .connect(fixture_config(python))
+        .await
+        .expect("connect");
 
     let result = client
-        .call_tool(
-            "test-fixture",
-            "nonexistent_tool",
-            serde_json::json!({}),
-        )
+        .call_tool("test-fixture", "nonexistent_tool", serde_json::json!({}))
         .await;
 
     // Must return an Err, not panic or hang.
-    assert!(
-        result.is_err(),
-        "Expected Err for unknown tool, got Ok"
-    );
+    assert!(result.is_err(), "Expected Err for unknown tool, got Ok");
 
     client.disconnect_all().await;
 }

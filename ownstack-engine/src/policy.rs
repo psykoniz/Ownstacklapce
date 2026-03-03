@@ -205,8 +205,12 @@ impl PolicyEngine {
             let has_write_flag = |args: &[String]| {
                 args.iter().any(|a| {
                     let a = a.to_lowercase();
-                    a == "-x" || a.starts_with("--data") || a == "-d"
-                        || a == "-t" || a == "--upload" || a.starts_with("--post")
+                    a == "-x"
+                        || a.starts_with("--data")
+                        || a == "-d"
+                        || a == "-t"
+                        || a == "--upload"
+                        || a.starts_with("--post")
                         || a.starts_with("--method")
                 })
             };

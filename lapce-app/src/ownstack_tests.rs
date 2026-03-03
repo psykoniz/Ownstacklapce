@@ -1,31 +1,31 @@
 #[cfg(test)]
 mod tests {
-    use crate::window_tab::{CommonData, Focus};
+    use crate::completion::CompletionData;
     use crate::db::LapceDb;
+    use crate::hover::HoverData;
+    use crate::inline_completion::InlineCompletionData;
+    use crate::keypress::KeyPressData;
+    use crate::listener::Listener;
+    use crate::ownstack_chat::{AgentMode, ChatRole, OwnStackChatData};
+    use crate::terminal::event::{TermEvent, TermNotification};
+    use crate::window_tab::{CommonData, Focus};
+    use crate::workspace::LapceWorkspace;
+    use floem::action::TimerToken;
+    use floem::kurbo::{Point, Size};
+    use floem::reactive::{Scope, SignalGet, SignalUpdate, provide_context};
+    use lapce_rpc::ownstack::AgentModeState;
     use lapce_rpc::ownstack::OwnStackRpc;
     use lapce_rpc::proxy::ProxyRpcHandler;
-    use crate::workspace::LapceWorkspace;
-    use crate::keypress::KeyPressData;
-    use crate::completion::CompletionData;
-    use crate::inline_completion::InlineCompletionData;
-    use crate::hover::HoverData;
-    use crate::listener::Listener;
-    use floem::reactive::{Scope, provide_context, SignalGet, SignalUpdate};
-    use floem::action::TimerToken;
-    use floem::kurbo::{Size, Point};
+    use lapce_rpc::terminal::TermId;
     use std::collections::BTreeMap;
-    use std::sync::mpsc::channel;
     use std::rc::Rc;
     use std::sync::Arc;
-    use crate::ownstack_chat::{OwnStackChatData, ChatRole, AgentMode};
-    use lapce_rpc::ownstack::AgentModeState;
-    use lapce_rpc::terminal::TermId;
-    use crate::terminal::event::{TermEvent, TermNotification};
+    use std::sync::mpsc::channel;
 
     // Helper to setup a minimal test environment with a floem scope
     fn setup_test_data() -> (floem::reactive::Scope, OwnStackChatData) {
         let cx = Scope::new();
-        
+
         // Mock DB
         let db = Arc::new(LapceDb::new().expect("failed to create LapceDb"));
         provide_context(db.clone());
@@ -96,10 +96,10 @@ mod tests {
     #[test]
     fn test_chat_message_sending() {
         let (_cx, chat_data) = setup_test_data();
-        
+
         chat_data.input.set("Hello OwnStack".to_string());
         chat_data.send_message();
-        
+
         let messages = chat_data.messages.get();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, ChatRole::User);
@@ -111,34 +111,34 @@ mod tests {
     #[test]
     fn test_streaming_updates() {
         let (_cx, chat_data) = setup_test_data();
-        
+
         // Simulate start of stream
         chat_data.is_loading.set(true);
-        
+
         // Receive chunks
         chat_data.receive_chunk(OwnStackRpc::AiStreamChunk {
             content_delta: Some("Hello".to_string()),
             tool_call_delta: None,
             finish_reason: None,
         });
-        
+
         assert_eq!(chat_data.streaming_content.get(), "Hello");
-        
+
         chat_data.receive_chunk(OwnStackRpc::AiStreamChunk {
             content_delta: Some(" world".to_string()),
             tool_call_delta: None,
             finish_reason: None,
         });
-        
+
         assert_eq!(chat_data.streaming_content.get(), "Hello world");
-        
+
         // Finalize stream
         chat_data.receive_chunk(OwnStackRpc::AiStreamChunk {
             content_delta: None,
             tool_call_delta: None,
             finish_reason: Some("stop".to_string()),
         });
-        
+
         // Streaming content should be cleared, and message added to history
         assert_eq!(chat_data.streaming_content.get(), "");
         let messages = chat_data.messages.get();
@@ -151,15 +151,15 @@ mod tests {
     #[test]
     fn test_mission_updates() {
         let (_cx, chat_data) = setup_test_data();
-        
+
         let goal = "Test Goal".to_string();
         let steps = vec![
             ("Step 1".to_string(), "pending".to_string()),
             ("Step 2".to_string(), "active".to_string()),
         ];
-        
+
         chat_data.receive_mission(goal.clone(), steps.clone());
-        
+
         let mission = chat_data.current_mission.get().expect("mission set");
         assert_eq!(mission.0, goal);
         assert_eq!(mission.1.len(), 2);

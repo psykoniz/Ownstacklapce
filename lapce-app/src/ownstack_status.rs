@@ -1,5 +1,5 @@
 use floem::prelude::{SignalGet, SignalUpdate};
-use floem::reactive::{create_rw_signal, RwSignal};
+use floem::reactive::{RwSignal, create_rw_signal};
 
 use crate::ownstack_chat::AgentMode;
 use crate::window_tab::CommonData;
@@ -273,7 +273,7 @@ pub(crate) fn compose_detail_label(
 #[cfg(test)]
 mod tests {
     use super::{
-        budget_level, compose_detail_label, compose_display_label, BudgetLevel,
+        BudgetLevel, budget_level, compose_detail_label, compose_display_label,
     };
     use crate::ownstack_chat::AgentMode;
 

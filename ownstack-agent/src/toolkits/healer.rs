@@ -282,7 +282,9 @@ impl FailureAnalyzer {
         }
 
         // ─── Dependency Missing (multi-language, only if not already detected) ──
-        let has_dep_failure = failures.iter().any(|f| f.failure_type == FailureType::DependencyMissing);
+        let has_dep_failure = failures
+            .iter()
+            .any(|f| f.failure_type == FailureType::DependencyMissing);
         if !has_dep_failure
             && (output.contains("pip install")
                 || output.contains("npm install")
@@ -574,7 +576,10 @@ Output snippet:\n{}",
             LlmMessage::user(prompt),
         ];
 
-        let response = match provider.complete(messages, None, None).await {
+        let response = match provider
+            .complete(messages, None, crate::provider::ProviderOptions::default())
+            .await
+        {
             Ok(resp) => resp,
             Err(err) => {
                 warn!("Healer LLM fallback failed: {}", err);
@@ -633,8 +638,10 @@ Output snippet:\n{}",
         }
 
         // Analyze failures using actual exit code
-        session.failures_detected =
-            FailureAnalyzer::analyze(&session.original_output, initial.exit_code.unwrap_or(1));
+        session.failures_detected = FailureAnalyzer::analyze(
+            &session.original_output,
+            initial.exit_code.unwrap_or(1),
+        );
 
         info!(
             "Healer: {} failures detected for: {}",
@@ -730,7 +737,10 @@ Output snippet:\n{}",
             }
 
             // Re-analyze using actual exit code
-            session.failures_detected = FailureAnalyzer::analyze(&verify_output, verify.exit_code.unwrap_or(1));
+            session.failures_detected = FailureAnalyzer::analyze(
+                &verify_output,
+                verify.exit_code.unwrap_or(1),
+            );
         }
 
         session
@@ -992,7 +1002,7 @@ mod tests {
             &self,
             _messages: Vec<crate::provider::LlmMessage>,
             _tools: Option<Vec<ToolDefinition>>,
-            _model_override: Option<String>,
+            _options: crate::provider::ProviderOptions,
         ) -> Result<LlmResponse, ProviderError> {
             Ok(LlmResponse {
                 content: Some(

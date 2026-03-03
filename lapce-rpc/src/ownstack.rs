@@ -97,10 +97,17 @@ pub struct UiStateDelta {
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "params")]
 pub enum OwnStackRpc {
-    AiPrompt { prompt: String },
-    SetAgentMode { mode: AgentModeState },
+    AiPrompt {
+        prompt: String,
+    },
+    SetAgentMode {
+        mode: AgentModeState,
+    },
     KillSwitch,
-    ToolExec { command: String, tool_name: String },
+    ToolExec {
+        command: String,
+        tool_name: String,
+    },
     AiStreamChunk {
         content_delta: Option<String>,
         tool_call_delta: Option<serde_json::Value>,
@@ -117,8 +124,12 @@ pub enum OwnStackRpc {
         approved: bool,
         correlation_id: String,
     },
-    AuditEvent { json_entry: String },
-    ToolResultMsg { json_result: String },
+    AuditEvent {
+        json_entry: String,
+    },
+    ToolResultMsg {
+        json_result: String,
+    },
     MissionUpdate {
         goal: String,
         steps: Vec<(String, String)>,
@@ -131,22 +142,29 @@ pub enum OwnStackRpc {
         calls: u64,
         max_calls: u64,
     },
-    ContextUpdate { current: u64, max: u64 },
+    ContextUpdate {
+        current: u64,
+        max: u64,
+    },
     SuggestionDecision {
         decision: String,
         message_id: String,
     },
-    UiSnapshot { metadata: String },
+    UiSnapshot {
+        metadata: String,
+    },
     CaptureScreenshot,
     UiSnapshotRequest,
-    UiStateDelta { delta: UiStateDelta },
+    UiStateDelta {
+        delta: UiStateDelta,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentModeState, AgentRunState, BudgetSnapshot, ContextSnapshot,
-        OwnStackRpc, UiStateDelta,
+        AgentModeState, AgentRunState, BudgetSnapshot, ContextSnapshot, OwnStackRpc,
+        UiStateDelta,
     };
 
     #[test]
@@ -186,8 +204,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&msg).expect("serialize");
-        let decoded: OwnStackRpc =
-            serde_json::from_str(&json).expect("deserialize");
+        let decoded: OwnStackRpc = serde_json::from_str(&json).expect("deserialize");
         match decoded {
             OwnStackRpc::UiStateDelta { delta } => {
                 assert_eq!(delta.mode, Some(AgentModeState::Ask));
@@ -205,8 +222,7 @@ mod tests {
             mode: AgentModeState::Plan,
         };
         let json = serde_json::to_string(&msg).expect("serialize");
-        let decoded: OwnStackRpc =
-            serde_json::from_str(&json).expect("deserialize");
+        let decoded: OwnStackRpc = serde_json::from_str(&json).expect("deserialize");
         match decoded {
             OwnStackRpc::SetAgentMode { mode } => {
                 assert_eq!(mode, AgentModeState::Plan);
@@ -225,8 +241,7 @@ mod tests {
             timeout_secs: 15,
         };
         let json = serde_json::to_string(&msg).expect("serialize");
-        let decoded: OwnStackRpc =
-            serde_json::from_str(&json).expect("deserialize");
+        let decoded: OwnStackRpc = serde_json::from_str(&json).expect("deserialize");
         match decoded {
             OwnStackRpc::PolicyPrompt {
                 correlation_id,
@@ -246,8 +261,8 @@ mod tests {
             "method":"ai_stream_chunk",
             "params":{"content_delta":"hi","tool_call_delta":null,"finish_reason":null}
         }"#;
-        let msg: OwnStackRpc = serde_json::from_str(json)
-            .expect("legacy stream chunk should parse");
+        let msg: OwnStackRpc =
+            serde_json::from_str(json).expect("legacy stream chunk should parse");
         match msg {
             OwnStackRpc::AiStreamChunk { content_delta, .. } => {
                 assert_eq!(content_delta.as_deref(), Some("hi"));

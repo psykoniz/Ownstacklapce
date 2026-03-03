@@ -1,6 +1,6 @@
 use lapce_rpc::ownstack::OwnStackRpc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::{timeout, Duration};
 use tracing::warn;
@@ -198,7 +198,11 @@ mod tests {
 
         let handle = tokio::spawn(async move {
             mgr_req
-                .request("npm publish".to_string(), "publishing package".to_string(), None)
+                .request(
+                    "npm publish".to_string(),
+                    "publishing package".to_string(),
+                    None,
+                )
                 .await
         });
 
@@ -206,7 +210,9 @@ mod tests {
         let correlation_id = {
             let msgs = sent.lock().unwrap();
             match &msgs[0] {
-                OwnStackRpc::PolicyPrompt { correlation_id, .. } => correlation_id.clone(),
+                OwnStackRpc::PolicyPrompt { correlation_id, .. } => {
+                    correlation_id.clone()
+                }
                 _ => panic!("Expected PolicyPrompt"),
             }
         };
@@ -249,7 +255,8 @@ mod tests {
         let mgr2 = mgr.clone();
 
         let first = tokio::spawn(async move {
-            mgr2.request("cmd1".to_string(), "r1".to_string(), None).await
+            mgr2.request("cmd1".to_string(), "r1".to_string(), None)
+                .await
         });
         tokio::time::sleep(Duration::from_millis(20)).await;
 

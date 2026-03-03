@@ -599,9 +599,9 @@ impl ProxyHandler for Dispatcher {
                         lapce_rpc::ownstack::OwnStackRpc::AiPrompt { .. } => {
                             "ai.prompt"
                         }
-                        lapce_rpc::ownstack::OwnStackRpc::SetAgentMode { .. } => {
-                            "agent.set_mode"
-                        }
+                        lapce_rpc::ownstack::OwnStackRpc::SetAgentMode {
+                            ..
+                        } => "agent.set_mode",
                         lapce_rpc::ownstack::OwnStackRpc::ToolExec { .. } => {
                             "tools.exec"
                         }
@@ -619,8 +619,9 @@ impl ProxyHandler for Dispatcher {
                                 {
                                     if let Ok(rpc) = serde_json::from_str::<
                                         lapce_rpc::ownstack::OwnStackRpc,
-                                    >(json_str)
-                                    {
+                                    >(
+                                        json_str
+                                    ) {
                                         core_rpc.notification(
                                             CoreNotification::OwnStack {
                                                 message: rpc,
@@ -630,10 +631,7 @@ impl ProxyHandler for Dispatcher {
                                 }
                             }
                             Err(e) => {
-                                tracing::error!(
-                                    "Python bridge send failed: {}",
-                                    e
-                                );
+                                tracing::error!("Python bridge send failed: {}", e);
                             }
                         }
                         // Return bridge to the mutex so it can be reused
