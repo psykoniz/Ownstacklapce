@@ -41,7 +41,7 @@ jobs:
   build:
     name: Rust on ${{ matrix.os }}
     if: github.event.pull_request.draft == false
-    needs: [required-gates]
+    needs: [check-workspace]
     strategy:
       fail-fast: false
       matrix:

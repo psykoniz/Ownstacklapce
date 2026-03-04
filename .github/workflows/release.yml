@@ -381,9 +381,9 @@ jobs:
       - name: Make DMG
         run: make dmg-universal
 
-      - name: Rename
+      - name: Rename DMG
         run: |
-          cp ./target/release-lto/macos/Lapce.dmg ./target/release-lto/macos/OwnStack-macos.dmg
+          cp ./target/release-lto/macos/OwnStack.dmg ./target/release-lto/macos/OwnStack-macos.dmg
 
       - name: Gzip lapce-proxy
         run: |
@@ -396,8 +396,8 @@ jobs:
           product-path: "./target/release-lto/macos/OwnStack-macos.dmg"
           appstore-connect-username: ${{ secrets.NOTARIZE_USERNAME }}
           appstore-connect-password: ${{ secrets.NOTARIZE_PASSWORD }}
-          appstore-connect-team-id: CYSGAZFR8D
-          primary-bundle-id: "io.lapce"
+          appstore-connect-team-id: ${{ secrets.APPLE_TEAM_ID }}
+          primary-bundle-id: "io.ownstack.ownstackide"
           verbose: true
 
       - name: "Staple Release Build"
@@ -407,7 +407,7 @@ jobs:
 
       - name: Verify macOS signature and notarization
         run: |
-          codesign --verify --deep --strict --verbose=2 ./target/release-lto/macos/Lapce.app
+          codesign --verify --deep --strict --verbose=2 ./target/release-lto/macos/OwnStack.app
           xcrun stapler validate ./target/release-lto/macos/OwnStack-macos.dmg
           spctl --assess --type open --context context:primary-signature --verbose=4 ./target/release-lto/macos/OwnStack-macos.dmg
 

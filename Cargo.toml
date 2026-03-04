@@ -18,8 +18,8 @@ version      = "0.4.6"
 edition      = "2024"
 rust-version = "1.87.0"
 license      = "Apache-2.0"
-homepage     = "https://lapce.dev"
-authors      = ["Dongdong Zhou <dzhou121@gmail.com>"]
+homepage     = "https://github.com/psykoniz/Ownstack"
+authors      = ["OwnStack Contributors"]
 
 [workspace.dependencies]
 anyhow            = { version = "1.0" }
