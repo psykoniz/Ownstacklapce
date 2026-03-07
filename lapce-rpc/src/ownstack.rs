@@ -158,6 +158,10 @@ pub enum OwnStackRpc {
     UiStateDelta {
         delta: UiStateDelta,
     },
+    LspNotInstalled {
+        language_id: String,
+        install_hint: String,
+    },
 }
 
 #[cfg(test)]

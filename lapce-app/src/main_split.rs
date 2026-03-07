@@ -48,7 +48,7 @@ use crate::{
     },
     id::{
         DiffEditorId, EditorTabId, KeymapId, SettingsId, SplitId,
-        ThemeColorSettingsId, VoltViewId,
+        ThemeColorSettingsId, VoltViewId, WelcomeId,
     },
     keypress::{EventRef, KeyPressData, KeyPressHandle},
     panel::implementation_view::ReferencesRoot,
@@ -538,6 +538,7 @@ impl MainSplitData {
             EditorTabChild::ThemeColorSettings(_) => None,
             EditorTabChild::Keymap(_) => None,
             EditorTabChild::Volt(_, _) => None,
+            EditorTabChild::Welcome(_) => None,
         }
     }
 
@@ -871,6 +872,7 @@ impl MainSplitData {
                         EditorTabChild::ThemeColorSettings(_) => true,
                         EditorTabChild::Keymap(_) => true,
                         EditorTabChild::Volt(_, _) => true,
+                        EditorTabChild::Welcome(_) => true,
                     };
 
                     if can_be_selected {
@@ -1036,6 +1038,28 @@ impl MainSplitData {
                         })
                     }
                 }
+                EditorTabChildSource::Welcome => {
+                    if let Some(index) =
+                        active_editor_tab.with_untracked(|editor_tab| {
+                            editor_tab.children.iter().position(|(_, _, child)| {
+                                matches!(child, EditorTabChild::Welcome(_))
+                            })
+                        })
+                    {
+                        Some(index)
+                    } else if ignore_unconfirmed {
+                        None
+                    } else {
+                        active_editor_tab.with_untracked(|editor_tab| {
+                            editor_tab
+                                .get_unconfirmed_editor_tab_child(
+                                    editors,
+                                    &diff_editors,
+                                )
+                                .map(|(i, _)| i)
+                        })
+                    }
+                }
             }
         };
 
@@ -1093,6 +1117,9 @@ impl MainSplitData {
                 EditorTabChildSource::Volt(id) => {
                     EditorTabChild::Volt(VoltViewId::next(), id.to_owned())
                 }
+                EditorTabChildSource::Welcome => {
+                    EditorTabChild::Welcome(WelcomeId::next())
+                }
                 EditorTabChildSource::DiffEditor { left, right } => {
                     let diff_editor_id = DiffEditorId::next();
                     let diff_editor = DiffEditorData::new(
@@ -1129,6 +1156,7 @@ impl MainSplitData {
                         EditorTabChild::ThemeColorSettings(_) => {}
                         EditorTabChild::Keymap(_) => {}
                         EditorTabChild::Volt(_, _) => {}
+                        EditorTabChild::Welcome(_) => {}
                     }
                     (editor_tab_id, current_child.clone())
                 });
@@ -1195,6 +1223,7 @@ impl MainSplitData {
                 EditorTabChild::ThemeColorSettings(_) => {}
                 EditorTabChild::Keymap(_) => {}
                 EditorTabChild::Volt(_, _) => {}
+                EditorTabChild::Welcome(_) => {}
             }
 
             // Now loading the new child
@@ -1271,6 +1300,12 @@ impl MainSplitData {
                                     }
                                 }),
                             EditorTabChildSource::NewFileEditor => None,
+                            EditorTabChildSource::Welcome => editor_tab
+                                .children
+                                .iter()
+                                .position(|(_, _, child)| {
+                                    matches!(child, EditorTabChild::Welcome(_))
+                                }),
                         })
                     {
                         self.active_editor_tab.set(Some(*editor_tab_id));
@@ -1573,6 +1608,9 @@ impl MainSplitData {
             EditorTabChild::Keymap(_) => EditorTabChild::Keymap(KeymapId::next()),
             EditorTabChild::Volt(_, id) => {
                 EditorTabChild::Volt(VoltViewId::next(), id.to_owned())
+            }
+            EditorTabChild::Welcome(_) => {
+                EditorTabChild::Welcome(WelcomeId::next())
             }
         };
 
@@ -1916,6 +1954,7 @@ impl MainSplitData {
             EditorTabChild::ThemeColorSettings(_) => None,
             EditorTabChild::Keymap(_) => None,
             EditorTabChild::Volt(_, _) => None,
+            EditorTabChild::Welcome(_) => None,
         }
     }
 
@@ -2154,6 +2193,7 @@ impl MainSplitData {
             EditorTabChild::ThemeColorSettings(_) => {}
             EditorTabChild::Keymap(_) => {}
             EditorTabChild::Volt(_, _) => {}
+            EditorTabChild::Welcome(_) => {}
         }
 
         if editor_tab_children_len == 0 {
@@ -2747,6 +2787,7 @@ impl MainSplitData {
             EditorTabChild::ThemeColorSettings(_) => {}
             EditorTabChild::Keymap(_) => {}
             EditorTabChild::Volt(_, _) => {}
+            EditorTabChild::Welcome(_) => {}
         }
         Some(())
     }

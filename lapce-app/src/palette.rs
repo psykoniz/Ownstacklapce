@@ -940,6 +940,94 @@ impl PaletteData {
             .set(items.into_iter().map(|(_, item)| item).collect());
     }
 
+    /// Auto-detect run configurations from workspace project files.
+    fn detect_workspace_run_configs(workspace: &std::path::Path) -> Vec<PaletteItem> {
+        use lapce_rpc::dap_types::RunDebugConfig;
+        let mut items = Vec::new();
+
+        let make_item = |mode: RunDebugMode, config: RunDebugConfig| -> PaletteItem {
+            let filter = format!(
+                "{} {} {} {}",
+                mode,
+                config.name,
+                config.program,
+                config.args.as_deref().unwrap_or(&[]).join(" ")
+            );
+            PaletteItem {
+                content: PaletteItemContent::RunAndDebug { mode, config },
+                filter_text: filter,
+                score: 0,
+                indices: vec![],
+            }
+        };
+
+        let make_config = |name: &str, program: &str, args: &[&str]| -> RunDebugConfig {
+            RunDebugConfig {
+                ty: None,
+                name: name.to_string(),
+                program: program.to_string(),
+                args: Some(args.iter().map(|s| s.to_string()).collect()),
+                cwd: None,
+                env: None,
+                prelaunch: None,
+                debug_command: None,
+                dap_id: Default::default(),
+                tracing_output: false,
+                config_source: Default::default(),
+            }
+        };
+
+        // Rust (Cargo.toml)
+        if workspace.join("Cargo.toml").exists() {
+            items.push(make_item(RunDebugMode::Run, make_config("cargo run", "cargo", &["run"])));
+            items.push(make_item(RunDebugMode::Run, make_config("cargo test", "cargo", &["test"])));
+            items.push(make_item(RunDebugMode::Run, make_config("cargo build", "cargo", &["build"])));
+            items.push(make_item(RunDebugMode::Run, make_config("cargo check", "cargo", &["check"])));
+        }
+
+        // Node.js (package.json)
+        if workspace.join("package.json").exists() {
+            items.push(make_item(RunDebugMode::Run, make_config("npm start", "npm", &["start"])));
+            items.push(make_item(RunDebugMode::Run, make_config("npm test", "npm", &["test"])));
+            items.push(make_item(RunDebugMode::Run, make_config("npm run build", "npm", &["run", "build"])));
+        }
+
+        // Python
+        if workspace.join("pyproject.toml").exists()
+            || workspace.join("setup.py").exists()
+            || workspace.join("requirements.txt").exists()
+        {
+            items.push(make_item(RunDebugMode::Run, make_config("python (active file)", "python3", &["${file}"])));
+            items.push(make_item(RunDebugMode::Run, make_config("pytest", "pytest", &[])));
+        }
+
+        // Go (go.mod)
+        if workspace.join("go.mod").exists() {
+            items.push(make_item(RunDebugMode::Run, make_config("go run .", "go", &["run", "."])));
+            items.push(make_item(RunDebugMode::Run, make_config("go test ./...", "go", &["test", "./..."])));
+            items.push(make_item(RunDebugMode::Run, make_config("go build", "go", &["build"])));
+        }
+
+        // Makefile
+        if workspace.join("Makefile").exists() || workspace.join("makefile").exists() {
+            items.push(make_item(RunDebugMode::Run, make_config("make", "make", &[])));
+            items.push(make_item(RunDebugMode::Run, make_config("make test", "make", &["test"])));
+        }
+
+        // CMake
+        if workspace.join("CMakeLists.txt").exists() {
+            items.push(make_item(RunDebugMode::Run, make_config("cmake build", "cmake", &["--build", "build"])));
+        }
+
+        // Deno (deno.json)
+        if workspace.join("deno.json").exists() || workspace.join("deno.jsonc").exists() {
+            items.push(make_item(RunDebugMode::Run, make_config("deno run", "deno", &["run", "${file}"])));
+            items.push(make_item(RunDebugMode::Run, make_config("deno test", "deno", &["test"])));
+        }
+
+        items
+    }
+
     fn get_run_configs(&self) {
         if let Some(workspace) = self.common.workspace.path.as_deref() {
             let run_toml = workspace.join(".lapce").join("run.toml");
@@ -950,6 +1038,7 @@ impl PaletteData {
             } else {
                 let loaded = doc.loaded;
                 let palette = self.clone();
+                let ws = workspace.to_path_buf();
                 self.common.scope.create_effect(move |prev_loaded| {
                     if prev_loaded == Some(true) {
                         return true;
@@ -959,6 +1048,12 @@ impl PaletteData {
                     if loaded {
                         let content = doc.buffer.with_untracked(|b| b.to_string());
                         if content.is_empty() {
+                            // No run.toml configured — auto-detect from workspace
+                            let auto_items = Self::detect_workspace_run_configs(&ws);
+                            if !auto_items.is_empty() {
+                                palette.items.set(auto_items.into());
+                                return true;
+                            }
                             doc.reload(Rope::from(DEFAULT_RUN_TOML), false);
                         }
                         palette.set_run_configs(content);

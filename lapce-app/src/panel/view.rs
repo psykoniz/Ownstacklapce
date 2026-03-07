@@ -563,18 +563,18 @@ fn panel_picker(
         move |p| {
             let window_tab_data = window_tab_data.clone();
             let tooltip = match p {
-                PanelKind::Terminal => "Terminal",
-                PanelKind::FileExplorer => "File Explorer",
-                PanelKind::SourceControl => "Source Control",
-                PanelKind::Plugin => "Plugins",
-                PanelKind::Search => "Search",
-                PanelKind::Problem => "Problems",
-                PanelKind::Debug => "Debug",
+                PanelKind::Terminal => "Terminal (Ctrl+`)",
+                PanelKind::FileExplorer => "File Explorer (Ctrl+Shift+E)",
+                PanelKind::SourceControl => "Source Control (Ctrl+Shift+G)",
+                PanelKind::Plugin => "Extensions (Ctrl+Shift+X)",
+                PanelKind::Search => "Search (Ctrl+Shift+F)",
+                PanelKind::Problem => "Problems (Ctrl+Shift+M)",
+                PanelKind::Debug => "Debug (Ctrl+Shift+D)",
                 PanelKind::CallHierarchy => "Call Hierarchy",
                 PanelKind::DocumentSymbol => "Document Symbol",
                 PanelKind::References => "References",
                 PanelKind::Implementation => "Implementation",
-                PanelKind::OwnStackChat => "OwnStack AI",
+                PanelKind::OwnStackChat => "OwnStack AI (Ctrl+Shift+A)",
                 PanelKind::OwnStackMcp => "MCP Servers",
             };
             let icon = p.svg_name();

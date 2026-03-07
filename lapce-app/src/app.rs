@@ -1439,6 +1439,9 @@ fn editor_tab_content(
             EditorTabChild::Volt(_, id) => {
                 plugin_info_view(plugin.clone(), id).into_any()
             }
+            EditorTabChild::Welcome(_) => {
+                text("Welcome").into_any()
+            }
         };
         child.style(|s| s.size_full())
     };

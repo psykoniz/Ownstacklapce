@@ -277,6 +277,24 @@ command = "ownstack.toggle_palette"
 key = "ctrl+alt+a"
 command = "ownstack.toggle_audit"
 
+# --------------------------------- Source Control / Debug / AI -------------------------
+
+[[keymaps]]
+key = "ctrl+shift+g"
+command = "toggle_source_control_focus"
+
+[[keymaps]]
+key = "ctrl+shift+d"
+command = "toggle_debug_visual"
+
+[[keymaps]]
+key = "ctrl+shift+a"
+command = "ownstack.toggle_chat_panel"
+
+[[keymaps]]
+key = "F5"
+command = "palette.run_and_debug"
+
 # ------------------------------------ Navigation -------------------------------------
 
 [[keymaps]]

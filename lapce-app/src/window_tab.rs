@@ -2644,6 +2644,18 @@ impl WindowTabData {
                             },
                         );
                     }
+                    OwnStackRpc::LspNotInstalled { language_id, install_hint } => {
+                        self.show_message(
+                            "OwnStack",
+                            &ShowMessageParams {
+                                typ: MessageType::INFO,
+                                message: format!(
+                                    "No language server found for '{}'. Install with: {}",
+                                    language_id, install_hint
+                                ),
+                            },
+                        );
+                    }
                     OwnStackRpc::KillSwitch => {
                         self.ownstack_status.set_active(false);
                         self.ownstack_status.set_status("stopped");
