@@ -346,6 +346,7 @@ mod tests {
         // Configure git for tests
         let _ = tm.run_git(&["config", "user.email", "test@ownstack.dev"]);
         let _ = tm.run_git(&["config", "user.name", "OwnStack Test"]);
+        let _ = tm.run_git(&["config", "commit.gpgsign", "false"]);
 
         // Initial commit
         fs::write(dir.path().join("README.md"), "# Test").unwrap();
