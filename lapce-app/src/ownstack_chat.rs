@@ -78,6 +78,8 @@ pub struct OwnStackChatData {
     /// Context-window usage telemetry.
     pub context_current: RwSignal<u64>,
     pub context_max: RwSignal<u64>,
+    /// Whether the agent bridge is connected.
+    pub bridge_connected: RwSignal<bool>,
     #[allow(dead_code)]
     common: CommonData,
     db: Arc<crate::db::LapceDb>,
@@ -168,6 +170,7 @@ impl OwnStackChatData {
             current_mission: create_rw_signal(None),
             context_current: create_rw_signal(0),
             context_max: create_rw_signal(0),
+            bridge_connected: create_rw_signal(false),
             common,
             db,
         }
@@ -192,6 +195,23 @@ impl OwnStackChatData {
     pub fn send_message(&self) {
         let prompt = self.input.get_untracked();
         if prompt.trim().is_empty() {
+            return;
+        }
+
+        // Guard: warn if bridge is disconnected
+        if !self.bridge_connected.get_untracked() {
+            self.messages.update(|msgs| {
+                msgs.push(ChatMessage {
+                    role: ChatRole::Alert,
+                    content: "Agent bridge is disconnected. Your message cannot be delivered. Check the status bar for connection status.".to_string(),
+                    timestamp: chrono_now(),
+                    diff_content: None,
+                    sub_role: None,
+                    tool_result: None,
+                    diff_target: None,
+                    is_error: true,
+                });
+            });
             return;
         }
 
@@ -871,6 +891,23 @@ pub fn ownstack_chat_panel(
                     ))
                     .style(|s| s.width_full().padding_bottom(8.0))
                 },
+                // ── Bridge disconnected warning ──────────────────────────
+                label(|| "Agent bridge disconnected — messages cannot be sent")
+                    .style({
+                        let chat_data = chat_data.clone();
+                        move |s| {
+                            let connected = chat_data.bridge_connected.get();
+                            s.width_full()
+                                .padding_horiz(10.0)
+                                .padding_vert(6.0)
+                                .font_size(11.0)
+                                .color(Color::from_rgb8(255, 200, 60))
+                                .background(Color::from_rgba8(255, 200, 60, 20))
+                                .border_radius(6.0)
+                                .margin_bottom(6.0)
+                                .apply_if(connected, |s| s.hide())
+                        }
+                    }),
                 h_stack((
                     label(|| "Ctx")
                         .style(move |s| {

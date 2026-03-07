@@ -20,6 +20,7 @@ struct SuggestedAction {
 
 fn suggested_actions() -> Vec<SuggestedAction> {
     vec![
+        // ── Analysis & Review ────────────────────────────────────────
         SuggestedAction {
             title: "Analyze Active File",
             keywords: &["analyze", "active", "file", "review"],
@@ -27,6 +28,118 @@ fn suggested_actions() -> Vec<SuggestedAction> {
                 "Analyze the active file and summarize key risks and improvements.",
             ),
         },
+        SuggestedAction {
+            title: "Request Code Review",
+            keywords: &["review", "code", "reviewer", "pr", "pull request"],
+            action: SuggestedActionKind::Prompt(
+                "Review the current file for bugs, security issues, and code quality. Provide actionable suggestions.",
+            ),
+        },
+        SuggestedAction {
+            title: "Security Audit",
+            keywords: &["security", "audit", "vulnerability", "owasp", "cve"],
+            action: SuggestedActionKind::Prompt(
+                "Perform a security audit on the current workspace. Check for OWASP top-10 vulnerabilities, hardcoded secrets, and unsafe patterns.",
+            ),
+        },
+        // ── Time Machine ─────────────────────────────────────────────
+        SuggestedAction {
+            title: "Create Snapshot",
+            keywords: &["snapshot", "save", "time", "machine", "backup", "checkpoint"],
+            action: SuggestedActionKind::Prompt(
+                "Create a Time Machine snapshot of the current workspace state before making changes.",
+            ),
+        },
+        SuggestedAction {
+            title: "List Snapshots",
+            keywords: &["snapshot", "list", "time", "machine", "history", "restore"],
+            action: SuggestedActionKind::Prompt(
+                "List recent Time Machine snapshots so I can review or restore a previous state.",
+            ),
+        },
+        SuggestedAction {
+            title: "Restore Last Snapshot",
+            keywords: &["restore", "undo", "rollback", "revert", "time", "snapshot"],
+            action: SuggestedActionKind::Prompt(
+                "Restore the workspace to the most recent Time Machine snapshot.",
+            ),
+        },
+        // ── Self-Healing ─────────────────────────────────────────────
+        SuggestedAction {
+            title: "Auto-Heal: Fix Failing Tests",
+            keywords: &["heal", "fix", "test", "auto", "repair", "debug"],
+            action: SuggestedActionKind::Prompt(
+                "Run the test suite, detect failures, and automatically attempt to fix them using the Healer agent.",
+            ),
+        },
+        SuggestedAction {
+            title: "Auto-Heal: Fix Build Errors",
+            keywords: &["heal", "build", "compile", "error", "fix", "cargo", "npm"],
+            action: SuggestedActionKind::Prompt(
+                "Run the build command, detect compilation errors, and automatically attempt fixes.",
+            ),
+        },
+        // ── Multivers (A/B Testing) ──────────────────────────────────
+        SuggestedAction {
+            title: "Run A/B Test",
+            keywords: &["multivers", "ab", "test", "compare", "variant", "fork"],
+            action: SuggestedActionKind::Prompt(
+                "Run the current command with multiple variant configurations in parallel and compare results using Multivers.",
+            ),
+        },
+        // ── Specialists ──────────────────────────────────────────────
+        SuggestedAction {
+            title: "Generate Documentation",
+            keywords: &["docs", "documentation", "generate", "readme", "jsdoc", "rustdoc"],
+            action: SuggestedActionKind::Prompt(
+                "Generate documentation for the current file or module using the Docs specialist agent.",
+            ),
+        },
+        SuggestedAction {
+            title: "QA: Analyze Test Failures",
+            keywords: &["qa", "test", "failure", "analyze", "debug", "coverage"],
+            action: SuggestedActionKind::Prompt(
+                "Analyze recent test failures and suggest fixes using the QA specialist agent.",
+            ),
+        },
+        SuggestedAction {
+            title: "UI/UX Review",
+            keywords: &["designer", "ui", "ux", "design", "layout", "css", "style"],
+            action: SuggestedActionKind::Prompt(
+                "Review the UI components in the current file for accessibility, responsiveness, and design best practices.",
+            ),
+        },
+        SuggestedAction {
+            title: "Project Planning",
+            keywords: &["pm", "plan", "project", "task", "milestone", "estimate"],
+            action: SuggestedActionKind::Prompt(
+                "Help plan the next steps for this project. Break down the current task into milestones and estimate effort.",
+            ),
+        },
+        // ── Browser & Vision ─────────────────────────────────────────
+        SuggestedAction {
+            title: "Browse URL",
+            keywords: &["browser", "url", "web", "navigate", "fetch", "scrape"],
+            action: SuggestedActionKind::Prompt(
+                "Navigate to a URL and analyze the page content. Usage: provide the URL in your message.",
+            ),
+        },
+        SuggestedAction {
+            title: "Capture UI Snapshot",
+            keywords: &["vision", "capture", "ui", "screenshot", "snapshot"],
+            action: SuggestedActionKind::Workbench(
+                LapceWorkbenchCommand::OwnStackCaptureUiSnapshot,
+            ),
+        },
+        // ── InfraSense ───────────────────────────────────────────────
+        SuggestedAction {
+            title: "System Health Check",
+            keywords: &["health", "system", "ram", "disk", "cpu", "infra", "metrics"],
+            action: SuggestedActionKind::Prompt(
+                "Check system health: RAM usage, disk space, and CPU. Alert if any resource is critical.",
+            ),
+        },
+        // ── Policy & Config ──────────────────────────────────────────
         SuggestedAction {
             title: "Simulate Policy: npm publish",
             keywords: &["policy", "npm", "publish", "security"],

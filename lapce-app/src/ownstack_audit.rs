@@ -247,6 +247,187 @@ fn parse_audit_entry(line: &str) -> Option<AuditEntry> {
     })
 }
 
+/// Sidebar panel version of the audit log for `PanelKind::OwnStackAudit`.
+pub fn audit_panel(
+    window_tab_data: std::rc::Rc<crate::window_tab::WindowTabData>,
+    _position: crate::panel::position::PanelPosition,
+) -> impl View {
+    let data = window_tab_data.ownstack_audit.clone();
+    let config = window_tab_data.common.config;
+    let query = data.search_query;
+    let stats_data = data.clone();
+    let list_data = data.clone();
+
+    v_stack((
+        // ── Header with stats and filter buttons ──────────────────
+        h_stack((
+            label(|| "Audit Log".to_string()).style(move |s| {
+                s.font_bold()
+                    .font_size(13.0)
+                    .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
+            }),
+            label(move || {
+                let stats = stats_data.stats();
+                format!(
+                    "{} total | {} fail | {} blocked",
+                    stats.total, stats.failures, stats.blocked,
+                )
+            })
+            .style(move |s| {
+                s.margin_left(8.0)
+                    .font_size(10.0)
+                    .color(config.get().color(LapceColor::EDITOR_DIM))
+            }),
+        ))
+        .style(move |s| {
+            let cfg = config.get();
+            s.items_center()
+                .width_full()
+                .padding(8.0)
+                .border_bottom(1.0)
+                .border_color(cfg.color(LapceColor::LAPCE_BORDER))
+        }),
+        // ── Filter row ────────────────────────────────────────────
+        h_stack((
+            label(|| "All".to_string())
+                .on_click_stop({
+                    let data = data.clone();
+                    move |_| data.set_filter(AuditSeverity::All)
+                })
+                .style(move |s| {
+                    s.padding_horiz(6.0)
+                        .padding_vert(3.0)
+                        .border(1.0)
+                        .border_radius(4.0)
+                        .border_color(config.get().color(LapceColor::LAPCE_BORDER))
+                        .cursor(CursorStyle::Pointer)
+                        .font_size(11.0)
+                }),
+            label(|| "Security".to_string())
+                .on_click_stop({
+                    let data = data.clone();
+                    move |_| data.set_filter(AuditSeverity::SecurityOnly)
+                })
+                .style(move |s| {
+                    s.padding_horiz(6.0)
+                        .padding_vert(3.0)
+                        .border(1.0)
+                        .border_radius(4.0)
+                        .border_color(config.get().color(LapceColor::LAPCE_BORDER))
+                        .cursor(CursorStyle::Pointer)
+                        .font_size(11.0)
+                }),
+            label(|| "Failures".to_string())
+                .on_click_stop({
+                    let data = data.clone();
+                    move |_| data.set_filter(AuditSeverity::FailuresOnly)
+                })
+                .style(move |s| {
+                    s.padding_horiz(6.0)
+                        .padding_vert(3.0)
+                        .border(1.0)
+                        .border_radius(4.0)
+                        .border_color(config.get().color(LapceColor::LAPCE_BORDER))
+                        .cursor(CursorStyle::Pointer)
+                        .font_size(11.0)
+                }),
+            label(|| "Reload".to_string())
+                .on_click_stop({
+                    let data = data.clone();
+                    move |_| data.reload_from_disk()
+                })
+                .style(move |s| {
+                    s.padding_horiz(6.0)
+                        .padding_vert(3.0)
+                        .border(1.0)
+                        .border_radius(4.0)
+                        .border_color(config.get().color(LapceColor::LAPCE_BORDER))
+                        .cursor(CursorStyle::Pointer)
+                        .font_size(11.0)
+                }),
+        ))
+        .style(move |s| {
+            s.items_center().width_full().padding(6.0).gap(4.0)
+        }),
+        // ── Search ────────────────────────────────────────────────
+        text_input(query)
+            .placeholder("Filter by command / action / tool")
+            .style(move |s| {
+                let cfg = config.get();
+                s.width_full()
+                    .margin_horiz(6.0)
+                    .padding(6.0)
+                    .border(1.0)
+                    .border_radius(4.0)
+                    .border_color(cfg.color(LapceColor::LAPCE_BORDER))
+                    .background(cfg.color(LapceColor::EDITOR_BACKGROUND))
+                    .font_size(11.0)
+            }),
+        // ── Empty state ───────────────────────────────────────────
+        crate::ownstack_empty_state::audit_empty_state().style(move |s| {
+            let has_entries = !list_data.entries.get().is_empty();
+            s.apply_if(has_entries, |s| s.hide())
+        }),
+        // ── Entry list ────────────────────────────────────────────
+        scroll(
+            dyn_stack(
+                move || list_data.filtered_entries(),
+                |entry| {
+                    (
+                        entry.timestamp.clone(),
+                        entry.command.clone(),
+                        entry.duration_ms,
+                    )
+                },
+                move |entry| {
+                    v_stack((
+                        h_stack((
+                            text(format!(
+                                "{} | {} | {}",
+                                entry.timestamp,
+                                entry.action,
+                                if entry.success { "ok" } else { "FAIL" },
+                            ))
+                            .style(move |s| {
+                                let color = if entry.success {
+                                    config.get().color(LapceColor::EDITOR_FOREGROUND)
+                                } else {
+                                    config.get().color(LapceColor::LAPCE_ERROR)
+                                };
+                                s.font_size(11.0).color(color)
+                            }),
+                            text(format!("{}ms", entry.duration_ms)).style(
+                                move |s| {
+                                    s.margin_left(6.0)
+                                        .font_size(10.0)
+                                        .color(config.get().color(LapceColor::EDITOR_DIM))
+                                },
+                            ),
+                        ))
+                        .style(|s| s.items_center().width_full()),
+                        text(entry.command).style(move |s| {
+                            s.width_full()
+                                .margin_top(2.0)
+                                .font_size(11.0)
+                                .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
+                        }),
+                    ))
+                    .style(move |s| {
+                        s.width_full()
+                            .padding(6.0)
+                            .margin_top(2.0)
+                            .border_bottom(1.0)
+                            .border_color(config.get().color(LapceColor::LAPCE_BORDER))
+                    })
+                },
+            )
+            .style(|s| s.flex_col().width_full()),
+        )
+        .style(|s| s.width_full().flex_grow(1.0)),
+    ))
+    .style(|s| s.size_full().flex_col())
+}
+
 pub fn ownstack_audit_overlay(
     data: OwnStackAuditData,
     config: ReadSignal<Arc<LapceConfig>>,

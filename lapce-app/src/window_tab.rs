@@ -653,11 +653,13 @@ impl WindowTabData {
 
         {
             let status = window_tab_data.ownstack_status.clone();
+            let chat = window_tab_data.ownstack_chat.clone();
             let proxy_status = window_tab_data.common.proxy_status;
             cx.create_effect(move |_| {
                 let connected =
                     matches!(proxy_status.get(), Some(ProxyStatus::Connected));
                 status.set_bridge_connected(connected);
+                chat.bridge_connected.set(connected);
             });
         }
 
@@ -3083,7 +3085,8 @@ impl WindowTabData {
             | PanelKind::DocumentSymbol
             | PanelKind::References
             | PanelKind::Implementation
-            | PanelKind::OwnStackMcp => {
+            | PanelKind::OwnStackMcp
+            | PanelKind::OwnStackAudit => {
                 // Some panels don't accept focus (yet). Fall back to visibility check
                 // in those cases.
                 self.panel.is_panel_visible(&kind)

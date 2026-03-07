@@ -21,6 +21,7 @@ pub enum PanelKind {
     Implementation,
     OwnStackChat,
     OwnStackMcp,
+    OwnStackAudit,
 }
 
 impl PanelKind {
@@ -39,6 +40,7 @@ impl PanelKind {
             PanelKind::Implementation => LapceIcons::IMPLEMENTATION,
             PanelKind::OwnStackChat => LapceIcons::COMMENT,
             PanelKind::OwnStackMcp => LapceIcons::EXTENSIONS,
+            PanelKind::OwnStackAudit => LapceIcons::DEBUG_BREAKPOINT,
         }
     }
 
@@ -67,6 +69,7 @@ impl PanelKind {
             PanelKind::Implementation => PanelPosition::BottomLeft,
             PanelKind::OwnStackChat => PanelPosition::RightTop,
             PanelKind::OwnStackMcp => PanelPosition::LeftBottom,
+            PanelKind::OwnStackAudit => PanelPosition::BottomLeft,
         }
     }
 }
