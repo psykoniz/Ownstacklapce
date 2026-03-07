@@ -136,6 +136,11 @@ struct Cli {
     #[clap(long, default_value = "0", env = "OWNSTACK_E2E_PORT")]
     e2e_port: u16,
 
+    /// Window size as WIDTHxHEIGHT (e.g. 1280x800). Useful for deterministic
+    /// CI screenshots. Also settable via OWNSTACK_WINDOW_SIZE.
+    #[clap(long, env = "OWNSTACK_WINDOW_SIZE")]
+    window_size: Option<String>,
+
     /// Path(s) to plugins to load.
     /// This is primarily used for plugin development to make it easier to test changes to the
     /// plugin without needing to copy the plugin to the plugins directory.
@@ -182,6 +187,8 @@ pub struct AppData {
     pub plugin_paths: Arc<Vec<PathBuf>>,
     /// Onboarding wizard state
     pub onboarding: crate::ownstack_onboarding::OnboardingData,
+    /// Override window size from --window-size CLI flag (WIDTHxHEIGHT).
+    pub cli_window_size: Option<Size>,
 }
 
 impl AppData {
@@ -329,6 +336,11 @@ impl AppData {
         let files: Vec<PathObject> = files.into_iter().cloned().collect();
         let mut files = if files.is_empty() { None } else { Some(files) };
 
+        // --window-size override (for E2E / CI)
+        let default_size = self
+            .cli_window_size
+            .unwrap_or(Size::new(800.0, 600.0));
+
         if !dirs.is_empty() {
             // There were directories specified, so we'll load those as windows
 
@@ -336,7 +348,9 @@ impl AppData {
             let (size, mut pos) = db
                 .get_window()
                 .map(|i| (i.size, i.pos))
-                .unwrap_or_else(|_| (Size::new(800.0, 600.0), Point::new(0.0, 0.0)));
+                .unwrap_or_else(|_| (default_size, Point::new(0.0, 0.0)));
+            // Apply CLI override if provided
+            let size = self.cli_window_size.unwrap_or(size);
 
             for dir in dirs {
                 #[cfg(windows)]
@@ -423,7 +437,7 @@ impl AppData {
 
         if inital_windows == 0 {
             let mut info = db.get_window().unwrap_or_else(|_| WindowInfo {
-                size: Size::new(800.0, 600.0),
+                size: default_size,
                 pos: Point::ZERO,
                 maximised: false,
                 tabs: TabsInfo {
@@ -435,6 +449,9 @@ impl AppData {
                 active_tab: 0,
                 workspaces: vec![LapceWorkspace::default()],
             };
+            if let Some(sz) = self.cli_window_size {
+                info.size = sz;
+            }
             let config = self
                 .default_window_config()
                 .size(info.size)
@@ -3799,6 +3816,7 @@ pub fn launch() {
     // In E2E mode, treat as if --wait was passed (no fork).
     let is_e2e = cli.e2e;
     let e2e_port = cli.e2e_port;
+    let window_size = cli.window_size.clone();
 
     // small hack to unblock terminal if launched from it
     // launch it as a separate process that waits
@@ -3915,6 +3933,16 @@ pub fn launch() {
     window_scale.set(config.ui.scale());
 
     let config = scope.create_rw_signal(Arc::new(config));
+    let cli_window_size = window_size.as_deref().and_then(|s| {
+        let parts: Vec<&str> = s.split('x').collect();
+        if parts.len() == 2 {
+            let w = parts[0].trim().parse::<f64>().ok()?;
+            let h = parts[1].trim().parse::<f64>().ok()?;
+            Some(Size::new(w, h))
+        } else {
+            None
+        }
+    });
     let app_data = AppData {
         windows,
         active_window: scope.create_rw_signal(WindowId::from_raw(0)),
@@ -3927,6 +3955,7 @@ pub fn launch() {
         config,
         plugin_paths,
         onboarding: crate::ownstack_onboarding::OnboardingData::new(scope),
+        cli_window_size,
     };
 
     // First-launch onboarding (OwnStack specific) — skip in E2E mode.
@@ -3946,15 +3975,27 @@ pub fn launch() {
     let app = app_data.create_windows(db.clone(), cli.paths);
 
     // Register the first tab with the E2E driver if in E2E mode.
+    // We use create_effect so registration happens once the event loop is
+    // running and windows have actually been created (the windows signal is
+    // populated lazily inside app_view, *after* app.run() starts).
     if is_e2e {
-        for (_, window) in app_data.windows.get_untracked() {
-            if let Some((_, tab)) = window.window_tabs.with_untracked(|tabs| {
-                tabs.front().cloned()
-            }) {
-                crate::e2e_driver::register_tab_data(&tab);
-                break;
+        let e2e_windows = app_data.windows;
+        let e2e_registered = std::cell::Cell::new(false);
+        create_effect(move |_| {
+            let wins = e2e_windows.get();
+            if e2e_registered.get() || wins.is_empty() {
+                return;
             }
-        }
+            for (_, window) in wins.iter() {
+                if let Some((_, tab)) = window.window_tabs.with_untracked(|tabs| {
+                    tabs.front().cloned()
+                }) {
+                    crate::e2e_driver::register_tab_data(&tab);
+                    e2e_registered.set(true);
+                    break;
+                }
+            }
+        });
     }
 
     {

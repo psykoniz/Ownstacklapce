@@ -262,6 +262,7 @@ pub fn status(
                             )
                     }),
                     label(|| "AI Cmd".to_string())
+                        .debug_name("AI Cmd Button")
                         .on_click_stop({
                             let ownstack_palette = ownstack_palette.clone();
                             move |_| {
@@ -304,6 +305,7 @@ pub fn status(
                                 })
                         }),
                     label(|| "Audit".to_string())
+                        .debug_name("Audit Button")
                         .on_click_stop({
                             let ownstack_audit = ownstack_audit.clone();
                             move |_| {
@@ -345,6 +347,7 @@ pub fn status(
                                 })
                         }),
                     label(|| "Settings".to_string())
+                        .debug_name("Settings Button")
                         .on_click_stop({
                             let workbench_command = workbench_command.clone();
                             move |_| {

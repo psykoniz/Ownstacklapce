@@ -6,7 +6,7 @@
 //!
 //! The server is *synchronous* and runs on its own thread to avoid pulling in
 //! extra async dependencies. Commands are forwarded to the UI thread via
-//! `floem::ext_event::create_ext_action` and crossbeam channels.
+//! a crossbeam channel + `create_signal_from_channel` reactive bridge.
 
 use std::{
     collections::HashMap,
@@ -91,15 +91,6 @@ struct E2eTabHandle {
 unsafe impl Send for E2eTabHandle {}
 unsafe impl Sync for E2eTabHandle {}
 
-/// Global slot for the pending query. The background thread writes here,
-/// `create_ext_action` reads on the UI thread.
-static PENDING_QUERY: once_cell::sync::OnceCell<
-    Mutex<Option<(QueryFn, Sender<Value>)>>,
-> = once_cell::sync::OnceCell::new();
-
-/// Global slot for the scope (just the raw u64 id, which is Send).
-static E2E_SCOPE: once_cell::sync::OnceCell<u64> = once_cell::sync::OnceCell::new();
-
 // Global slot for the tab reference — only accessed from the UI thread.
 // We use a thread-local because Rc<WindowTabData> is !Send.
 thread_local! {
@@ -107,7 +98,14 @@ thread_local! {
 }
 
 /// Called from the UI thread once WindowTabData is ready.
+///
+/// Sets up a reactive bridge: queries arrive on a crossbeam channel, which
+/// is converted to a Floem reactive signal via `create_signal_from_channel`.
+/// An effect watches the signal and executes queries on the UI thread.
 pub fn register_tab_data(tab: &Rc<WindowTabData>) {
+    use floem::ext_event::create_signal_from_channel;
+    use floem::reactive::create_effect;
+
     let (query_tx, query_rx) = bounded::<(QueryFn, Sender<Value>)>(64);
 
     // Store the tab in thread-local (UI thread only)
@@ -115,47 +113,44 @@ pub fn register_tab_data(tab: &Rc<WindowTabData>) {
         *cell.borrow_mut() = Some(tab.clone());
     });
 
-    let scope = tab.scope;
-    // Store scope ID for use in background thread
-    // We use a raw pointer trick: Scope is Copy and is just an ID
-    E2E_SCOPE.get_or_init(|| {
-        // Scope is Copy. We store it as a u64 (it's an index into a slab).
-        // Safety: we only use this to create_ext_action from the bridge thread.
-        unsafe { std::mem::transmute::<floem::reactive::Scope, u64>(scope) }
+    // Channel for pinging the UI thread via reactive signal.
+    // Uses std::sync::mpsc as required by create_signal_from_channel.
+    let (ping_tx, ping_rx) = std::sync::mpsc::channel::<()>();
+
+    // Create a Floem reactive signal from the ping channel.
+    // This integrates with Floem's event loop natively — no ext_action needed.
+    let ping_signal = create_signal_from_channel(ping_rx);
+
+    // Global queue: the bridge thread pushes queries here, the effect pops them.
+    let pending: std::sync::Arc<Mutex<Vec<(QueryFn, Sender<Value>)>>> =
+        std::sync::Arc::new(Mutex::new(Vec::new()));
+    let pending_for_effect = pending.clone();
+
+    // Reactive effect: fires on the UI thread whenever ping_signal changes.
+    create_effect(move |_| {
+        if ping_signal.get().is_some() {
+            // Drain all pending queries
+            let queries: Vec<_> = pending_for_effect.lock().unwrap().drain(..).collect();
+            UI_TAB.with(|cell| {
+                if let Some(tab) = cell.borrow().as_ref() {
+                    for (f, reply_tx) in queries {
+                        let result = f(tab);
+                        let _ = reply_tx.send(result);
+                    }
+                }
+            });
+        }
     });
 
-    PENDING_QUERY.get_or_init(|| Mutex::new(None));
-
-    // Background thread: receives queries, stores them in PENDING_QUERY,
-    // creates a one-shot ext_action to process on the UI thread.
+    // Bridge thread: receives queries from the HTTP server thread,
+    // pushes them into the shared queue, and pings the reactive signal.
     thread::Builder::new()
         .name("e2e-query-bridge".into())
         .spawn(move || {
             while let Ok((f, reply_tx)) = query_rx.recv() {
-                // Store query in global slot
-                *PENDING_QUERY.get().unwrap().lock().unwrap() = Some((f, reply_tx));
-
-                // Create a one-shot ext_action to process on the UI thread
-                let scope = unsafe {
-                    std::mem::transmute::<u64, floem::reactive::Scope>(
-                        *E2E_SCOPE.get().unwrap(),
-                    )
-                };
-                let action = floem::ext_event::create_ext_action(scope, move |()| {
-                    let query = PENDING_QUERY.get().unwrap().lock().unwrap().take();
-                    if let Some((f, reply_tx)) = query {
-                        UI_TAB.with(|cell| {
-                            if let Some(tab) = cell.borrow().as_ref() {
-                                let result = f(tab);
-                                let _ = reply_tx.send(result);
-                            }
-                        });
-                    }
-                });
-                action(());
-
-                // Small yield to let the UI thread process
-                thread::sleep(Duration::from_millis(5));
+                pending.lock().unwrap().push((f, reply_tx));
+                // Ping the UI thread via the reactive channel
+                let _ = ping_tx.send(());
             }
         })
         .expect("E2E: failed to spawn query bridge");

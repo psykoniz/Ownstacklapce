@@ -448,6 +448,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
         .on_click_stop(move |_| {
             pd_overlay.hide();
         })
+        .debug_name("OwnStack AI Palette Overlay")
         .style(move |s| {
             s.display(if active.get() {
                 Display::Flex
@@ -455,6 +456,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                 Display::None
             })
             .position(Position::Absolute)
+            .z_index(1000)
             .inset(0.0)
             .size_full()
             .items_start()
