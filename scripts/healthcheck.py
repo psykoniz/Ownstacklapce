@@ -42,6 +42,12 @@ def run_script(script_name, timeout_seconds=120):
 
 def main():
     print("=== OWNSTACK IDE HEALTHCHECK ===")
+    run_complex_missions = os.getenv("OWNSTACK_RUN_COMPLEX_MISSIONS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     scripts = [
         "verify_agent_spawn.py",
@@ -54,12 +60,27 @@ def main():
         "test_packaging_install_run.py",
         "verify_llm_e2e.py",
     ]
+    if run_complex_missions:
+        scripts.extend(
+            [
+                "test_mini_project_mission.py",
+                "test_scraper_bot_mission.py",
+            ]
+        )
     script_timeouts = {
         # WASI plugin test can occasionally take longer on cold builds.
         "test_wasi_plugin.py": 240,
+        # Complex mission tests have long end-to-end tool+LLM cycles.
+        "test_mini_project_mission.py": 360,
+        "test_scraper_bot_mission.py": 360,
     }
 
-    llm_api_scripts = {"verify_llm_e2e.py", "test_agent_rpc.py"}
+    llm_api_scripts = {
+        "verify_llm_e2e.py",
+        "test_agent_rpc.py",
+        "test_mini_project_mission.py",
+        "test_scraper_bot_mission.py",
+    }
     has_keys = any(os.getenv(k) for k in ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"])
 
     all_passed = True

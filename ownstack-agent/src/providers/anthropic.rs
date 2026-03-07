@@ -8,7 +8,7 @@ use tracing::debug;
 
 use crate::provider::{
     FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig,
-    ProviderError, Role, TokenUsage, ToolCall, ToolDefinition,
+    ProviderError, ProviderOptions, Role, TokenUsage, ToolCall, ToolDefinition,
 };
 use crate::resilience::ResilientClient;
 use crate::secret_store;
@@ -140,7 +140,7 @@ impl LlmProvider for AnthropicProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
-        model_override: Option<String>,
+        options: ProviderOptions,
     ) -> Result<LlmResponse, ProviderError> {
         // Extract system message
         let system_msg = messages
@@ -212,7 +212,7 @@ impl LlmProvider for AnthropicProvider {
         });
 
         let request = AnthropicRequest {
-            model: model_override.unwrap_or_else(|| self.config.model.clone()),
+            model: options.model.unwrap_or_else(|| self.config.model.clone()),
             max_tokens: self.config.max_tokens,
             messages: api_messages,
             system: system_msg,
@@ -295,7 +295,7 @@ impl LlmProvider for AnthropicProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
-        model_override: Option<String>,
+        options: ProviderOptions,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
         use crate::provider::{FinishReason, StreamChunk, ToolCallDelta};
 
@@ -342,7 +342,7 @@ impl LlmProvider for AnthropicProvider {
         });
 
         let mut body = serde_json::to_value(&AnthropicRequest {
-            model: model_override.unwrap_or_else(|| self.config.model.clone()),
+            model: options.model.unwrap_or_else(|| self.config.model.clone()),
             max_tokens: self.config.max_tokens,
             messages: api_messages,
             system: system_msg,
@@ -350,7 +350,11 @@ impl LlmProvider for AnthropicProvider {
         })
         .map_err(|e| ProviderError::SerializationError(e.to_string()))?;
         body.as_object_mut()
-            .ok_or_else(|| ProviderError::SerializationError("request body is not a JSON object".to_string()))?
+            .ok_or_else(|| {
+                ProviderError::SerializationError(
+                    "request body is not a JSON object".to_string(),
+                )
+            })?
             .insert("stream".to_string(), serde_json::Value::Bool(true));
 
         debug!(

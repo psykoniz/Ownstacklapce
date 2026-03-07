@@ -1,5 +1,5 @@
 use floem::prelude::{SignalGet, SignalUpdate};
-use floem::reactive::{create_rw_signal, RwSignal};
+use floem::reactive::{RwSignal, create_rw_signal};
 use lapce_rpc::ownstack::OwnStackRpc;
 
 use crate::command::LapceWorkbenchCommand;
@@ -115,7 +115,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
     use floem::style::{CursorStyle, Display, Position};
     use floem::text::Weight;
     use floem::views::{
-        container, dyn_stack, h_stack, label, text, text_input, v_stack, Decorators,
+        Decorators, container, dyn_stack, h_stack, label, text, text_input, v_stack,
     };
 
     let active = palette_data.active;
@@ -126,10 +126,16 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
         // Row 1: header with icon + title + shortcut hints
         v_stack((
             h_stack((
-                text("\u{27D0}")
-                    .style(|s| s.font_size(18.0).color(Color::from_rgb8(74, 158, 255)).margin_right(8.0)),
-                text("AI Command Palette")
-                    .style(|s| s.font_size(15.0).font_weight(Weight::BOLD).color(Color::from_rgb8(200, 225, 255))),
+                text("\u{27D0}").style(|s| {
+                    s.font_size(18.0)
+                        .color(Color::from_rgb8(74, 158, 255))
+                        .margin_right(8.0)
+                }),
+                text("AI Command Palette").style(|s| {
+                    s.font_size(15.0)
+                        .font_weight(Weight::BOLD)
+                        .color(Color::from_rgb8(200, 225, 255))
+                }),
                 // Spacer
                 label(|| "").style(|s| s.flex_grow(1.0)),
                 label(|| "Esc").style(|s| {
@@ -200,7 +206,13 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         .color(Color::WHITE)
                         .font_size(14.0)
                         .cursor(CursorStyle::Pointer)
-                        .hover(|s| s.background(Color::from_rgb8(100, 180, 255)).box_shadow_blur(12.0).box_shadow_color(Color::from_rgba8(74, 158, 255, 120)))
+                        .hover(|s| {
+                            s.background(Color::from_rgb8(100, 180, 255))
+                                .box_shadow_blur(12.0)
+                                .box_shadow_color(Color::from_rgba8(
+                                    74, 158, 255, 120,
+                                ))
+                        })
                 })
                 .on_click_stop({
                     let pd = palette_data.clone();
@@ -208,7 +220,6 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                 }),
         ))
         .style(|s| s.width_full().items_center().gap(12.0)),
-
         // Row 3: suggested quick actions with basic filtering + "No results" state.
         v_stack((
             text("Suggested Actions").style(|s| {
@@ -238,7 +249,10 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         let on_click_data = palette_data.clone();
                         let action_for_click = action.clone();
                         h_stack((
-                            text("+").style(|s| s.margin_right(8.0).color(Color::from_rgb8(74, 158, 255))),
+                            text("+").style(|s| {
+                                s.margin_right(8.0)
+                                    .color(Color::from_rgb8(74, 158, 255))
+                            }),
                             text(action.title),
                         ))
                         .on_click_stop(move |_| {
@@ -255,8 +269,10 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                                 .font_size(11.5)
                                 .cursor(CursorStyle::Pointer)
                                 .hover(|s| {
-                                    s.background(Color::from_rgba8(74, 158, 255, 100))
-                                     .color(Color::WHITE)
+                                    s.background(Color::from_rgba8(
+                                        74, 158, 255, 100,
+                                    ))
+                                    .color(Color::WHITE)
                                 })
                         })
                     }
@@ -289,7 +305,6 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
             }),
         ))
         .style(|s| s.width_full().gap(6.0)),
-
         // Final Hint
         text("Tip: try '/plan' to switch agent to planning mode").style(|s| {
             s.font_size(10.0)

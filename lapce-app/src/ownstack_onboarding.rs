@@ -221,18 +221,21 @@ pub fn onboarding_view(
         v_stack((
             // ── Title row + step badge ───────────────────────────────────
             h_stack((
-                label(move || data_title.current_step_info().title.to_string()).style(
-                    move |s| {
+                label(move || data_title.current_step_info().title.to_string())
+                    .style(move |s| {
                         s.font_bold()
                             .font_size(18.0)
                             .line_height(1.3)
                             .margin_bottom(0.0)
                             .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
-                    },
-                ),
+                    }),
                 // Pill-shaped step badge: blue bg + white text, 12px
                 label(move || {
-                    format!("Step {} / {}", data_progress.current_step.get() + 1, total_steps)
+                    format!(
+                        "Step {} / {}",
+                        data_progress.current_step.get() + 1,
+                        total_steps
+                    )
                 })
                 .style(move |s| {
                     s.font_size(12.0)
@@ -245,7 +248,12 @@ pub fn onboarding_view(
                         .margin_left(8.0)
                 }),
             ))
-            .style(|s| s.width_full().justify_between().items_center().margin_bottom(8.0)),
+            .style(|s| {
+                s.width_full()
+                    .justify_between()
+                    .items_center()
+                    .margin_bottom(8.0)
+            }),
             // ── Step dots: 5 small circles above progress bar ────────────
             {
                 let data_dots = data.clone();
@@ -253,7 +261,9 @@ pub fn onboarding_view(
                     // Dot 1 — always filled (step 0 is always reached)
                     {
                         empty().style(move |s| {
-                            s.width(8.0).height(8.0).border_radius(4.0)
+                            s.width(8.0)
+                                .height(8.0)
+                                .border_radius(4.0)
                                 .background(Color::from_rgb8(74, 158, 255))
                         })
                     },
@@ -262,13 +272,14 @@ pub fn onboarding_view(
                         let d = data_dots.clone();
                         empty().style(move |s| {
                             let current = d.current_step.get();
-                            let dot_base = s.width(8.0).height(8.0).border_radius(4.0);
+                            let dot_base =
+                                s.width(8.0).height(8.0).border_radius(4.0);
                             if current >= 1 {
                                 dot_base.background(Color::from_rgb8(74, 158, 255))
                             } else {
-                                dot_base
-                                    .border(1.5)
-                                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+                                dot_base.border(1.5).border_color(Color::from_rgba8(
+                                    74, 158, 255, 100,
+                                ))
                             }
                         })
                     },
@@ -277,13 +288,14 @@ pub fn onboarding_view(
                         let d = data_dots.clone();
                         empty().style(move |s| {
                             let current = d.current_step.get();
-                            let dot_base = s.width(8.0).height(8.0).border_radius(4.0);
+                            let dot_base =
+                                s.width(8.0).height(8.0).border_radius(4.0);
                             if current >= 2 {
                                 dot_base.background(Color::from_rgb8(74, 158, 255))
                             } else {
-                                dot_base
-                                    .border(1.5)
-                                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+                                dot_base.border(1.5).border_color(Color::from_rgba8(
+                                    74, 158, 255, 100,
+                                ))
                             }
                         })
                     },
@@ -292,13 +304,14 @@ pub fn onboarding_view(
                         let d = data_dots.clone();
                         empty().style(move |s| {
                             let current = d.current_step.get();
-                            let dot_base = s.width(8.0).height(8.0).border_radius(4.0);
+                            let dot_base =
+                                s.width(8.0).height(8.0).border_radius(4.0);
                             if current >= 3 {
                                 dot_base.background(Color::from_rgb8(74, 158, 255))
                             } else {
-                                dot_base
-                                    .border(1.5)
-                                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+                                dot_base.border(1.5).border_color(Color::from_rgba8(
+                                    74, 158, 255, 100,
+                                ))
                             }
                         })
                     },
@@ -307,13 +320,14 @@ pub fn onboarding_view(
                         let d = data_dots.clone();
                         empty().style(move |s| {
                             let current = d.current_step.get();
-                            let dot_base = s.width(8.0).height(8.0).border_radius(4.0);
+                            let dot_base =
+                                s.width(8.0).height(8.0).border_radius(4.0);
                             if current >= 4 {
                                 dot_base.background(Color::from_rgb8(74, 158, 255))
                             } else {
-                                dot_base
-                                    .border(1.5)
-                                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+                                dot_base.border(1.5).border_color(Color::from_rgba8(
+                                    74, 158, 255, 100,
+                                ))
                             }
                         })
                     },
@@ -329,16 +343,14 @@ pub fn onboarding_view(
             // ── Progress bar ─────────────────────────────────────────────
             {
                 let data_bar = data.clone();
-                h_stack((
-                    label(|| "").style(move |s| {
-                        let step = data_bar.current_step.get();
-                        let pct = ((step + 1) as f64 / total_steps as f64) * 100.0;
-                        s.height(3.0)
-                            .width_pct(pct)
-                            .border_radius(2.0)
-                            .background(Color::from_rgb8(74, 158, 255))
-                    }),
-                ))
+                h_stack((label(|| "").style(move |s| {
+                    let step = data_bar.current_step.get();
+                    let pct = ((step + 1) as f64 / total_steps as f64) * 100.0;
+                    s.height(3.0)
+                        .width_pct(pct)
+                        .border_radius(2.0)
+                        .background(Color::from_rgb8(74, 158, 255))
+                }),))
                 .style(|s| {
                     s.width_full()
                         .height(3.0)
@@ -398,14 +410,22 @@ pub fn onboarding_view(
                                 .padding_vert(10.0)
                                 .cursor(CursorStyle::Pointer)
                                 .font_size(13.0)
-                                .color(config.color(LapceColor::EDITOR_DIM).with_alpha(0.7))
+                                .color(
+                                    config
+                                        .color(LapceColor::EDITOR_DIM)
+                                        .with_alpha(0.7),
+                                )
                                 .border(1.0)
                                 .border_color(Color::TRANSPARENT)
                                 .border_radius(4.0)
                                 .hover(|s| {
                                     s.color(Color::from_rgb8(180, 200, 230))
-                                        .border_color(Color::from_rgba8(120, 140, 170, 80))
-                                        .background(Color::from_rgba8(255, 255, 255, 8))
+                                        .border_color(Color::from_rgba8(
+                                            120, 140, 170, 80,
+                                        ))
+                                        .background(Color::from_rgba8(
+                                            255, 255, 255, 8,
+                                        ))
                                 })
                                 .apply_if(is_last, |s| s.hide())
                         })
@@ -449,9 +469,7 @@ pub fn onboarding_view(
                             .cursor(CursorStyle::Pointer)
                             .color(Color::WHITE)
                             .font_bold()
-                            .hover(move |s| {
-                                s.background(bg_hover)
-                            })
+                            .hover(move |s| s.background(bg_hover))
                     })
                 },
             ))
@@ -738,40 +756,34 @@ fn provider_secret_input(
                 .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
         }),
         h_stack((
-            text_input(value)
-                .placeholder(placeholder)
-                .style(move |s| {
-                    let config = config.get();
-                    let showing = show_key.get();
-                    s.width_full()
-                        .padding(10.0)
-                        .border(1.0)
-                        .border_radius(4.0)
-                        .border_color(config.color(LapceColor::LAPCE_BORDER))
-                        .background(config.color(LapceColor::EDITOR_BACKGROUND))
-                        // Mask text color when hidden: use transparent text + security measure
-                        .apply_if(!showing, |s| {
-                            s.color(Color::TRANSPARENT)
-                        })
-                }),
-            // Show/Hide toggle button
-            label(move || {
-                if show_key.get() { "Hide" } else { "Show" }.to_string()
-            })
-            .on_click_stop(move |_| {
-                show_key.update(|v| *v = !*v);
-            })
-            .style(move |s| {
-                s.padding_horiz(10.0)
-                    .padding_vert(10.0)
-                    .font_size(11.0)
-                    .color(Color::from_rgb8(120, 160, 220))
-                    .cursor(CursorStyle::Pointer)
+            text_input(value).placeholder(placeholder).style(move |s| {
+                let config = config.get();
+                let showing = show_key.get();
+                s.width_full()
+                    .padding(10.0)
                     .border(1.0)
                     .border_radius(4.0)
-                    .border_color(config.get().color(LapceColor::LAPCE_BORDER))
-                    .hover(|s| s.color(Color::from_rgb8(160, 200, 255)))
+                    .border_color(config.color(LapceColor::LAPCE_BORDER))
+                    .background(config.color(LapceColor::EDITOR_BACKGROUND))
+                    // Mask text color when hidden: use transparent text + security measure
+                    .apply_if(!showing, |s| s.color(Color::TRANSPARENT))
             }),
+            // Show/Hide toggle button
+            label(move || if show_key.get() { "Hide" } else { "Show" }.to_string())
+                .on_click_stop(move |_| {
+                    show_key.update(|v| *v = !*v);
+                })
+                .style(move |s| {
+                    s.padding_horiz(10.0)
+                        .padding_vert(10.0)
+                        .font_size(11.0)
+                        .color(Color::from_rgb8(120, 160, 220))
+                        .cursor(CursorStyle::Pointer)
+                        .border(1.0)
+                        .border_radius(4.0)
+                        .border_color(config.get().color(LapceColor::LAPCE_BORDER))
+                        .hover(|s| s.color(Color::from_rgb8(160, 200, 255)))
+                }),
         ))
         .style(|s| s.width_full().gap(6.0).items_center()),
         // Masked preview when hidden (shows dots for the actual key length)
@@ -879,9 +891,8 @@ fn mode_button(
 
     v_stack((
         label(move || name.to_string()).style(move |s| {
-            s.font_bold().apply_if(is_selected(), |s| {
-                s.color(Color::from_rgb8(74, 158, 255))
-            })
+            s.font_bold()
+                .apply_if(is_selected(), |s| s.color(Color::from_rgb8(74, 158, 255)))
         }),
         label(move || desc.to_string()).style(move |s| {
             let config = config.get();

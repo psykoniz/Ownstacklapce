@@ -1,11 +1,11 @@
 use floem::prelude::*;
 use floem::reactive::RwSignal;
 use floem::{
+    View,
     peniko::Color,
     style::{CursorStyle, Style},
     text::Weight,
-    views::{dyn_stack, h_stack, label, scroll, text_input, v_stack, Decorators},
-    View,
+    views::{Decorators, dyn_stack, h_stack, label, scroll, text_input, v_stack},
 };
 use std::rc::Rc;
 
@@ -116,7 +116,11 @@ fn claude_desktop_config_path() -> Option<std::path::PathBuf> {
                 let home = std::env::var("HOME").unwrap_or_default();
                 std::path::PathBuf::from(home).join(".config")
             });
-        Some(config_home.join("Claude").join("claude_desktop_config.json"))
+        Some(
+            config_home
+                .join("Claude")
+                .join("claude_desktop_config.json"),
+        )
     }
 }
 
@@ -135,7 +139,9 @@ fn command_in_path(cmd: &str) -> bool {
     false
 }
 
-fn load_mcp_servers(workspace: Option<&std::path::Path>) -> (Vec<McpServerInfo>, Vec<String>) {
+fn load_mcp_servers(
+    workspace: Option<&std::path::Path>,
+) -> (Vec<McpServerInfo>, Vec<String>) {
     let mut results: Vec<McpServerInfo> = Vec::new();
     let mut searched: Vec<String> = Vec::new();
 
@@ -167,7 +173,8 @@ fn load_mcp_servers(workspace: Option<&std::path::Path>) -> (Vec<McpServerInfo>,
         let cd_str = cd_path.display().to_string();
         searched.push(cd_str.clone());
         if let Ok(content) = std::fs::read_to_string(&cd_path) {
-            if let Ok(parsed) = serde_json::from_str::<ClaudeDesktopConfig>(&content) {
+            if let Ok(parsed) = serde_json::from_str::<ClaudeDesktopConfig>(&content)
+            {
                 let mut servers: Vec<_> = parsed.mcp_servers.into_iter().collect();
                 servers.sort_by(|a, b| a.0.cmp(&b.0));
                 for (name, server) in servers {
@@ -214,7 +221,10 @@ pub struct OwnStackMcpData {
 }
 
 impl OwnStackMcpData {
-    pub fn new(common: Rc<CommonData>, workspace: Option<std::path::PathBuf>) -> Self {
+    pub fn new(
+        common: Rc<CommonData>,
+        workspace: Option<std::path::PathBuf>,
+    ) -> Self {
         let cx = common.scope;
         let (loaded_servers, searched) = load_mcp_servers(workspace.as_deref());
 
@@ -298,7 +308,12 @@ impl OwnStackMcpData {
     }
 
     /// Attempt to persist to .ownstack/mcp_servers.json
-    fn try_persist_server(&self, name: &str, command: &str, args: &[String]) -> String {
+    fn try_persist_server(
+        &self,
+        name: &str,
+        command: &str,
+        args: &[String],
+    ) -> String {
         let config_path = if let Some(ws) = &self.workspace {
             ws.join(".ownstack").join("mcp_servers.json")
         } else {
@@ -312,7 +327,9 @@ impl OwnStackMcpData {
         let mut file: McpServersFile = std::fs::read_to_string(&config_path)
             .ok()
             .and_then(|c| serde_json::from_str(&c).ok())
-            .unwrap_or(McpServersFile { servers: Vec::new() });
+            .unwrap_or(McpServersFile {
+                servers: Vec::new(),
+            });
 
         file.servers.push(McpServerEntry {
             name: name.to_string(),
@@ -503,8 +520,7 @@ pub fn mcp_panel(
                         ))
                         .style(|s| s.items_center()),
                         label(move || status_label.clone()).style(|s| {
-                            s.color(Color::from_rgb8(100, 116, 139))
-                                .font_size(10.0)
+                            s.color(Color::from_rgb8(100, 116, 139)).font_size(10.0)
                         }),
                     ))
                     .style(|s| s.width_full().justify_between().items_center()),
@@ -527,7 +543,9 @@ pub fn mcp_panel(
                         .padding_vert(10.0)
                         .border_bottom(1.0)
                         .border_color(Color::from_rgba8(51, 65, 85, 50))
-                        .hover(|s| s.background(Color::from_rgba8(255, 255, 255, 10)))
+                        .hover(|s| {
+                            s.background(Color::from_rgba8(255, 255, 255, 10))
+                        })
                         .cursor(CursorStyle::Default)
                 })
             },
@@ -549,7 +567,8 @@ pub fn mcp_panel(
                 .color(Color::from_rgb8(180, 200, 230))
                 .margin_bottom(10.0)
         }),
-        label(|| "Name").style(|s| s.font_size(10.0).color(Color::from_rgb8(140, 160, 190))),
+        label(|| "Name")
+            .style(|s| s.font_size(10.0).color(Color::from_rgb8(140, 160, 190))),
         text_input(form_data.form_name)
             .placeholder("e.g. filesystem-server")
             .style(|s| {
@@ -564,7 +583,8 @@ pub fn mcp_panel(
                     .color(Color::WHITE)
                     .font_size(12.0)
             }),
-        label(|| "Command").style(|s| s.font_size(10.0).color(Color::from_rgb8(140, 160, 190))),
+        label(|| "Command")
+            .style(|s| s.font_size(10.0).color(Color::from_rgb8(140, 160, 190))),
         text_input(form_data.form_command)
             .placeholder("e.g. npx or /usr/local/bin/mcp-server")
             .style(|s| {
@@ -579,7 +599,8 @@ pub fn mcp_panel(
                     .color(Color::WHITE)
                     .font_size(12.0)
             }),
-        label(|| "Arguments (space-separated)").style(|s| s.font_size(10.0).color(Color::from_rgb8(140, 160, 190))),
+        label(|| "Arguments (space-separated)")
+            .style(|s| s.font_size(10.0).color(Color::from_rgb8(140, 160, 190))),
         text_input(form_data.form_args)
             .placeholder("e.g. -y @modelcontextprotocol/server-filesystem /tmp")
             .style(|s| {

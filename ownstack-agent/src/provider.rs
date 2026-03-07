@@ -329,6 +329,15 @@ impl Default for ProviderConfig {
     }
 }
 
+/// Request-specific options for LLM providers
+#[derive(Debug, Clone, Default)]
+pub struct ProviderOptions {
+    /// Override the default model from config
+    pub model: Option<String>,
+    /// OpenRouter-specific provider routing preferences
+    pub openrouter: Option<serde_json::Value>,
+}
+
 /// Trait for LLM providers
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
@@ -337,16 +346,16 @@ pub trait LlmProvider: Send + Sync {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
-        model_override: Option<String>,
+        options: ProviderOptions,
     ) -> Result<LlmResponse, ProviderError>;
 
     async fn stream(
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
-        model_override: Option<String>,
+        options: ProviderOptions,
     ) -> Result<StreamResult, ProviderError> {
-        let response = self.complete(messages, tools, model_override).await?;
+        let response = self.complete(messages, tools, options).await?;
         let chunk = StreamChunk::from_response(response);
         Ok(Box::pin(futures::stream::once(async move { Ok(chunk) })))
     }

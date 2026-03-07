@@ -186,9 +186,7 @@ impl WorkspaceSandbox {
     /// `workspace_root` is canonicalized on construction; if that fails the
     /// original path is used as-is.
     pub fn new(workspace_root: std::path::PathBuf) -> Self {
-        let root = workspace_root
-            .canonicalize()
-            .unwrap_or(workspace_root);
+        let root = workspace_root.canonicalize().unwrap_or(workspace_root);
         Self {
             inner: ProcessSandbox,
             workspace_root: root,
@@ -200,9 +198,8 @@ impl WorkspaceSandbox {
         // Resolve symlinks + normalise; fall back to lexical path if not on disk yet
         let canonical = path.canonicalize().unwrap_or_else(|_| {
             // For paths that don't exist yet, resolve lexically
-            self.workspace_root.join(
-                path.strip_prefix(&self.workspace_root).unwrap_or(path),
-            )
+            self.workspace_root
+                .join(path.strip_prefix(&self.workspace_root).unwrap_or(path))
         });
         canonical.starts_with(&self.workspace_root)
     }
@@ -567,11 +564,10 @@ mod workspace_sandbox_tests {
         let ws = temp_workspace();
         let sandbox = WorkspaceSandbox::new(ws.clone());
         let outside = PathBuf::from("/tmp");
-        let result = sandbox.exec("echo pwned", &outside, SandboxLevel::Light).await;
-        assert!(
-            !result.success,
-            "Expected failure for out-of-workspace CWD"
-        );
+        let result = sandbox
+            .exec("echo pwned", &outside, SandboxLevel::Light)
+            .await;
+        assert!(!result.success, "Expected failure for out-of-workspace CWD");
         assert!(
             result.stderr.contains("Security: CWD"),
             "Expected security rejection message, got: {}",
@@ -627,7 +623,10 @@ mod workspace_sandbox_tests {
     fn h1_path_is_safe_accepts_inner_paths() {
         let ws = temp_workspace();
         let sandbox = WorkspaceSandbox::new(ws.clone());
-        assert!(sandbox.path_is_safe(&ws), "workspace root itself must be safe");
+        assert!(
+            sandbox.path_is_safe(&ws),
+            "workspace root itself must be safe"
+        );
         assert!(
             sandbox.path_is_safe(&ws.join("src")),
             "child of workspace must be safe"

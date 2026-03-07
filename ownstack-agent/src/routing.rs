@@ -12,6 +12,9 @@ pub struct ModelRoutingConfig {
     pub roles: HashMap<String, String>,
     /// Model mapping based on task type (refactoring, docs, etc.)
     pub tasks: HashMap<String, String>,
+    /// OpenRouter provider routing preferences (order, sort, allow_fallbacks, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openrouter_provider: Option<serde_json::Value>,
 }
 
 pub struct ModelRouter {
@@ -51,6 +54,9 @@ impl ModelRouter {
                 return;
             }
         };
+
+        // Accept UTF-8 BOM produced by some Windows editors/tools.
+        let content = content.trim_start_matches('\u{feff}');
 
         if content.trim().is_empty() {
             debug!(
@@ -98,6 +104,11 @@ impl ModelRouter {
         }
 
         None
+    }
+
+    /// Get OpenRouter specific provider routing preferences if any
+    pub fn openrouter_provider_prefs(&self) -> Option<serde_json::Value> {
+        self.config.openrouter_provider.clone()
     }
 }
 
@@ -176,5 +187,30 @@ mod tests {
 
         let router = ModelRouter::new(temp.path());
         assert_eq!(router.route("worker", Some("documentation")), None);
+    }
+
+    #[test]
+    fn reload_supports_utf8_bom() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ownstack_dir = temp.path().join(".ownstack");
+        std::fs::create_dir_all(&ownstack_dir).expect("create .ownstack");
+
+        let with_bom = format!(
+            "{}{}",
+            '\u{feff}',
+            r#"{
+                "default": "model-with-bom",
+                "roles": {"worker": "worker-with-bom"},
+                "tasks": {}
+            }"#
+        );
+        std::fs::write(ownstack_dir.join("routing.json"), with_bom)
+            .expect("write bom config");
+
+        let router = ModelRouter::new(temp.path());
+        assert_eq!(
+            router.route("worker", Some("unknown")),
+            Some("worker-with-bom".to_string())
+        );
     }
 }

@@ -66,13 +66,13 @@ jobs:
 
       - name: Build core binaries
         run: |
-          cargo build --frozen -p lapce-app --bin ownstack-ide
-          cargo build --frozen -p ownstack-agent --bin ownstack-agent
-          cargo build --frozen -p lapce-proxy --bin lapce-proxy
+          cargo build --locked -p lapce-app --bin ownstack-ide
+          cargo build --locked -p ownstack-agent --bin ownstack-agent
+          cargo build --locked -p lapce-proxy --bin lapce-proxy
 
       - name: Build as portable
         if: startsWith(matrix.os, 'windows')
-        run: cargo build --frozen -p lapce-app --bin ownstack-ide --features lapce-app/portable
+        run: cargo build --locked -p lapce-app --bin ownstack-ide --features lapce-app/portable
 
       - name: Run doc tests
         run: cargo test --doc --workspace
@@ -83,6 +83,7 @@ jobs:
           name: OwnStack-${{ matrix.os }}
           path: |
             target/debug/ownstack-ide*
+            target/debug/lapce*
             target/debug/ownstack-agent*
             target/debug/lapce-proxy*
           if-no-files-found: error
@@ -150,7 +151,7 @@ jobs:
       - name: Fetch dependencies
         run: cargo fetch --locked
       - name: Cargo Check
-        run: cargo check --workspace --all-targets --frozen
+        run: cargo check --workspace --all-targets --locked
 
   test-ownstack:
     name: Core Crates Tests
@@ -166,13 +167,13 @@ jobs:
       - name: Fetch dependencies
         run: cargo fetch --locked
       - name: Test ownstack-engine
-        run: cargo test -p ownstack-engine --frozen
+        run: cargo test -p ownstack-engine --locked
       - name: Test ownstack-bridge
-        run: cargo test -p ownstack-bridge --frozen
+        run: cargo test -p ownstack-bridge --locked
       - name: Test lapce-rpc
-        run: cargo test -p lapce-rpc --frozen
+        run: cargo test -p lapce-rpc --locked
       - name: Test ownstack-agent
-        run: cargo test -p ownstack-agent --lib --tests --frozen
+        run: cargo test -p ownstack-agent --lib --tests --locked
 
   healthcheck:
     name: System Healthcheck
@@ -190,6 +191,6 @@ jobs:
       - name: Fetch dependencies
         run: cargo fetch --locked
       - name: Build Agent for Healthcheck
-        run: cargo build -p ownstack-agent -p lapce-proxy --frozen
+        run: cargo build -p ownstack-agent -p lapce-proxy --locked
       - name: Run healthcheck.py
         run: python scripts/healthcheck.py

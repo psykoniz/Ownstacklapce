@@ -5372,6 +5372,7 @@ dependencies = [
  "tracing 0.1.44",
  "tracing-subscriber 0.3.22",
  "url",
+ "uuid",
  "wasi-common",
  "wasmtime",
  "wasmtime-wasi",

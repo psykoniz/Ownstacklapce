@@ -8,8 +8,15 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
+use crate::artifact_manager::ArtifactManager;
+use crate::repomap::RepoMap;
+use crate::telemetry::{BlackBoxLogger, TokioLagMonitor, TraceContext};
+
 use crate::context::ContextManager;
-use crate::provider::{FinishReason, LlmMessage, LlmProvider, ToolDefinition};
+use crate::provider::{
+    FinishReason, LlmMessage, LlmProvider, ProviderOptions, ToolDefinition,
+};
+use crate::routing::ModelRouter;
 use crate::toolkits::{ToolResult, Toolkit, ToolkitError};
 
 // ─── Tool-args Safety Constants ────────────────────────────────────
@@ -48,7 +55,12 @@ pub enum OrchestratorError {
 impl std::fmt::Display for OrchestratorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RepeatedInvalidToolArgs { model, tool_name, count, input_excerpt } => write!(
+            Self::RepeatedInvalidToolArgs {
+                model,
+                tool_name,
+                count,
+                input_excerpt,
+            } => write!(
                 f,
                 "Orchestrator aborted: tool '{}' received invalid/truncated JSON args \
                  {} time(s) in a row (model: {}). \
@@ -56,7 +68,11 @@ impl std::fmt::Display for OrchestratorError {
                  Recommendation: switch model or reduce tool payload.",
                 tool_name, count, model, input_excerpt
             ),
-            Self::ToolArgsTooLarge { tool_name, actual_bytes, limit_bytes } => write!(
+            Self::ToolArgsTooLarge {
+                tool_name,
+                actual_bytes,
+                limit_bytes,
+            } => write!(
                 f,
                 "Tool '{}' args too large ({} bytes > {} byte limit), \
                  likely truncated by model/provider.",
@@ -148,7 +164,7 @@ fn validate_and_parse_tool_args(
         OrchestratorError::RepeatedInvalidToolArgs {
             model: String::new(), // filled in by caller
             tool_name: tool_name.to_string(),
-            count: 0,             // filled in by caller
+            count: 0, // filled in by caller
             input_excerpt: format!("{}: {:?}", error_kind, args_prefix),
         }
     })
@@ -175,9 +191,42 @@ impl Default for AgentBudget {
             max_llm_calls: 100,
             max_files_modified: 20,
             max_duration_minutes: 30,
-            max_consecutive_failures: 3,
+            max_consecutive_failures: 10,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRunMode {
+    Ask,
+    Auto,
+    Plan,
+}
+
+impl AgentRunMode {
+    pub fn from_str(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "plan" => Self::Plan,
+            _ => Self::Ask,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeBudgetSnapshot {
+    pub tokens: u64,
+    pub max_tokens: u64,
+    pub steps: u32,
+    pub max_steps: u32,
+    pub calls: u32,
+    pub max_calls: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeContextSnapshot {
+    pub current: u64,
+    pub max: u64,
 }
 
 #[derive(Debug, Default)]
@@ -268,8 +317,15 @@ pub struct AgentOrchestrator {
     workspace: PathBuf,
     memory: crate::project_memory::ProjectMemory,
     index: crate::index::SemanticIndex,
+    model_router: ModelRouter,
+    mode: AgentRunMode,
     current_mission: Option<Mission>,
     started_at: Option<Instant>,
+    telemetry: Arc<BlackBoxLogger>,
+    _lag_monitor: Arc<TokioLagMonitor>,
+    artifact_manager: ArtifactManager,
+    repomap: RepoMap,
+    _session_id: String,
     /// Tracks consecutive identical tool-parse errors for anti-loop detection.
     parse_error_tracker: ParseErrorTracker,
     /// Optional RPC sink for emitting live budget/context metrics to the IDE.
@@ -281,9 +337,19 @@ impl AgentOrchestrator {
         provider: Arc<dyn LlmProvider>,
         workspace: PathBuf,
         max_context_tokens: usize,
+        session_id: &str,
     ) -> Self {
         let memory = crate::project_memory::ProjectMemory::new(workspace.clone());
         let index = crate::index::SemanticIndex::new(workspace.clone());
+        let model_router = ModelRouter::new(&workspace);
+
+        let telemetry = Arc::new(BlackBoxLogger::new(session_id, &workspace));
+        let lag_monitor = Arc::new(TokioLagMonitor::new(100.0));
+        let _ = lag_monitor.start();
+
+        let artifact_manager = ArtifactManager::new(workspace.clone());
+        let repomap = RepoMap::new(workspace.clone());
+
         Self {
             provider,
             toolkits: Vec::new(),
@@ -293,8 +359,15 @@ impl AgentOrchestrator {
             workspace,
             memory,
             index,
+            model_router,
+            mode: AgentRunMode::Ask,
             current_mission: None,
             started_at: None,
+            telemetry,
+            _lag_monitor: lag_monitor,
+            artifact_manager,
+            repomap,
+            _session_id: session_id.to_string(),
             parse_error_tracker: ParseErrorTracker::default(),
             rpc_sink: None,
         }
@@ -360,6 +433,32 @@ impl AgentOrchestrator {
         self.toolkits.push(toolkit);
     }
 
+    pub fn set_mode(&mut self, mode: AgentRunMode) {
+        self.mode = mode;
+    }
+
+    pub fn mode(&self) -> AgentRunMode {
+        self.mode
+    }
+
+    pub fn budget_snapshot(&self) -> RuntimeBudgetSnapshot {
+        RuntimeBudgetSnapshot {
+            tokens: self.context.estimated_tokens() as u64,
+            max_tokens: self.context.max_tokens() as u64,
+            steps: self.counters.steps,
+            max_steps: self.budget.max_steps,
+            calls: self.counters.llm_calls,
+            max_calls: self.budget.max_llm_calls,
+        }
+    }
+
+    pub fn context_snapshot(&self) -> RuntimeContextSnapshot {
+        RuntimeContextSnapshot {
+            current: self.context.estimated_tokens() as u64,
+            max: self.context.max_tokens() as u64,
+        }
+    }
+
     pub fn current_mission(&self) -> Option<&Mission> {
         self.current_mission.as_ref()
     }
@@ -384,12 +483,10 @@ impl AgentOrchestrator {
         for toolkit in toolkits {
             match toolkit.execute(name, args.clone()).await {
                 Ok(result) => return result,
-                Err(e) => {
-                    match e {
-                        ToolkitError::ToolNotFound(_) => continue,
-                        _ => return ToolResult::failure(format!("{}", e), None),
-                    }
-                }
+                Err(e) => match e {
+                    ToolkitError::ToolNotFound(_) => continue,
+                    _ => return ToolResult::failure(format!("{}", e), None),
+                },
             }
         }
         ToolResult::failure(format!("Tool not found: {}", name), None)
@@ -404,19 +501,116 @@ impl AgentOrchestrator {
         Self::execute_tool_shared(&self.toolkits, name, args).await
     }
 
-    fn route_model(&self, task_type: &str) -> Option<String> {
+    fn provider_default_model(
+        &self,
+        role: &str,
+        task_type: Option<&str>,
+    ) -> Option<String> {
         let provider_name = self.provider.name();
-        match (provider_name, task_type) {
-            ("anthropic", "planning") => Some("claude-sonnet-4-6".to_string()),
-            ("anthropic", "critique") => Some("claude-sonnet-4-6".to_string()),
-            ("anthropic", "worker") => Some("claude-sonnet-4-6".to_string()),
-            ("anthropic", "fast") => Some("claude-haiku-4-5-20251001".to_string()),
-            ("openrouter", "planning") => Some("anthropic/claude-sonnet-4-6".to_string()),
-            ("openrouter", "critique") => Some("anthropic/claude-sonnet-4-6".to_string()),
-            ("openrouter", "worker") => Some("anthropic/claude-sonnet-4-6".to_string()),
-            ("openrouter", "fast") => Some("anthropic/claude-haiku-4-5-20251001".to_string()),
+        match (provider_name, role, task_type) {
+            ("anthropic", _, Some("fast")) => {
+                Some("claude-3-5-haiku-latest".to_string())
+            }
+            ("anthropic", "planner", _)
+            | ("anthropic", "critic", _)
+            | ("anthropic", "worker", _) => {
+                Some("claude-3-5-sonnet-latest".to_string())
+            }
+            ("openrouter", _, Some("fast")) => {
+                Some("deepseek/deepseek-chat-v3-0324".to_string())
+            }
+            ("openrouter", "planner", _)
+            | ("openrouter", "critic", _)
+            | ("openrouter", "worker", _) => {
+                Some("deepseek/deepseek-chat-v3-0324".to_string())
+            }
             _ => None, // use default from config
         }
+    }
+
+    fn route_model(
+        &mut self,
+        role: &str,
+        task_type: Option<&str>,
+    ) -> Option<String> {
+        self.model_router.reload();
+        self.model_router
+            .route(role, task_type)
+            .or_else(|| self.provider_default_model(role, task_type))
+    }
+
+    #[cfg(test)]
+    fn parse_streamed_tool_calls(
+        tool_calls_deltas: &std::collections::HashMap<
+            usize,
+            (Option<String>, Option<String>, String),
+        >,
+    ) -> (
+        Vec<crate::provider::ToolCall>,
+        Vec<(crate::provider::ToolCall, ToolResult)>,
+    ) {
+        let mut parsed = Vec::new();
+        let mut parse_failures = Vec::new();
+        let mut sorted_indices: Vec<usize> =
+            tool_calls_deltas.keys().copied().collect();
+        sorted_indices.sort_unstable();
+
+        for idx in sorted_indices {
+            let Some((id, name, args_str)) = tool_calls_deltas.get(&idx) else {
+                continue;
+            };
+
+            let call_id = id.clone().unwrap_or_else(|| format!("call_{}", idx));
+            let call_name = name.clone().unwrap_or_default();
+
+            match serde_json::from_str::<serde_json::Value>(args_str) {
+                Ok(arguments) => {
+                    parsed.push(crate::provider::ToolCall {
+                        id: call_id,
+                        name: call_name,
+                        arguments,
+                    });
+                }
+                Err(err) => {
+                    warn!(
+                        tool_call_id = %call_id,
+                        tool_name = %call_name,
+                        parse_error = %err,
+                        "Invalid streamed tool-call JSON arguments"
+                    );
+
+                    let mut result = ToolResult::failure(
+                        format!(
+                            "Tool args JSON parse error for '{}': {}. \
+                             Re-send a valid JSON object for this tool call. Raw args attempted: {}",
+                            call_name, err, args_str
+                        ),
+                        Some(2),
+                    );
+                    result.metadata.insert(
+                        "error_kind".to_string(),
+                        "tool_args_json_parse".to_string(),
+                    );
+                    result
+                        .metadata
+                        .insert("tool_name".to_string(), call_name.clone());
+                    result
+                        .metadata
+                        .insert("raw_arguments".to_string(), args_str.clone());
+
+                    parse_failures.push((
+                        crate::provider::ToolCall {
+                            id: call_id,
+                            name: call_name,
+                            arguments: serde_json::Value::Null,
+                        },
+                        result,
+                    ));
+                }
+            }
+        }
+
+        (parsed, parse_failures)
     }
 
     fn check_budget(&self) -> Option<String> {
@@ -469,10 +663,14 @@ impl AgentOrchestrator {
             LlmMessage::user(user_goal),
         ];
 
-        let model = self.route_model("planning");
+        let model = self.route_model("planner", Some("planning"));
+        let options = ProviderOptions {
+            model,
+            openrouter: self.model_router.openrouter_provider_prefs(),
+        };
         let response = self
             .provider
-            .complete(messages, None, model)
+            .complete(messages, None, options)
             .await
             .map_err(|e| format!("Planner error: {}", e))?;
 
@@ -517,10 +715,14 @@ impl AgentOrchestrator {
         let messages =
             vec![LlmMessage::system(CRITIC_PROMPT), LlmMessage::user(prompt)];
 
-        let model = self.route_model("critique");
+        let model = self.route_model("critic", Some("critique"));
+        let options = ProviderOptions {
+            model,
+            openrouter: self.model_router.openrouter_provider_prefs(),
+        };
         let response = self
             .provider
-            .complete(messages, None, model)
+            .complete(messages, None, options)
             .await
             .map_err(|e| format!("Critic error: {}", e))?;
 
@@ -539,15 +741,17 @@ impl AgentOrchestrator {
     // ─── Worker Phase (main agent loop) ────────────────────────────
 
     /// Process a single prompt through the agent loop with streaming
-    pub async fn stream_process<F, M>(
+    pub async fn stream_process<F, M, T>(
         &mut self,
         user_prompt: &str,
         mut on_chunk: F,
         mut on_mission: M,
+        mut on_runtime: T,
     ) -> Result<String, String>
     where
         F: FnMut(crate::provider::StreamChunk) + Send,
         M: FnMut(Mission) + Send,
+        T: FnMut(RuntimeBudgetSnapshot, RuntimeContextSnapshot) + Send,
     {
         use futures::StreamExt;
 
@@ -560,7 +764,13 @@ impl AgentOrchestrator {
 
         // Augment system prompt with project memory and semantic index
         let project_rules = self.memory.to_system_prompt();
-        
+
+        // Phase 11: RepoMap Injection
+        let repomap_context = {
+            self.repomap.scan();
+            self.repomap.to_prompt_text(200)
+        };
+
         // Phase 11: Semantic Retrieval
         let mut rag_context = String::new();
         if let Ok(snippets) = self.index.search(user_prompt, 5).await {
@@ -575,22 +785,32 @@ impl AgentOrchestrator {
             }
         }
 
-        if !project_rules.is_empty() || !rag_context.is_empty() {
+        if !project_rules.is_empty()
+            || !rag_context.is_empty()
+            || !repomap_context.is_empty()
+        {
             let base_prompt = self
                 .context
                 .get_messages()
                 .get(0)
                 .map(|m| m.content.clone())
                 .unwrap_or_default();
-            let augmented = format!("{}\n\n{}\n\n{}", base_prompt, project_rules, rag_context);
+            let augmented = format!(
+                "{}\n\n{}\n\n{}\n\n{}",
+                base_prompt, project_rules, repomap_context, rag_context
+            );
             self.context.set_system_prompt(augmented);
         }
 
         self.context.add_message(LlmMessage::user(user_prompt));
+        on_runtime(self.budget_snapshot(), self.context_snapshot());
 
-        // Create mission if in Plan mode or if specified
-        if let Ok(mission) = self.plan(user_prompt).await {
-            on_mission(mission);
+        // Plan mode explicitly runs the Planner before worker execution.
+        if self.mode == AgentRunMode::Plan {
+            if let Ok(mission) = self.plan(user_prompt).await {
+                on_mission(mission);
+                on_runtime(self.budget_snapshot(), self.context_snapshot());
+            }
         }
 
         loop {
@@ -598,6 +818,10 @@ impl AgentOrchestrator {
 
             if let Some(reason) = self.check_budget() {
                 warn!("Budget exceeded: {}", reason);
+                self.telemetry.log_simple(
+                    "budget_exceeded",
+                    serde_json::json!({"reason": reason}),
+                );
                 return Err(format!("⚠️ Agent stopped: {}", reason));
             }
 
@@ -610,6 +834,17 @@ impl AgentOrchestrator {
                 self.counters.steps, self.counters.llm_calls
             );
 
+            let trace = TraceContext::new_root("llm_call");
+            self.telemetry.log(
+                "llm_call_start",
+                serde_json::json!({
+                    "step": self.counters.steps,
+                    "call_num": self.counters.llm_calls,
+                    "mode": format!("{:?}", self.mode)
+                }),
+                Some(&trace),
+            );
+
             let mut full_content = String::new();
             let mut tool_calls_deltas: std::collections::HashMap<
                 usize,
@@ -618,10 +853,14 @@ impl AgentOrchestrator {
             let mut final_finish_reason = None;
             let mut _final_usage = None;
 
-            let model = self.route_model("worker");
+            let model = self.route_model("worker", Some("worker"));
+            let options = ProviderOptions {
+                model,
+                openrouter: self.model_router.openrouter_provider_prefs(),
+            };
             let mut stream = self
                 .provider
-                .stream(messages.clone(), tools, model)
+                .stream(messages.clone(), tools, options)
                 .await
                 .map_err(|e| format!("LLM Stream error: {}", e))?;
 
@@ -659,15 +898,44 @@ impl AgentOrchestrator {
                 if chunk.usage.is_some() {
                     _final_usage = chunk.usage;
                 }
+                on_runtime(self.budget_snapshot(), self.context_snapshot());
             }
 
             let finish_reason = final_finish_reason.unwrap_or(FinishReason::Stop);
+
+            self.telemetry.log(
+                "llm_call_end",
+                serde_json::json!({
+                    "finish_reason": format!("{:?}", finish_reason),
+                    "length": full_content.len()
+                }),
+                Some(&trace),
+            );
+
+            // Extract Artifacts
+            let artifacts = ArtifactManager::extract_artifacts(&full_content);
+            for artifact in &artifacts {
+                let saved =
+                    self.artifact_manager.save_artifacts(&[artifact.clone()]);
+                for filename in saved {
+                    info!("Saved artifact '{}' to {}", artifact.name, filename);
+                    self.telemetry.log_simple(
+                        "artifact_saved",
+                        serde_json::json!({
+                            "name": artifact.name,
+                            "type": artifact.artifact_type,
+                            "path": filename
+                        }),
+                    );
+                }
+            }
 
             match finish_reason {
                 FinishReason::Stop => {
                     self.context
                         .add_message(LlmMessage::assistant(&full_content));
                     self.counters.consecutive_failures = 0;
+                    on_runtime(self.budget_snapshot(), self.context_snapshot());
                     info!(
                         "Worker completed: {} steps, {} tool calls",
                         self.counters.steps, self.counters.tool_calls
@@ -676,29 +944,52 @@ impl AgentOrchestrator {
                 }
                 FinishReason::ToolCalls => {
                     let mut tool_calls = Vec::new();
+                    let mut parse_failures =
+                        Vec::<(crate::provider::ToolCall, ToolResult)>::new();
                     let mut sorted_indices: Vec<_> =
                         tool_calls_deltas.keys().collect();
                     sorted_indices.sort();
 
                     for idx in sorted_indices {
-                        let (id, name, args_str) =
-                            tool_calls_deltas.get(idx).unwrap();
+                        let Some((id, name, args_str)) = tool_calls_deltas.get(idx)
+                        else {
+                            warn!(
+                                "Missing streamed tool-call delta for index {}",
+                                idx
+                            );
+                            continue;
+                        };
                         let tool_name = name.clone().unwrap_or_default();
 
-                        let arguments = match validate_and_parse_tool_args(&tool_name, args_str) {
+                        match validate_and_parse_tool_args(&tool_name, args_str) {
                             Ok(v) => {
                                 self.parse_error_tracker.reset();
-                                v
+                                tool_calls.push(crate::provider::ToolCall {
+                                    id: id
+                                        .clone()
+                                        .unwrap_or_else(|| format!("call_{}", idx)),
+                                    name: tool_name,
+                                    arguments: v,
+                                });
                             }
                             Err(parse_err) => {
                                 // Classify and build the signature for dedup
                                 let (error_kind, args_prefix) = match &parse_err {
-                                    OrchestratorError::ToolArgsTooLarge { .. } => (
+                                    OrchestratorError::ToolArgsTooLarge {
+                                        ..
+                                    } => (
                                         "too_large".to_string(),
                                         args_str.chars().take(64).collect(),
                                     ),
-                                    OrchestratorError::RepeatedInvalidToolArgs { input_excerpt, .. } => (
-                                        input_excerpt.split(':').next().unwrap_or("parse_error").to_string(),
+                                    OrchestratorError::RepeatedInvalidToolArgs {
+                                        input_excerpt,
+                                        ..
+                                    } => (
+                                        input_excerpt
+                                            .split(':')
+                                            .next()
+                                            .unwrap_or("parse_error")
+                                            .to_string(),
                                         args_str.chars().take(64).collect(),
                                     ),
                                     _ => ("unknown".to_string(), String::new()),
@@ -713,51 +1004,103 @@ impl AgentOrchestrator {
                                 self.counters.consecutive_failures += 1;
 
                                 if count >= REPEATED_PARSE_ERROR_LIMIT {
-                                    let excerpt: String = args_str.chars().take(200).collect();
-                                    let err = OrchestratorError::RepeatedInvalidToolArgs {
-                                        model: self.provider.name().to_string(),
-                                        tool_name: tool_name.clone(),
-                                        count,
-                                        input_excerpt: excerpt,
-                                    };
+                                    let excerpt: String =
+                                        args_str.chars().take(200).collect();
+                                    let err =
+                                        OrchestratorError::RepeatedInvalidToolArgs {
+                                            model: self.provider.name().to_string(),
+                                            tool_name: tool_name.clone(),
+                                            count,
+                                            input_excerpt: excerpt,
+                                        };
                                     warn!("{}", err);
                                     return Err(err.to_string());
                                 }
 
                                 warn!(
                                     "Tool '{}' parse error (attempt {}/{}): {}",
-                                    tool_name, count, REPEATED_PARSE_ERROR_LIMIT, parse_err
+                                    tool_name,
+                                    count,
+                                    REPEATED_PARSE_ERROR_LIMIT,
+                                    parse_err
                                 );
-                                // Use Null as fallback — tool will return an error
-                                serde_json::Value::Null
-                            }
-                        };
 
-                        tool_calls.push(crate::provider::ToolCall {
-                            id: id
-                                .clone()
-                                .unwrap_or_else(|| format!("call_{}", idx)),
-                            name: tool_name,
-                            arguments,
-                        });
+                                let mut result = ToolResult::failure(
+                                    format!(
+                                        "Tool args JSON parse error for '{}': {}. \
+                                         Re-send a valid JSON object for this tool call.",
+                                        tool_name, parse_err
+                                    ),
+                                    Some(2),
+                                );
+                                result.metadata.insert(
+                                    "error_kind".to_string(),
+                                    "tool_args_json_parse".to_string(),
+                                );
+                                result.metadata.insert(
+                                    "tool_name".to_string(),
+                                    tool_name.clone(),
+                                );
+                                result.metadata.insert(
+                                    "raw_arguments".to_string(),
+                                    args_str.clone(),
+                                );
+
+                                parse_failures.push((
+                                    crate::provider::ToolCall {
+                                        id: id.clone().unwrap_or_else(|| {
+                                            format!("call_{}", idx)
+                                        }),
+                                        name: tool_name,
+                                        arguments: serde_json::Value::Null,
+                                    },
+                                    result,
+                                ));
+                            }
+                        }
                     }
 
                     let mut assistant_msg = LlmMessage::assistant(&full_content);
-                    assistant_msg.tool_calls = Some(tool_calls.clone());
+                    let mut all_tool_calls = tool_calls.clone();
+                    all_tool_calls.extend(
+                        parse_failures
+                            .iter()
+                            .map(|(tool_call, _)| tool_call.clone()),
+                    );
+                    assistant_msg.tool_calls = Some(all_tool_calls);
                     self.context.add_message(assistant_msg);
 
                     let toolkits = self.toolkits.clone();
                     let futures = tool_calls.into_iter().map(|tool_call| {
                         let tks = toolkits.clone();
                         async move {
-                            debug!("Executing (parallel): {} ({})", tool_call.name, tool_call.arguments);
-                            let result = Self::execute_tool_shared(&tks, &tool_call.name, tool_call.arguments.clone()).await;
+                            debug!(
+                                "Executing (parallel): {} ({})",
+                                tool_call.name, tool_call.arguments
+                            );
+                            let result = Self::execute_tool_shared(
+                                &tks,
+                                &tool_call.name,
+                                tool_call.arguments.clone(),
+                            )
+                            .await;
                             (tool_call, result)
                         }
                     });
 
                     let results = futures::future::join_all(futures).await;
 
+                    for (tool_call, result) in parse_failures {
+                        self.counters.tool_calls += 1;
+                        self.counters.consecutive_failures += 1;
+                        let result_json =
+                            serde_json::to_string(&result).unwrap_or_default();
+                        self.context.add_message(LlmMessage::tool_result(
+                            &tool_call.id,
+                            result_json,
+                        ));
+                        on_runtime(self.budget_snapshot(), self.context_snapshot());
+                    }
                     for (tool_call, result) in results {
                         self.counters.tool_calls += 1;
                         if !result.success {
@@ -769,31 +1112,42 @@ impl AgentOrchestrator {
                         // G3: emit patch suggestion if tool produced a diff
                         self.emit_patch_suggestion(&tool_call.name, &result);
 
-                        let result_msg = if let Some(image_data) = result.metadata.get("image_data") {
-                            let media_type = result.metadata.get("media_type")
+                        let result_msg = if let Some(image_data) =
+                            result.metadata.get("image_data")
+                        {
+                            let media_type = result
+                                .metadata
+                                .get("media_type")
                                 .cloned()
                                 .unwrap_or_else(|| "image/png".to_string());
 
                             LlmMessage {
                                 role: crate::provider::Role::Tool,
-                                content: crate::provider::MessageContent::Parts(vec![
-                                    crate::provider::ContentPart::Text { text: serde_json::to_string(&result).unwrap_or_default() },
-                                    crate::provider::ContentPart::Image {
-                                        source: crate::provider::ImageSource {
-                                            type_: "base64".to_string(),
-                                            media_type,
-                                            data: image_data.clone(),
-                                        }
-                                    }
-                                ]),
+                                content: crate::provider::MessageContent::Parts(
+                                    vec![
+                                        crate::provider::ContentPart::Text {
+                                            text: serde_json::to_string(&result)
+                                                .unwrap_or_default(),
+                                        },
+                                        crate::provider::ContentPart::Image {
+                                            source: crate::provider::ImageSource {
+                                                type_: "base64".to_string(),
+                                                media_type,
+                                                data: image_data.clone(),
+                                            },
+                                        },
+                                    ],
+                                ),
                                 tool_call_id: Some(tool_call.id.clone()),
                                 tool_calls: None,
                             }
                         } else {
-                            let result_json = serde_json::to_string(&result).unwrap_or_default();
+                            let result_json =
+                                serde_json::to_string(&result).unwrap_or_default();
                             LlmMessage::tool_result(&tool_call.id, result_json)
                         };
                         self.context.add_message(result_msg);
+                        on_runtime(self.budget_snapshot(), self.context_snapshot());
                     }
                     // G1+G2: emit live metrics after each tool round-trip
                     self.emit_budget_update();
@@ -833,10 +1187,14 @@ impl AgentOrchestrator {
                 self.counters.steps, self.counters.llm_calls
             );
 
-            let model = self.route_model("worker");
+            let model = self.route_model("worker", Some("worker"));
+            let options = ProviderOptions {
+                model,
+                openrouter: self.model_router.openrouter_provider_prefs(),
+            };
             let response = self
                 .provider
-                .complete(messages, tools, model)
+                .complete(messages, tools, options)
                 .await
                 .map_err(|e| format!("LLM error: {}", e))?;
 
@@ -870,7 +1228,10 @@ impl AgentOrchestrator {
                             let sig = ParseErrSig {
                                 tool_name: tool_call.name.clone(),
                                 error_kind: "too_large".to_string(),
-                                args_prefix: args_serialised.chars().take(64).collect(),
+                                args_prefix: args_serialised
+                                    .chars()
+                                    .take(64)
+                                    .collect(),
                             };
                             let count = self.parse_error_tracker.record(sig);
                             self.counters.consecutive_failures += 1;
@@ -881,12 +1242,16 @@ impl AgentOrchestrator {
                             };
                             warn!("{} (consecutive: {})", err, count);
                             if count >= REPEATED_PARSE_ERROR_LIMIT {
-                                let abort = OrchestratorError::RepeatedInvalidToolArgs {
-                                    model: self.provider.name().to_string(),
-                                    tool_name: tool_call.name.clone(),
-                                    count,
-                                    input_excerpt: args_serialised.chars().take(200).collect(),
-                                };
+                                let abort =
+                                    OrchestratorError::RepeatedInvalidToolArgs {
+                                        model: self.provider.name().to_string(),
+                                        tool_name: tool_call.name.clone(),
+                                        count,
+                                        input_excerpt: args_serialised
+                                            .chars()
+                                            .take(200)
+                                            .collect(),
+                                    };
                                 return Err(abort.to_string());
                             }
                             let result_msg = LlmMessage::tool_result(
@@ -908,28 +1273,38 @@ impl AgentOrchestrator {
                             self.counters.consecutive_failures = 0;
                         }
 
-                        let result_msg = if let Some(image_data) = result.metadata.get("image_data") {
-                            let media_type = result.metadata.get("media_type")
+                        let result_msg = if let Some(image_data) =
+                            result.metadata.get("image_data")
+                        {
+                            let media_type = result
+                                .metadata
+                                .get("media_type")
                                 .cloned()
                                 .unwrap_or_else(|| "image/png".to_string());
-                            
+
                             LlmMessage {
                                 role: crate::provider::Role::Tool,
-                                content: crate::provider::MessageContent::Parts(vec![
-                                    crate::provider::ContentPart::Text { text: serde_json::to_string(&result).unwrap_or_default() },
-                                    crate::provider::ContentPart::Image {
-                                        source: crate::provider::ImageSource {
-                                            type_: "base64".to_string(),
-                                            media_type,
-                                            data: image_data.clone(),
-                                        }
-                                    }
-                                ]),
+                                content: crate::provider::MessageContent::Parts(
+                                    vec![
+                                        crate::provider::ContentPart::Text {
+                                            text: serde_json::to_string(&result)
+                                                .unwrap_or_default(),
+                                        },
+                                        crate::provider::ContentPart::Image {
+                                            source: crate::provider::ImageSource {
+                                                type_: "base64".to_string(),
+                                                media_type,
+                                                data: image_data.clone(),
+                                            },
+                                        },
+                                    ],
+                                ),
                                 tool_call_id: Some(tool_call.id.clone()),
                                 tool_calls: None,
                             }
                         } else {
-                            let result_json = serde_json::to_string(&result).unwrap_or_default();
+                            let result_json =
+                                serde_json::to_string(&result).unwrap_or_default();
                             LlmMessage::tool_result(&tool_call.id, result_json)
                         };
                         self.context.add_message(result_msg);
@@ -983,7 +1358,11 @@ impl AgentOrchestrator {
                                 m.steps[i].status = StepStatus::Failed(e.clone());
                             }
                         }
-                        return Err(format!("Mission failed at step {}: {}", i + 1, e));
+                        return Err(format!(
+                            "Mission failed at step {}: {}",
+                            i + 1,
+                            e
+                        ));
                     }
                 };
 
@@ -993,12 +1372,20 @@ impl AgentOrchestrator {
                 }
 
                 if retry_count >= max_retries {
-                    warn!("Critic rejected step {} after {} retries. Continuing.", i + 1, retry_count);
+                    warn!(
+                        "Critic rejected step {} after {} retries. Continuing.",
+                        i + 1,
+                        retry_count
+                    );
                     break output;
                 }
 
                 retry_count += 1;
-                info!("Self-Healing: Retrying step {} (attempt {}) with feedback.", i + 1, retry_count + 1);
+                info!(
+                    "Self-Healing: Retrying step {} (attempt {}) with feedback.",
+                    i + 1,
+                    retry_count + 1
+                );
                 current_prompt = format!(
                     "Your previous response for the task '{}' was REJECTED by the critic.\nFeedback: {}\n\nPlease try again, addressing the feedback above.",
                     step.description, critique.feedback
@@ -1060,7 +1447,7 @@ mod tests {
         assert_eq!(budget.max_llm_calls, 100);
         assert_eq!(budget.max_files_modified, 20);
         assert_eq!(budget.max_duration_minutes, 30);
-        assert_eq!(budget.max_consecutive_failures, 3);
+        assert_eq!(budget.max_consecutive_failures, 10);
     }
 
     #[test]
@@ -1228,6 +1615,54 @@ mod tests {
         assert_eq!(c.consecutive_failures, 0);
     }
 
+    #[test]
+    fn test_parse_streamed_tool_calls_success() {
+        let mut deltas = std::collections::HashMap::new();
+        deltas.insert(
+            0,
+            (
+                Some("call_1".to_string()),
+                Some("read_file".to_string()),
+                r#"{"path":"src/main.rs"}"#.to_string(),
+            ),
+        );
+
+        let (parsed, failures) =
+            AgentOrchestrator::parse_streamed_tool_calls(&deltas);
+        assert_eq!(parsed.len(), 1);
+        assert!(failures.is_empty());
+        assert_eq!(parsed[0].id, "call_1");
+        assert_eq!(parsed[0].name, "read_file");
+    }
+
+    #[test]
+    fn test_parse_streamed_tool_calls_invalid_json() {
+        let mut deltas = std::collections::HashMap::new();
+        deltas.insert(
+            0,
+            (
+                Some("call_bad".to_string()),
+                Some("git_add".to_string()),
+                r#"{"files":["a.rs",]}"#.to_string(),
+            ),
+        );
+
+        let (parsed, failures) =
+            AgentOrchestrator::parse_streamed_tool_calls(&deltas);
+        assert!(parsed.is_empty());
+        assert_eq!(failures.len(), 1);
+
+        let (tool_call, result) = &failures[0];
+        assert_eq!(tool_call.id, "call_bad");
+        assert_eq!(tool_call.name, "git_add");
+        assert!(!result.success);
+        assert!(result.stderr.contains("Tool args JSON parse error"));
+        assert_eq!(
+            result.metadata.get("error_kind").map(String::as_str),
+            Some("tool_args_json_parse")
+        );
+    }
+
     // ─── Stress Tests ────────────────────────────────────────────
     #[test]
     fn stress_test_mission_many_steps() {
@@ -1266,7 +1701,10 @@ mod tests {
 
     #[test]
     fn tool_args_valid_json_parses_ok() {
-        let v = validate_and_parse_tool_args("exec", r#"{"cmd":"echo","args":["hello"]}"#);
+        let v = validate_and_parse_tool_args(
+            "exec",
+            r#"{"cmd":"echo","args":["hello"]}"#,
+        );
         assert!(v.is_ok());
         assert_eq!(v.unwrap()["cmd"], "echo");
     }
@@ -1288,13 +1726,19 @@ mod tests {
     fn tool_args_trailing_chars_returns_err() {
         let bad = r#"{"cmd":"echo"}trailing garbage"#;
         let err = validate_and_parse_tool_args("exec", bad).unwrap_err();
-        assert!(matches!(err, OrchestratorError::RepeatedInvalidToolArgs { .. }));
+        assert!(matches!(
+            err,
+            OrchestratorError::RepeatedInvalidToolArgs { .. }
+        ));
     }
 
     #[test]
     fn tool_args_empty_string_returns_err() {
         let err = validate_and_parse_tool_args("exec", "").unwrap_err();
-        assert!(matches!(err, OrchestratorError::RepeatedInvalidToolArgs { .. }));
+        assert!(matches!(
+            err,
+            OrchestratorError::RepeatedInvalidToolArgs { .. }
+        ));
     }
 
     #[test]
@@ -1305,7 +1749,12 @@ mod tests {
             matches!(err, OrchestratorError::ToolArgsTooLarge { .. }),
             "Expected ToolArgsTooLarge"
         );
-        if let OrchestratorError::ToolArgsTooLarge { actual_bytes, limit_bytes, .. } = err {
+        if let OrchestratorError::ToolArgsTooLarge {
+            actual_bytes,
+            limit_bytes,
+            ..
+        } = err
+        {
             assert!(actual_bytes > limit_bytes);
             assert_eq!(limit_bytes, TOOL_ARGS_MAX_BYTES);
         }
@@ -1392,7 +1841,10 @@ mod tests {
         assert!(msg.contains("3"));
         assert!(msg.contains("llama-3.3-70b"));
         assert!(msg.contains("switch model"));
-        assert!(!msg.contains('\n'), "Error message should be single-line safe");
+        assert!(
+            !msg.contains('\n'),
+            "Error message should be single-line safe"
+        );
     }
 
     #[test]
@@ -1415,7 +1867,8 @@ mod tests {
             model: "meta-llama/llama-3.3-70b-instruct".to_string(),
             tool_name: "exec".to_string(),
             count: REPEATED_PARSE_ERROR_LIMIT,
-            input_excerpt: r#"{"cmd":"echo","args":["test"]"#.chars().take(200).collect(),
+            input_excerpt:
+                r#"{"cmd":"echo","args":["test"]"#.chars().take(200).collect(),
         };
         let msg = err.to_string();
         assert!(msg.contains("exec"));
@@ -1448,8 +1901,9 @@ mod tests {
                 &self,
                 _messages: Vec<crate::provider::LlmMessage>,
                 _tools: Option<Vec<crate::provider::ToolDefinition>>,
-                _model_override: Option<String>,
-            ) -> Result<crate::provider::LlmResponse, crate::provider::ProviderError> {
+                _options: crate::provider::ProviderOptions,
+            ) -> Result<crate::provider::LlmResponse, crate::provider::ProviderError>
+            {
                 self.call_count.fetch_add(1, Ordering::SeqCst);
                 // Always return oversized tool args
                 Ok(crate::provider::LlmResponse {
@@ -1477,7 +1931,12 @@ mod tests {
         });
 
         let tmp = tempfile::tempdir().unwrap();
-        let mut orc = AgentOrchestrator::new(provider, tmp.path().to_path_buf(), 8192);
+        let mut orc = AgentOrchestrator::new(
+            provider,
+            tmp.path().to_path_buf(),
+            8192,
+            "test-session",
+        );
         // Override budget: let anti-loop guard fire, not consecutive_failures
         orc.set_budget(AgentBudget {
             max_steps: 200,
@@ -1492,7 +1951,8 @@ mod tests {
         assert!(result.is_err(), "Should abort on repeated large args");
         let err_msg = result.unwrap_err();
         assert!(
-            err_msg.contains("too large") || err_msg.contains("Orchestrator aborted"),
+            err_msg.contains("too large")
+                || err_msg.contains("Orchestrator aborted"),
             "Expected size/anti-loop error, got: {}",
             err_msg
         );
@@ -1522,8 +1982,9 @@ mod tests {
                 &self,
                 _messages: Vec<crate::provider::LlmMessage>,
                 _tools: Option<Vec<crate::provider::ToolDefinition>>,
-                _model_override: Option<String>,
-            ) -> Result<crate::provider::LlmResponse, crate::provider::ProviderError> {
+                _options: crate::provider::ProviderOptions,
+            ) -> Result<crate::provider::LlmResponse, crate::provider::ProviderError>
+            {
                 let n = self.calls.fetch_add(1, Ordering::SeqCst);
                 if n == 0 {
                     Ok(crate::provider::LlmResponse {
@@ -1551,9 +2012,16 @@ mod tests {
             }
         }
 
-        let provider = Arc::new(GoodProvider { calls: Arc::new(AtomicU32::new(0)) });
+        let provider = Arc::new(GoodProvider {
+            calls: Arc::new(AtomicU32::new(0)),
+        });
         let tmp = tempfile::tempdir().unwrap();
-        let mut orc = AgentOrchestrator::new(provider, tmp.path().to_path_buf(), 8192);
+        let mut orc = AgentOrchestrator::new(
+            provider,
+            tmp.path().to_path_buf(),
+            8192,
+            "test-session",
+        );
         let result = orc.process("do something valid").await;
         // Should return Ok or a tool-execution failure — NOT an anti-loop error
         if let Err(ref e) = result {

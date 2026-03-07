@@ -64,7 +64,9 @@ impl ContextManager {
 
         // Underscores / camelCase boundaries add extra subword tokens
         let underscore_count = text.chars().filter(|c| *c == '_').count();
-        let camel_boundaries = text.as_bytes().windows(2)
+        let camel_boundaries = text
+            .as_bytes()
+            .windows(2)
             .filter(|w| w[0].is_ascii_lowercase() && w[1].is_ascii_uppercase())
             .count();
 
@@ -149,7 +151,7 @@ impl ContextManager {
         self.messages.len()
     }
 
-    /// Get the configured maximum context tokens.
+    /// Maximum configured context window in estimated tokens.
     pub fn max_tokens(&self) -> usize {
         self.max_tokens
     }

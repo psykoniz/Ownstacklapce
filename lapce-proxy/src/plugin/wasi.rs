@@ -384,7 +384,11 @@ pub fn load_volt(path: &Path) -> Result<VoltMetadata> {
                 Some(path.join(theme).canonicalize().ok()?.to_str()?.to_string())
             })
             .collect();
-        if resolved.is_empty() { None } else { Some(resolved) }
+        if resolved.is_empty() {
+            None
+        } else {
+            Some(resolved)
+        }
     });
     meta.icon_themes = meta.icon_themes.as_ref().and_then(|themes| {
         let resolved: Vec<String> = themes
@@ -393,7 +397,11 @@ pub fn load_volt(path: &Path) -> Result<VoltMetadata> {
                 Some(path.join(theme).canonicalize().ok()?.to_str()?.to_string())
             })
             .collect();
-        if resolved.is_empty() { None } else { Some(resolved) }
+        if resolved.is_empty() {
+            None
+        } else {
+            Some(resolved)
+        }
     });
 
     Ok(meta)

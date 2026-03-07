@@ -4,11 +4,11 @@
 //! sees a blank black screen. Each empty state has brand presence,
 //! clear calls-to-action, and refined visual styling.
 
+use floem::View;
 use floem::peniko::Color;
 use floem::style::CursorStyle;
 use floem::text::Weight;
-use floem::views::{label, v_stack, Decorators};
-use floem::View;
+use floem::views::{Decorators, label, v_stack};
 
 // ── Design tokens (consistent across all empty states) ───────────────────────
 
@@ -31,11 +31,8 @@ const BRAND_ACCENT: Color = Color::from_rgb8(74, 158, 255);
 pub fn empty_editor_placeholder() -> impl View {
     v_stack((
         // Brand diamond icon
-        label(|| "\u{27D0}").style(|s| {
-            s.font_size(48.0)
-                .color(BRAND_ACCENT)
-                .margin_bottom(4.0)
-        }),
+        label(|| "\u{27D0}")
+            .style(|s| s.font_size(48.0).color(BRAND_ACCENT).margin_bottom(4.0)),
         // Brand name
         label(|| "OwnStack").style(|s| {
             s.font_size(26.0)
@@ -52,53 +49,43 @@ pub fn empty_editor_placeholder() -> impl View {
                 .selectable(false)
         }),
         // Description
-        label(|| "Open a workspace to browse files, chat with AI, and run commands.")
-            .style(|s| {
-                s.font_size(13.0)
-                    .color(DESC_COLOR)
-                    .margin_bottom(24.0)
-                    .max_width(400.0)
-                    .line_height(1.6)
-                    .selectable(false)
-            }),
-        // CTA button
-        label(|| "Open Folder")
-            .style(|s| {
-                s.padding_horiz(24.0)
-                    .padding_vert(10.0)
-                    .background(CTA_BG)
-                    .border(2.0)
-                    .border_color(CTA_BORDER)
-                    .border_radius(8.0)
-                    .color(CTA_TEXT)
-                    .font_size(13.0)
-                    .font_weight(Weight::SEMIBOLD)
-                    .cursor(CursorStyle::Pointer)
-                    .hover(|s| {
-                        s.background(CTA_BG_HOVER)
-                            .border_color(CTA_BORDER_HOVER)
-                            .box_shadow_blur(8.0)
-                            .box_shadow_color(Color::from_rgba8(74, 158, 255, 35))
-                    })
-                    .active(|s| {
-                        s.background(CTA_BG_ACTIVE)
-                            .border_color(CTA_BORDER)
-                    })
-                    .margin_bottom(16.0)
-            }),
-        // Keyboard shortcut hint
-        label(|| "Ctrl+O to open a folder").style(|s| {
-            s.font_size(11.0)
-                .color(HINT_COLOR)
+        label(
+            || "Open a workspace to browse files, chat with AI, and run commands.",
+        )
+        .style(|s| {
+            s.font_size(13.0)
+                .color(DESC_COLOR)
+                .margin_bottom(24.0)
+                .max_width(400.0)
+                .line_height(1.6)
                 .selectable(false)
         }),
+        // CTA button
+        label(|| "Open Folder").style(|s| {
+            s.padding_horiz(24.0)
+                .padding_vert(10.0)
+                .background(CTA_BG)
+                .border(2.0)
+                .border_color(CTA_BORDER)
+                .border_radius(8.0)
+                .color(CTA_TEXT)
+                .font_size(13.0)
+                .font_weight(Weight::SEMIBOLD)
+                .cursor(CursorStyle::Pointer)
+                .hover(|s| {
+                    s.background(CTA_BG_HOVER)
+                        .border_color(CTA_BORDER_HOVER)
+                        .box_shadow_blur(8.0)
+                        .box_shadow_color(Color::from_rgba8(74, 158, 255, 35))
+                })
+                .active(|s| s.background(CTA_BG_ACTIVE).border_color(CTA_BORDER))
+                .margin_bottom(16.0)
+        }),
+        // Keyboard shortcut hint
+        label(|| "Ctrl+O to open a folder")
+            .style(|s| s.font_size(11.0).color(HINT_COLOR).selectable(false)),
     ))
-    .style(|s| {
-        s.size_full()
-            .items_center()
-            .justify_center()
-            .flex_col()
-    })
+    .style(|s| s.size_full().items_center().justify_center().flex_col())
 }
 
 // ── Chat panel empty state ───────────────────────────────────────────────────
@@ -265,13 +252,11 @@ pub fn mcp_empty_state(searched_paths: String) -> impl View {
 pub fn audit_empty_state() -> impl View {
     v_stack((
         // Shield icon for security audit theming
-        v_stack((
-            label(|| "\u{26E8}").style(|s| {
-                s.font_size(26.0)
-                    .color(Color::from_rgb8(100, 200, 150))
-                    .selectable(false)
-            }),
-        ))
+        v_stack((label(|| "\u{26E8}").style(|s| {
+            s.font_size(26.0)
+                .color(Color::from_rgb8(100, 200, 150))
+                .selectable(false)
+        }),))
         .style(|s| {
             s.items_center()
                 .justify_center()

@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use futures::stream;
 use ownstack_agent::provider::{
-    FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderError, StreamChunk,
-    StreamResult, ToolDefinition,
+    FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderError,
+    ProviderOptions, StreamChunk, StreamResult, ToolDefinition,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +18,7 @@ impl LlmProvider for MockFloodProvider {
         &self,
         _messages: Vec<LlmMessage>,
         _tools: Option<Vec<ToolDefinition>>,
-        _model_override: Option<String>,
+        _options: ProviderOptions,
     ) -> Result<LlmResponse, ProviderError> {
         Ok(LlmResponse {
             content: Some("done".to_string()),
@@ -32,7 +32,7 @@ impl LlmProvider for MockFloodProvider {
         &self,
         _messages: Vec<LlmMessage>,
         _tools: Option<Vec<ToolDefinition>>,
-        _model_override: Option<String>,
+        _options: ProviderOptions,
     ) -> Result<StreamResult, ProviderError> {
         let count = self.chunk_count;
         let delay = self.delay_ms;
@@ -80,8 +80,12 @@ mod tests {
             chunk_count: 500,
             delay_ms: 0,
         });
-        let mut orchestrator =
-            AgentOrchestrator::new(provider, PathBuf::from("."), 1024);
+        let mut orchestrator = AgentOrchestrator::new(
+            provider,
+            PathBuf::from("."),
+            1024,
+            "test-session",
+        );
 
         let mut received = 0;
         let result = orchestrator
@@ -91,6 +95,7 @@ mod tests {
                     received += 1;
                 },
                 |_| {},
+                |_, _| {},
             )
             .await;
 
@@ -104,8 +109,12 @@ mod tests {
             chunk_count: 50,
             delay_ms: 2,
         });
-        let mut orchestrator =
-            AgentOrchestrator::new(provider, PathBuf::from("."), 1024);
+        let mut orchestrator = AgentOrchestrator::new(
+            provider,
+            PathBuf::from("."),
+            1024,
+            "test-session",
+        );
 
         let mut received = 0;
         let _ = orchestrator
@@ -115,6 +124,7 @@ mod tests {
                     received += 1;
                 },
                 |_| {},
+                |_, _| {},
             )
             .await;
 

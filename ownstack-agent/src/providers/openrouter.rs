@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::provider::{
     FinishReason, LlmMessage, LlmProvider, LlmResponse, ProviderConfig,
-    ProviderError, Role, TokenUsage, ToolCall, ToolDefinition,
+    ProviderError, ProviderOptions, Role, TokenUsage, ToolCall, ToolDefinition,
 };
 use crate::resilience::ResilientClient;
 use crate::secret_store;
@@ -56,6 +56,10 @@ struct OpenRouterRequest {
     temperature: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenRouterTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -134,6 +138,36 @@ struct OpenRouterUsage {
     total_tokens: u32,
 }
 
+fn parse_tool_calls(
+    tool_calls: Option<Vec<OpenRouterToolCall>>,
+) -> Result<Vec<ToolCall>, ProviderError> {
+    tool_calls
+        .unwrap_or_default()
+        .into_iter()
+        .map(|tc| {
+            let tool_name = tc.function.name;
+            let raw_arguments = tc.function.arguments;
+            let arguments = serde_json::from_str::<serde_json::Value>(
+                &raw_arguments,
+            )
+            .map_err(|e| {
+                let raw_prefix: String =
+                    raw_arguments.chars().take(300).collect();
+                ProviderError::SerializationError(format!(
+                    "OpenRouter tool-call args parse error for '{}': {}. Raw args prefix: {}",
+                    tool_name, e, raw_prefix
+                ))
+            })?;
+
+            Ok(ToolCall {
+                id: tc.id,
+                name: tool_name,
+                arguments,
+            })
+        })
+        .collect()
+}
+
 fn role_to_string(role: &Role) -> String {
     match role {
         Role::System => "system".to_string(),
@@ -204,7 +238,7 @@ impl LlmProvider for OpenRouterProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
-        model_override: Option<String>,
+        options: ProviderOptions,
     ) -> Result<LlmResponse, ProviderError> {
         let api_messages: Vec<OpenRouterMessage> = to_openrouter_messages(messages);
 
@@ -221,12 +255,23 @@ impl LlmProvider for OpenRouterProvider {
                 .collect()
         });
 
+        let has_tools = api_tools
+            .as_ref()
+            .map_or(false, |t: &Vec<OpenRouterTool>| !t.is_empty());
+        let tool_choice = if has_tools {
+            Some(serde_json::Value::String("auto".to_string()))
+        } else {
+            None
+        };
+
         let request = OpenRouterRequest {
-            model: model_override.unwrap_or_else(|| self.config.model.clone()),
+            model: options.model.unwrap_or_else(|| self.config.model.clone()),
             messages: api_messages,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
             tools: api_tools,
+            tool_choice,
+            provider: options.openrouter.clone(),
         };
 
         debug!("Sending request to OpenRouter: model={}", self.config.model);
@@ -256,22 +301,7 @@ impl LlmProvider for OpenRouterProvider {
             ProviderError::ApiError("No choices in response".to_string())
         })?;
 
-        let tool_calls: Vec<ToolCall> = choice
-            .message
-            .tool_calls
-            .unwrap_or_default()
-            .into_iter()
-            .map(|tc| {
-                let arguments: serde_json::Value =
-                    serde_json::from_str(&tc.function.arguments)
-                        .unwrap_or(serde_json::Value::Null);
-                ToolCall {
-                    id: tc.id,
-                    name: tc.function.name,
-                    arguments,
-                }
-            })
-            .collect();
+        let tool_calls = parse_tool_calls(choice.message.tool_calls)?;
 
         let finish_reason = match choice.finish_reason.as_deref() {
             Some("stop") => FinishReason::Stop,
@@ -306,7 +336,7 @@ impl LlmProvider for OpenRouterProvider {
         &self,
         messages: Vec<LlmMessage>,
         tools: Option<Vec<ToolDefinition>>,
-        model_override: Option<String>,
+        options: ProviderOptions,
     ) -> Result<crate::provider::StreamResult, ProviderError> {
         let api_messages: Vec<OpenRouterMessage> = to_openrouter_messages(messages);
 
@@ -323,17 +353,32 @@ impl LlmProvider for OpenRouterProvider {
                 .collect()
         });
 
+        let has_tools = api_tools
+            .as_ref()
+            .map_or(false, |t: &Vec<OpenRouterTool>| !t.is_empty());
+        let tool_choice = if has_tools {
+            Some(serde_json::Value::String("auto".to_string()))
+        } else {
+            None
+        };
+
         // Build request body with stream: true
         let mut body = serde_json::to_value(&OpenRouterRequest {
-            model: model_override.unwrap_or_else(|| self.config.model.clone()),
+            model: options.model.unwrap_or_else(|| self.config.model.clone()),
             messages: api_messages,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
             tools: api_tools,
+            tool_choice,
+            provider: options.openrouter.clone(),
         })
         .map_err(|e| ProviderError::SerializationError(e.to_string()))?;
         body.as_object_mut()
-            .ok_or_else(|| ProviderError::SerializationError("request body is not a JSON object".to_string()))?
+            .ok_or_else(|| {
+                ProviderError::SerializationError(
+                    "request body is not a JSON object".to_string(),
+                )
+            })?
             .insert("stream".to_string(), serde_json::Value::Bool(true));
 
         debug!(
@@ -430,15 +475,15 @@ fn parse_sse_chunk(
 
     let choices = json.get("choices")?.as_array()?;
     let choice = choices.first()?;
-    let delta = choice.get("delta")?;
+    let delta = choice.get("delta");
 
     let delta_content = delta
-        .get("content")
+        .and_then(|d| d.get("content"))
         .and_then(|c| c.as_str())
         .map(|s| s.to_string());
 
     let delta_tool_calls: Vec<ToolCallDelta> = delta
-        .get("tool_calls")
+        .and_then(|d| d.get("tool_calls"))
         .and_then(|tc| tc.as_array())
         .map(|arr| {
             arr.iter()
@@ -533,6 +578,8 @@ mod tests {
             max_tokens: 100,
             temperature: 0.7,
             tools: None,
+            tool_choice: None,
+            provider: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -601,5 +648,42 @@ mod tests {
         assert_eq!(chunk.delta_tool_calls.len(), 1);
         assert_eq!(chunk.delta_tool_calls[0].name.as_deref(), Some("search"));
         assert_eq!(chunk.finish_reason, Some(FinishReason::ToolCalls));
+    }
+
+    #[test]
+    fn test_parse_tool_calls_valid_json() {
+        let parsed = parse_tool_calls(Some(vec![OpenRouterToolCall {
+            id: "call_1".to_string(),
+            function: OpenRouterFunctionCall {
+                name: "search".to_string(),
+                arguments: r#"{"pattern":"\\.rs$"}"#.to_string(),
+            },
+        }]))
+        .expect("valid tool call args should parse");
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "search");
+        assert_eq!(parsed[0].arguments["pattern"], r"\.rs$");
+    }
+
+    #[test]
+    fn test_parse_tool_calls_invalid_json_returns_error() {
+        let err = parse_tool_calls(Some(vec![OpenRouterToolCall {
+            id: "call_bad".to_string(),
+            function: OpenRouterFunctionCall {
+                name: "git_add".to_string(),
+                arguments: r#"{"paths":["src/main.rs",]}"#.to_string(),
+            },
+        }]))
+        .expect_err("invalid json must return explicit provider error");
+
+        match err {
+            ProviderError::SerializationError(msg) => {
+                assert!(msg.contains("OpenRouter tool-call args parse error"));
+                assert!(msg.contains("git_add"));
+                assert!(msg.contains("Raw args prefix"));
+            }
+            other => panic!("unexpected error variant: {:?}", other),
+        }
     }
 }

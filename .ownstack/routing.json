@@ -1,31 +1,28 @@
 {
-  "_comment": [
-    "OwnStack model routing config — loaded at runtime by ModelRouter.",
-    "Priority order: tasks > roles > default.",
-    "",
-    "RULE: multi-tool / agentic missions MUST use a robust model.",
-    "Llama 3.3 70B is known to produce truncated JSON tool-call args",
-    "on complex payloads (see post-fix summary). It is therefore restricted",
-    "to single-shot / no-tool tasks only.",
-    "",
-    "Stable model (passes all E2E tool-call tests): claude-sonnet-4-6"
-  ],
   "default": "anthropic/claude-sonnet-4-6",
   "roles": {
-    "planner":  "anthropic/claude-sonnet-4-6",
-    "worker":   "anthropic/claude-sonnet-4-6",
-    "critic":   "anthropic/claude-sonnet-4-6",
-    "fast":     "anthropic/claude-haiku-4-5-20251001"
+    "planner": "anthropic/claude-sonnet-4-6",
+    "worker": "anthropic/claude-sonnet-4-6",
+    "critic": "anthropic/claude-sonnet-4-6",
+    "fast": "openai/gpt-4o-mini"
   },
   "tasks": {
-    "agentic":        "anthropic/claude-sonnet-4-6",
-    "multi-tool":     "anthropic/claude-sonnet-4-6",
-    "tool-heavy":     "anthropic/claude-sonnet-4-6",
-    "planning":       "anthropic/claude-sonnet-4-6",
-    "refactoring":    "anthropic/claude-sonnet-4-6",
-    "documentation":  "anthropic/claude-haiku-4-5-20251001",
-    "single-shot":    "meta-llama/llama-3.3-70b-instruct",
-    "no-tools":       "meta-llama/llama-3.3-70b-instruct",
-    "summarisation":  "meta-llama/llama-3.3-70b-instruct"
+    "planning": "anthropic/claude-sonnet-4-6",
+    "worker": "anthropic/claude-sonnet-4-6",
+    "critique": "anthropic/claude-sonnet-4-6",
+    "documentation": "openai/gpt-4o-mini",
+    "summarization": "openai/gpt-4o-mini",
+    "single_shot": "openai/gpt-4o-mini",
+    "refactoring": "anthropic/claude-sonnet-4-6",
+    "tool_heavy": "anthropic/claude-sonnet-4-6"
+  },
+  "openrouter_provider": {
+    "allow_fallbacks": true,
+    "sort": "throughput",
+    "order": [
+      "anthropic",
+      "openai",
+      "google"
+    ]
   }
 }
