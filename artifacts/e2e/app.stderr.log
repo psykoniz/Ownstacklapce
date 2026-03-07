@@ -1,0 +1,13 @@
+[OwnStack] Onboarding state: completed=false, path=Some("/tmp/ide_e2e_run/xdg_config/ownstack-debug/ownstack-onboarding.json")
+[e2e] Control server listening on 127.0.0.1:19876
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+libEGL warning: DRI3 error: Could not get DRI3 device
+libEGL warning: Ensure your X server supports DRI3 to get accelerated rendering
+[2m2026-03-07T18:59:52.262302Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m OwnStack Agent starting in "/tmp/ide_e2e_run/test_workspace"
+[2m2026-03-07T18:59:52.262364Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m Session: sess-4664-1772909992261
+[2m2026-03-07T18:59:52.264128Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m LLM Provider: Local
+[2m2026-03-07T18:59:52.310178Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m No budgets file found at "/tmp/ide_e2e_run/test_workspace/.ownstack/budgets.json" (using defaults)
+[2m2026-03-07T18:59:52.420209Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m WASI plugin search in: "/tmp/ide_e2e_run/test_workspace/plugins"
+[2m2026-03-07T18:59:52.421462Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m WASI plugins found: 0
+[2m2026-03-07T18:59:52.435901Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m Starting in IDE RPC mode
+[2m2026-03-07T18:59:52.436477Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m Agent RPC stdin loop started

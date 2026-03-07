@@ -1,0 +1,6 @@
+E2E_READY:19876
+[2m2026-03-07T18:59:51.161214Z[0m [31mERROR[0m FindGrammar [2mlapce_app::app[0m[2m:[0m [2m4021:[0m failed to obtain release info: Failed to retrieve releases for tree-sitter-grammars
+[2m2026-03-07T18:59:51.610285Z[0m [31mERROR[0m        main [2mwgpu_hal::vulkan::instance[0m[2m:[0m [2m79:[0m GENERAL [Loader Message (0x0)]
+	vkCreateInstance: Found no drivers!    
+[2m2026-03-07T18:59:51.610353Z[0m [31mERROR[0m        main [2mwgpu_hal::vulkan::instance[0m[2m:[0m [2m131:[0m 	objects: (type: INSTANCE, hndl: 0x55a9da994010, name: ?)    
+[2m2026-03-07T19:00:32.084797Z[0m [31mERROR[0m        main [2mlapce_core::language[0m[2m:[0m [2m1792:[0m Rust Error("grammar not found")
