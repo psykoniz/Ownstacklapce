@@ -68,6 +68,11 @@ pub struct OnboardingData {
 impl OnboardingData {
     pub fn new(cx: Scope) -> Self {
         let state = load_state_file().unwrap_or_default();
+        eprintln!(
+            "[OwnStack] Onboarding state: completed={}, path={:?}",
+            state.completed,
+            state_file_path(),
+        );
 
         Self {
             active: cx.create_rw_signal(false),
@@ -120,7 +125,16 @@ impl OnboardingData {
     }
 
     pub fn should_show(&self) -> bool {
-        !self.completed.get()
+        if self.completed.get() {
+            return false;
+        }
+        // If API keys are already configured via env, skip onboarding
+        if std::env::var("OPENROUTER_API_KEY").is_ok()
+            || std::env::var("ANTHROPIC_API_KEY").is_ok()
+        {
+            return false;
+        }
+        true
     }
 
     pub fn start(&self) {
