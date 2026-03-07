@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use floem::{
@@ -14,7 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{LapceConfig, color::LapceColor},
-    window_tab::CommonData,
+    panel::position::PanelPosition,
+    window_tab::{CommonData, WindowTabData},
 };
 
 /// A single audit log entry.
@@ -249,8 +251,8 @@ fn parse_audit_entry(line: &str) -> Option<AuditEntry> {
 
 /// Sidebar panel version of the audit log for `PanelKind::OwnStackAudit`.
 pub fn audit_panel(
-    window_tab_data: std::rc::Rc<crate::window_tab::WindowTabData>,
-    _position: crate::panel::position::PanelPosition,
+    window_tab_data: Rc<WindowTabData>,
+    _position: PanelPosition,
 ) -> impl View {
     let data = window_tab_data.ownstack_audit.clone();
     let config = window_tab_data.common.config;
@@ -283,9 +285,13 @@ pub fn audit_panel(
             let cfg = config.get();
             s.items_center()
                 .width_full()
-                .padding(8.0)
+                .padding(10.0)
                 .border_bottom(1.0)
                 .border_color(cfg.color(LapceColor::LAPCE_BORDER))
+                .background(
+                    cfg.color(LapceColor::PANEL_BACKGROUND)
+                        .multiply_alpha(0.8),
+                )
         }),
         // ── Filter row ────────────────────────────────────────────
         h_stack((

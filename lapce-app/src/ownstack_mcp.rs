@@ -11,7 +11,8 @@ use std::rc::Rc;
 
 use crate::{
     app::clickable_icon,
-    config::icon::LapceIcons,
+    config::{color::LapceColor, icon::LapceIcons},
+    panel::position::PanelPosition,
     window_tab::{CommonData, WindowTabData},
 };
 
@@ -377,19 +378,20 @@ impl OwnStackMcpData {
 
 pub fn mcp_panel(
     window_tab_data: Rc<WindowTabData>,
-    _position: crate::panel::position::PanelPosition,
+    _position: PanelPosition,
 ) -> impl View {
     let mcp_data = window_tab_data.ownstack_mcp.clone();
-    let config = window_tab_data.common.config.clone();
+    let config = window_tab_data.common.config;
 
     let mcp_add = mcp_data.clone();
     let mcp_reload = mcp_data.clone();
 
     let header = h_stack((
-        h_stack((label(|| "MCP SERVERS".to_string()).style(|s| {
-            s.font_size(10.0)
+        h_stack((label(|| "MCP Servers".to_string()).style(move |s| {
+            let cfg = config.get();
+            s.font_size(13.0)
                 .font_weight(Weight::BOLD)
-                .color(Color::from_rgb8(156, 163, 175))
+                .color(cfg.color(LapceColor::EDITOR_FOREGROUND))
         }),))
         .style(|s| s.items_center()),
         h_stack((
@@ -412,80 +414,32 @@ pub fn mcp_panel(
         ))
         .style(|s| s.items_center().gap(2.0)),
     ))
-    .style(|s| {
+    .style(move |s| {
+        let cfg = config.get();
         s.width_full()
             .justify_between()
             .items_center()
-            .padding_horiz(14.0)
-            .padding_vert(8.0)
-            .background(Color::from_rgb8(17, 17, 27))
+            .padding(10.0)
+            .background(
+                cfg.color(LapceColor::PANEL_BACKGROUND)
+                    .multiply_alpha(0.8),
+            )
             .border_bottom(1.0)
-            .border_color(Color::from_rgba8(51, 65, 85, 100))
+            .border_color(cfg.color(LapceColor::LAPCE_BORDER))
     });
 
-    // ── Empty state (elegant, centered) ──────────────────────────────────
-    let mcp_empty = mcp_data.clone();
-    let empty_view = {
-        let searched = mcp_data.searched_paths;
-        let no_msg = mcp_data.no_config_message;
-        let mcp_cta = mcp_empty.clone();
-        v_stack((
-            label(|| "MCP").style(|s| {
-                s.font_size(28.0)
-                    .color(Color::from_rgb8(74, 130, 200))
-                    .margin_bottom(12.0)
-                    .font_weight(Weight::BOLD)
-            }),
-            label(|| "No MCP servers configured").style(|s| {
-                s.font_size(14.0)
-                    .font_weight(Weight::SEMIBOLD)
-                    .color(Color::from_rgb8(180, 200, 230))
-                    .margin_bottom(6.0)
-            }),
-            label(|| "Add a server to connect AI agents to external tools and data sources.").style(|s| {
-                s.font_size(11.0)
-                    .color(Color::from_rgb8(120, 140, 170))
-                    .max_width(260.0)
-                    .line_height(1.5)
-                    .margin_bottom(12.0)
-            }),
-            label(|| "Add MCP Server")
-                .on_click_stop(move |_| mcp_cta.show_add_form())
-                .style(|s| {
-                    s.padding_horiz(16.0)
-                        .padding_vert(8.0)
-                        .background(Color::from_rgb8(30, 45, 70))
-                        .border(1.0)
-                        .border_color(Color::from_rgb8(60, 90, 140))
-                        .border_radius(6.0)
-                        .color(Color::from_rgb8(180, 210, 255))
-                        .font_size(12.0)
-                        .cursor(CursorStyle::Pointer)
-                        .hover(|s| {
-                            s.background(Color::from_rgb8(40, 60, 90))
-                                .border_color(Color::from_rgb8(80, 120, 180))
-                        })
-                        .margin_bottom(14.0)
-                }),
-            label(move || {
-                format!("Searched: {}", searched.get())
-            }).style(|s| {
-                s.font_size(9.5)
-                    .color(Color::from_rgb8(80, 100, 130))
-                    .max_width(280.0)
-            }),
-        ))
-        .style(move |s| {
-            let visible = no_msg.get().is_some();
-            s.apply_if(!visible, |s| s.hide())
-                .width_full()
-                .flex_grow(1.0)
-                .items_center()
-                .justify_center()
-                .flex_col()
-                .padding(20.0)
-        })
-    };
+    // ── Empty state (using shared module) ─────────────────────────────────
+    let no_msg = mcp_data.no_config_message;
+    let searched = mcp_data.searched_paths;
+    let mcp_cta = mcp_data.clone();
+    let empty_view = crate::ownstack_empty_state::mcp_empty_state(
+        searched.get_untracked(),
+    )
+    .on_click_stop(move |_| mcp_cta.show_add_form())
+    .style(move |s| {
+        let visible = no_msg.get().is_some();
+        s.apply_if(!visible, |s| s.hide())
+    });
 
     // ── Server list ──────────────────────────────────────────────────────
     let servers_list = scroll(
@@ -512,39 +466,47 @@ pub fn mcp_panel(
                                     .background(status_color)
                                     .margin_right(8.0)
                             }),
-                            label(move || server.name.clone()).style(|s| {
+                            label(move || server.name.clone()).style(move |s| {
+                                let cfg = config.get();
                                 s.font_size(13.0)
                                     .font_weight(Weight::SEMIBOLD)
-                                    .color(Color::from_rgb8(203, 213, 225))
+                                    .color(cfg.color(LapceColor::EDITOR_FOREGROUND))
                             }),
                         ))
                         .style(|s| s.items_center()),
-                        label(move || status_label.clone()).style(|s| {
-                            s.color(Color::from_rgb8(100, 116, 139)).font_size(10.0)
+                        label(move || status_label.clone()).style(move |s| {
+                            let cfg = config.get();
+                            s.color(cfg.color(LapceColor::EDITOR_DIM))
+                                .font_size(10.0)
                         }),
                     ))
                     .style(|s| s.width_full().justify_between().items_center()),
-                    label(move || cmd_display.clone()).style(|s| {
+                    label(move || cmd_display.clone()).style(move |s| {
+                        let cfg = config.get();
                         s.font_size(10.0)
-                            .color(Color::from_rgb8(100, 116, 139))
+                            .color(cfg.color(LapceColor::EDITOR_DIM))
                             .margin_top(2.0)
                             .margin_left(16.0)
                     }),
-                    label(move || source.clone()).style(|s| {
+                    label(move || source.clone()).style(move |s| {
+                        let cfg = config.get();
                         s.font_size(9.0)
-                            .color(Color::from_rgb8(71, 85, 105))
+                            .color(cfg.color(LapceColor::PANEL_FOREGROUND_DIM))
                             .margin_top(2.0)
                             .margin_left(16.0)
                     }),
                 ))
-                .style(|s| {
+                .style(move |s| {
+                    let cfg = config.get();
                     s.width_full()
-                        .padding_horiz(14.0)
+                        .padding_horiz(10.0)
                         .padding_vert(10.0)
                         .border_bottom(1.0)
-                        .border_color(Color::from_rgba8(51, 65, 85, 50))
+                        .border_color(cfg.color(LapceColor::LAPCE_BORDER))
                         .hover(|s| {
-                            s.background(Color::from_rgba8(255, 255, 255, 10))
+                            s.background(
+                                cfg.color(LapceColor::PANEL_HOVERED_BACKGROUND),
+                            )
                         })
                         .cursor(CursorStyle::Default)
                 })
@@ -555,104 +517,134 @@ pub fn mcp_panel(
     .style(|s| s.width_full().flex_grow(1.0));
 
     // ── Add Server form (inline, shown/hidden) ───────────────────────────
-    let form_data = mcp_empty.clone();
-    let form_save = mcp_empty.clone();
-    let form_cancel = mcp_empty.clone();
-    let form_visible = mcp_empty.add_form_visible;
+    let form_data = mcp_data.clone();
+    let form_save = mcp_data.clone();
+    let form_cancel = mcp_data.clone();
+    let form_visible = mcp_data.add_form_visible;
 
     let add_form = v_stack((
-        label(|| "New MCP Server").style(|s| {
+        label(|| "New MCP Server").style(move |s| {
+            let cfg = config.get();
             s.font_size(12.0)
                 .font_weight(Weight::BOLD)
-                .color(Color::from_rgb8(180, 200, 230))
+                .color(cfg.color(LapceColor::EDITOR_FOREGROUND))
                 .margin_bottom(10.0)
         }),
         label(|| "Name")
-            .style(|s| s.font_size(10.0).color(Color::from_rgb8(140, 160, 190))),
+            .style(move |s| {
+                let cfg = config.get();
+                s.font_size(10.0).color(cfg.color(LapceColor::EDITOR_DIM))
+            }),
         text_input(form_data.form_name)
             .placeholder("e.g. filesystem-server")
-            .style(|s| {
+            .style(move |s| {
+                let cfg = config.get();
                 s.width_full()
                     .padding(8.0)
                     .margin_top(4.0)
                     .margin_bottom(8.0)
                     .border(1.0)
                     .border_radius(4.0)
-                    .border_color(Color::from_rgba8(51, 65, 85, 150))
-                    .background(Color::from_rgb8(18, 22, 32))
-                    .color(Color::WHITE)
+                    .border_color(cfg.color(LapceColor::LAPCE_BORDER))
+                    .background(cfg.color(LapceColor::EDITOR_BACKGROUND))
+                    .color(cfg.color(LapceColor::EDITOR_FOREGROUND))
                     .font_size(12.0)
             }),
         label(|| "Command")
-            .style(|s| s.font_size(10.0).color(Color::from_rgb8(140, 160, 190))),
+            .style(move |s| {
+                let cfg = config.get();
+                s.font_size(10.0).color(cfg.color(LapceColor::EDITOR_DIM))
+            }),
         text_input(form_data.form_command)
             .placeholder("e.g. npx or /usr/local/bin/mcp-server")
-            .style(|s| {
+            .style(move |s| {
+                let cfg = config.get();
                 s.width_full()
                     .padding(8.0)
                     .margin_top(4.0)
                     .margin_bottom(8.0)
                     .border(1.0)
                     .border_radius(4.0)
-                    .border_color(Color::from_rgba8(51, 65, 85, 150))
-                    .background(Color::from_rgb8(18, 22, 32))
-                    .color(Color::WHITE)
+                    .border_color(cfg.color(LapceColor::LAPCE_BORDER))
+                    .background(cfg.color(LapceColor::EDITOR_BACKGROUND))
+                    .color(cfg.color(LapceColor::EDITOR_FOREGROUND))
                     .font_size(12.0)
             }),
         label(|| "Arguments (space-separated)")
-            .style(|s| s.font_size(10.0).color(Color::from_rgb8(140, 160, 190))),
+            .style(move |s| {
+                let cfg = config.get();
+                s.font_size(10.0).color(cfg.color(LapceColor::EDITOR_DIM))
+            }),
         text_input(form_data.form_args)
             .placeholder("e.g. -y @modelcontextprotocol/server-filesystem /tmp")
-            .style(|s| {
+            .style(move |s| {
+                let cfg = config.get();
                 s.width_full()
                     .padding(8.0)
                     .margin_top(4.0)
                     .margin_bottom(12.0)
                     .border(1.0)
                     .border_radius(4.0)
-                    .border_color(Color::from_rgba8(51, 65, 85, 150))
-                    .background(Color::from_rgb8(18, 22, 32))
-                    .color(Color::WHITE)
+                    .border_color(cfg.color(LapceColor::LAPCE_BORDER))
+                    .background(cfg.color(LapceColor::EDITOR_BACKGROUND))
+                    .color(cfg.color(LapceColor::EDITOR_FOREGROUND))
                     .font_size(12.0)
             }),
         h_stack((
             label(|| "Cancel")
                 .on_click_stop(move |_| form_cancel.hide_add_form())
-                .style(|s| {
+                .style(move |s| {
+                    let cfg = config.get();
                     s.padding_horiz(14.0)
                         .padding_vert(7.0)
                         .border_radius(4.0)
-                        .color(Color::from_rgb8(150, 160, 180))
+                        .color(cfg.color(LapceColor::EDITOR_DIM))
                         .cursor(CursorStyle::Pointer)
-                        .hover(|s| s.color(Color::WHITE))
+                        .hover(|s| {
+                            s.color(cfg.color(LapceColor::EDITOR_FOREGROUND))
+                        })
                 }),
             label(|| "Save")
                 .on_click_stop(move |_| form_save.save_new_server())
-                .style(|s| {
+                .style(move |s| {
+                    let cfg = config.get();
                     s.padding_horiz(14.0)
                         .padding_vert(7.0)
-                        .background(Color::from_rgb8(37, 99, 235))
+                        .background(
+                            cfg.color(LapceColor::LAPCE_BUTTON_PRIMARY_BACKGROUND),
+                        )
                         .border_radius(4.0)
-                        .color(Color::WHITE)
+                        .color(
+                            cfg.color(LapceColor::LAPCE_BUTTON_PRIMARY_FOREGROUND),
+                        )
                         .font_size(12.0)
                         .cursor(CursorStyle::Pointer)
-                        .hover(|s| s.background(Color::from_rgb8(59, 130, 246)))
+                        .hover(|s| {
+                            s.background(
+                                cfg.color(
+                                    LapceColor::LAPCE_BUTTON_PRIMARY_BACKGROUND,
+                                )
+                                .multiply_alpha(0.85),
+                            )
+                        })
                 }),
         ))
         .style(|s| s.width_full().justify_end().gap(8.0)),
     ))
     .style(move |s| {
+        let cfg = config.get();
         s.apply_if(!form_visible.get(), |s| s.hide())
             .width_full()
-            .padding(14.0)
-            .background(Color::from_rgb8(20, 24, 36))
+            .padding(10.0)
+            .background(cfg.color(LapceColor::PANEL_BACKGROUND))
             .border_bottom(1.0)
-            .border_color(Color::from_rgba8(51, 65, 85, 100))
+            .border_color(cfg.color(LapceColor::LAPCE_BORDER))
     });
 
-    v_stack((header, add_form, empty_view, servers_list)).style(|s: Style| {
+    v_stack((header, add_form, empty_view, servers_list)).style(move |s: Style| {
+        let cfg = config.get();
         s.width_full()
             .height_full()
-            .background(Color::from_rgb8(13, 13, 18))
+            .background(cfg.color(LapceColor::PANEL_BACKGROUND))
     })
 }

@@ -97,6 +97,7 @@ mod tests {
     fn test_chat_message_sending() {
         let (_cx, chat_data) = setup_test_data();
 
+        chat_data.bridge_connected.set(true);
         chat_data.input.set("Hello OwnStack".to_string());
         chat_data.send_message();
 
