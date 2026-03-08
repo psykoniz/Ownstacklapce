@@ -105,7 +105,10 @@ pub static LSP_REGISTRY: &[LspEntry] = &[
     LspEntry {
         language_id: "haskell",
         file_extensions: &["hs", "lhs"],
-        binary_names: &["haskell-language-server-wrapper", "haskell-language-server"],
+        binary_names: &[
+            "haskell-language-server-wrapper",
+            "haskell-language-server",
+        ],
         install_hint: "ghcup install hls",
     },
     LspEntry {
@@ -151,9 +154,7 @@ pub fn find_in_path(binary: &str) -> bool {
 /// `LspDetectionResult::NotInstalled` with an install hint otherwise.
 /// Returns `None` if the language is not in the registry.
 pub fn detect_lsp_for_language(language_id: &str) -> Option<LspDetectionResult> {
-    let entry = LSP_REGISTRY
-        .iter()
-        .find(|e| e.language_id == language_id)?;
+    let entry = LSP_REGISTRY.iter().find(|e| e.language_id == language_id)?;
 
     for &binary in entry.binary_names {
         if find_in_path(binary) {
@@ -226,5 +227,76 @@ fn walk_dir(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{
+        detect_lsp_for_extension, detect_lsp_for_language,
+        detect_workspace_languages,
+    };
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ownstack-lsp-discovery-{prefix}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn detect_lsp_for_unknown_language_returns_none() {
+        assert!(detect_lsp_for_language("not-a-real-language").is_none());
+    }
+
+    #[test]
+    fn detect_lsp_for_known_extension_returns_some_result() {
+        assert!(detect_lsp_for_extension("rs").is_some());
+    }
+
+    #[test]
+    fn detect_workspace_languages_skips_hidden_and_common_build_dirs() {
+        let workspace = unique_temp_dir("workspace-languages");
+        fs::create_dir_all(workspace.join("src")).expect("create src");
+        fs::create_dir_all(workspace.join(".git")).expect("create .git");
+        fs::create_dir_all(workspace.join("node_modules"))
+            .expect("create node_modules");
+        fs::create_dir_all(workspace.join("target")).expect("create target");
+        fs::create_dir_all(workspace.join("pkg")).expect("create pkg");
+
+        fs::write(workspace.join("src").join("main.rs"), "fn main() {}")
+            .expect("write rust file");
+        fs::write(workspace.join("pkg").join("script.py"), "print('ok')")
+            .expect("write python file");
+        fs::write(
+            workspace.join("node_modules").join("index.js"),
+            "console.log('skip')",
+        )
+        .expect("write node file");
+        fs::write(workspace.join("target").join("generated.rs"), "// skip")
+            .expect("write generated file");
+        fs::write(workspace.join(".git").join("hidden.rs"), "// skip")
+            .expect("write hidden file");
+
+        let mut languages = detect_workspace_languages(&workspace);
+        languages.sort();
+
+        assert!(languages.contains(&"rust".to_string()));
+        assert!(languages.contains(&"python".to_string()));
+        assert!(!languages.contains(&"javascript".to_string()));
+
+        fs::remove_dir_all(&workspace).expect("remove temp dir");
     }
 }
