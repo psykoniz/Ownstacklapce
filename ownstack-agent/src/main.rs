@@ -516,6 +516,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         mgr.resolve(approved, &correlation_id).await;
                                     }
                                 }
+                                OwnStackRpc::KillSwitch => {
+                                    info!("Kill switch received — shutting down.");
+                                    std::process::exit(0);
+                                }
                                 OwnStackRpc::AiPrompt { .. }
                                 | OwnStackRpc::ToolExec { .. }
                                 | OwnStackRpc::SetAgentMode { .. }
