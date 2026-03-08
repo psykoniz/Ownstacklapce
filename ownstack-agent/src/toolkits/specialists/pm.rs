@@ -3,26 +3,62 @@
 
 use crate::toolkits::{ToolDef, ToolResult, Toolkit, ToolkitError};
 use async_trait::async_trait;
+use ownstack_engine::PathValidator;
 use serde_json::json;
+use std::path::Path;
 use std::path::PathBuf;
 use tracing::info;
 
 pub struct PMToolkit {
     workspace: PathBuf,
+    path_validator: PathValidator,
 }
 
 impl PMToolkit {
     pub fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+        let path_validator = PathValidator::new(workspace.clone());
+        Self {
+            workspace,
+            path_validator,
+        }
     }
 }
 
 impl Default for PMToolkit {
     fn default() -> Self {
+        let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
-            workspace: PathBuf::from("."),
+            path_validator: PathValidator::new(workspace.clone()),
+            workspace,
         }
     }
+}
+
+fn sanitize_feature_slug(feature: &str) -> String {
+    let mut slug = feature
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else if matches!(c, '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    while slug.contains("__") {
+        slug = slug.replace("__", "_");
+    }
+
+    let slug = slug.trim_matches('_').to_string();
+    let slug = if slug.is_empty() {
+        "specification".to_string()
+    } else {
+        slug
+    };
+    slug.chars().take(96).collect()
 }
 
 #[async_trait]
@@ -96,17 +132,26 @@ impl Toolkit for PMToolkit {
                      - Add feature flag if the change is large\n"
                 );
 
-                // Write spec to workspace
+                // Write spec to workspace (path-validated, traversal-safe).
+                let spec_file = format!("{}.md", sanitize_feature_slug(feature));
+                let spec_rel = PathBuf::from(".ownstack").join("specs").join(spec_file);
                 let spec_path = self
-                    .workspace
-                    .join(".ownstack")
-                    .join("specs")
-                    .join(format!("{}.md", feature.replace(' ', "_").to_lowercase()));
+                    .path_validator
+                    .validate(Path::new(&spec_rel))
+                    .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?;
 
                 if let Some(parent) = spec_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        ToolkitError::ExecutionFailed(format!(
+                            "Failed to create spec directory: {e}"
+                        ))
+                    })?;
                 }
-                let _ = std::fs::write(&spec_path, &spec);
+                std::fs::write(&spec_path, &spec).map_err(|e| {
+                    ToolkitError::ExecutionFailed(format!(
+                        "Failed to write spec file: {e}"
+                    ))
+                })?;
 
                 let mut result = ToolResult::success(spec);
                 result.metadata.insert(
@@ -125,7 +170,10 @@ impl Toolkit for PMToolkit {
 
                 info!("PMToolkit: reviewing plan at '{path}'");
 
-                let full_path = self.workspace.join(path);
+                let full_path = self
+                    .path_validator
+                    .validate(Path::new(path))
+                    .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?;
                 let content = std::fs::read_to_string(&full_path).map_err(|e| {
                     ToolkitError::ExecutionFailed(format!("Cannot read plan: {e}"))
                 })?;
@@ -200,5 +248,48 @@ fn scan_project_structure(workspace: &PathBuf) -> String {
         "No project files found.".to_string()
     } else {
         entries.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::toolkits::Toolkit;
+
+    #[tokio::test]
+    async fn review_plan_blocks_parent_traversal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let toolkit = PMToolkit::new(dir.path().to_path_buf());
+
+        let result = toolkit
+            .execute("review_plan", json!({"plan_path":"../outside.md"}))
+            .await;
+        assert!(matches!(result, Err(ToolkitError::SecurityViolation(_))));
+    }
+
+    #[tokio::test]
+    async fn create_specification_writes_inside_workspace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let toolkit = PMToolkit::new(dir.path().to_path_buf());
+
+        let result = toolkit
+            .execute(
+                "create_specification",
+                json!({
+                    "feature_name":"../../escape",
+                    "requirements":"must stay inside workspace"
+                }),
+            )
+            .await
+            .expect("create specification");
+
+        let spec_path = result
+            .metadata
+            .get("spec_path")
+            .expect("spec_path metadata");
+        let spec_path = PathBuf::from(spec_path);
+        let normalized = spec_path.to_string_lossy().replace('\\', "/");
+        assert!(normalized.contains("/.ownstack/specs/"));
+        assert!(spec_path.exists());
     }
 }

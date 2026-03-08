@@ -4,6 +4,7 @@
 //! Routes images to the multi-modal LLM for real analysis when a provider is configured.
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,6 +18,8 @@ use crate::provider::{
 };
 
 use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
+
+const MAX_INLINE_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 
 pub struct VisionToolkit {
     workspace: PathBuf,
@@ -176,6 +179,7 @@ impl Toolkit for VisionToolkit {
                 })?;
 
                 let b64 = base64_simd::STANDARD.encode_to_string(&data);
+                let image_sha256 = format!("{:x}", Sha256::digest(&data));
                 let media_type =
                     match validated_path.extension().and_then(|s| s.to_str()) {
                         Some("png") => "image/png",
@@ -231,7 +235,20 @@ impl Toolkit for VisionToolkit {
                 };
 
                 let mut result = ToolResult::success(analysis_text);
-                result.metadata.insert("image_data".to_string(), b64);
+                if data.len() <= MAX_INLINE_IMAGE_BYTES {
+                    result.metadata.insert("image_data".to_string(), b64);
+                } else {
+                    result.metadata.insert(
+                        "image_data_omitted".to_string(),
+                        "true".to_string(),
+                    );
+                }
+                result
+                    .metadata
+                    .insert("image_bytes".to_string(), data.len().to_string());
+                result
+                    .metadata
+                    .insert("image_sha256".to_string(), image_sha256);
                 result
                     .metadata
                     .insert("media_type".to_string(), media_type.to_string());

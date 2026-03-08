@@ -1,13 +1,75 @@
 use crate::toolkits::{ToolDef, ToolResult, Toolkit, ToolkitError};
 use async_trait::async_trait;
+use ownstack_engine::{
+    AuditEntry, AuditLogger, PathValidator, PolicyDecision, PolicyEngine,
+    ProcessSandbox, Sandbox, SandboxLevel,
+};
 use serde::Deserialize;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::info;
 
-pub struct QAToolkit;
+pub struct QAToolkit {
+    workspace: PathBuf,
+    path_validator: PathValidator,
+    audit_logger: AuditLogger,
+    session_id: String,
+}
+
+impl QAToolkit {
+    pub fn new(workspace: PathBuf) -> Self {
+        let session_id = format!(
+            "qa-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+        let path_validator = PathValidator::new(workspace.clone());
+        let audit_logger = AuditLogger::new(workspace.clone());
+        Self {
+            workspace,
+            path_validator,
+            audit_logger,
+            session_id,
+        }
+    }
+
+    fn audit(
+        &self,
+        command: &str,
+        policy_decision: PolicyDecision,
+        success: bool,
+        duration_ms: u64,
+        paths_accessed: Vec<String>,
+    ) {
+        let entry = AuditEntry {
+            timestamp: String::new(),
+            session_id: self.session_id.clone(),
+            action: "exec".to_string(),
+            command: command.to_string(),
+            policy_decision,
+            tool_name: "qa.run_tests".to_string(),
+            success,
+            duration_ms,
+            workspace: self.workspace.to_string_lossy().to_string(),
+            paths_accessed,
+        };
+
+        if let Err(err) = self.audit_logger.log(entry) {
+            tracing::warn!("qa audit log failed: {}", err);
+        }
+    }
+}
+
+impl Default for QAToolkit {
+    fn default() -> Self {
+        let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::new(workspace)
+    }
+}
 
 #[derive(Deserialize)]
 struct RunTestsArgs {
@@ -35,96 +97,70 @@ fn detect_test_runner(root: &Path) -> &'static str {
     }
 }
 
-/// Execute a test runner and capture output.
-fn run_test_command(
+fn quote_shell_arg(raw: &str) -> String {
+    if raw.is_empty() {
+        return "\"\"".to_string();
+    }
+    let needs_quotes = raw
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '"' | '\\' | '\''));
+    if !needs_quotes {
+        return raw.to_string();
+    }
+
+    let escaped = raw.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{}\"", escaped)
+}
+
+fn build_test_command(
     runner: &str,
     filter: Option<&str>,
-    cwd: &Path,
-    timeout_secs: u64,
-) -> (bool, String, String, u64) {
-    let start = std::time::Instant::now();
-
-    let mut cmd = match runner {
+) -> Result<String, ToolkitError> {
+    let command = match runner {
         "cargo_test" => {
-            let mut c = Command::new("cargo");
-            c.arg("test");
+            let mut cmd = String::from("cargo test");
             if let Some(f) = filter {
-                c.arg(f);
+                cmd.push(' ');
+                cmd.push_str(&quote_shell_arg(f));
             }
-            c.arg("--").arg("--nocapture");
-            c
+            cmd.push_str(" -- --nocapture");
+            cmd
         }
         "pytest" => {
-            let mut c = Command::new("python");
-            c.args(["-m", "pytest", "-v"]);
+            let mut cmd = String::from("python -m pytest -v");
             if let Some(f) = filter {
-                c.arg("-k").arg(f);
+                cmd.push_str(" -k ");
+                cmd.push_str(&quote_shell_arg(f));
             }
-            c
+            cmd
         }
-        "npm_test" => {
-            let mut c = Command::new("npm");
-            c.arg("test");
-            c
-        }
+        "npm_test" => "npm test".to_string(),
         "go_test" => {
-            let mut c = Command::new("go");
-            c.args(["test", "-v", "./..."]);
+            let mut cmd = String::from("go test -v ./...");
             if let Some(f) = filter {
-                c.arg("-run").arg(f);
+                cmd.push_str(" -run ");
+                cmd.push_str(&quote_shell_arg(f));
             }
-            c
+            cmd
         }
         _ => {
-            return (
-                false,
-                String::new(),
-                format!("Unknown test runner: {runner}"),
-                0,
-            );
+            return Err(ToolkitError::InvalidArguments(format!(
+                "Unknown test runner: {runner}"
+            )));
         }
     };
 
-    cmd.current_dir(cwd);
-
-    let output = match cmd.output() {
-        Ok(o) => o,
-        Err(e) => {
-            return (
-                false,
-                String::new(),
-                format!("Failed to execute {runner}: {e}"),
-                start.elapsed().as_millis() as u64,
-            );
-        }
-    };
-    let _ = timeout_secs; // timeout handled by ProcessSandbox in production
-
-    let duration_ms = start.elapsed().as_millis() as u64;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let success = output.status.success();
-
-    (success, stdout, stderr, duration_ms)
+    Ok(command)
 }
 
-#[derive(Deserialize)]
-struct AnalyzeTestFailureArgs {
-    test_file: String,
-    error_output: String,
-}
-
-#[derive(Deserialize, Default)]
-struct ListTestFilesArgs {
-    path: Option<String>,
-    limit: Option<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FailureAnalysis {
-    category: &'static str,
-    signals: Vec<&'static str>,
-    suggestions: Vec<&'static str>,
+fn timeout_to_level(timeout_secs: u64) -> SandboxLevel {
+    if timeout_secs <= 60 {
+        SandboxLevel::Light
+    } else if timeout_secs <= 300 {
+        SandboxLevel::Standard
+    } else {
+        SandboxLevel::Strict
+    }
 }
 
 fn should_skip_dir(path: &Path) -> bool {
@@ -255,6 +291,25 @@ fn collect_test_files(
     walk(root, root, limit, &mut files)?;
     files.sort_by_key(|p| normalize_path(p));
     Ok(files)
+}
+
+#[derive(Deserialize)]
+struct AnalyzeTestFailureArgs {
+    test_file: String,
+    error_output: String,
+}
+
+#[derive(Deserialize, Default)]
+struct ListTestFilesArgs {
+    path: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FailureAnalysis {
+    category: &'static str,
+    signals: Vec<&'static str>,
+    suggestions: Vec<&'static str>,
 }
 
 fn analyze_failure(error_output: &str) -> FailureAnalysis {
@@ -430,7 +485,7 @@ impl Toolkit for QAToolkit {
                         },
                         "timeout_secs": {
                             "type": "integer",
-                            "description": "Timeout in seconds (default: 120)."
+                            "description": "Timeout in seconds (default: 120, clamped to 30..600)."
                         }
                     },
                 }),
@@ -448,25 +503,17 @@ impl Toolkit for QAToolkit {
                 let parsed: AnalyzeTestFailureArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
 
-                let cwd = std::env::current_dir().map_err(|e| {
-                    ToolkitError::ExecutionFailed(format!(
-                        "Failed to resolve current directory: {}",
-                        e
-                    ))
-                })?;
-
                 let provided_path = Path::new(&parsed.test_file);
-                let resolved_path = if provided_path.is_absolute() {
-                    provided_path.to_path_buf()
-                } else {
-                    cwd.join(provided_path)
-                };
-                let file_exists = resolved_path.exists();
+                let resolved_path = self.path_validator.validate(provided_path).ok();
+                let file_exists = resolved_path.as_ref().is_some_and(|p| p.exists());
 
                 let analysis = analyze_failure(&parsed.error_output);
                 let response = json!({
                     "test_file": normalize_path(provided_path),
-                    "resolved_test_file": normalize_path(&resolved_path),
+                    "resolved_test_file": resolved_path
+                        .as_deref()
+                        .map(normalize_path)
+                        .unwrap_or_else(|| "(outside-workspace)".to_string()),
                     "test_file_exists": file_exists,
                     "category": analysis.category,
                     "signals": analysis.signals,
@@ -476,40 +523,98 @@ impl Toolkit for QAToolkit {
                 Ok(ToolResult::success(response.to_string()))
             }
             "run_tests" => {
-                let parsed: RunTestsArgs =
-                    serde_json::from_value(args).unwrap_or(RunTestsArgs {
-                        runner: None,
-                        filter: None,
-                        path: None,
-                        timeout_secs: None,
-                    });
+                let parsed: RunTestsArgs = serde_json::from_value(args)
+                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
 
-                let cwd = std::env::current_dir().map_err(|e| {
-                    ToolkitError::ExecutionFailed(format!("cwd: {e}"))
-                })?;
                 let work_dir = if let Some(p) = parsed.path.as_deref() {
-                    let candidate = Path::new(p);
-                    if candidate.is_absolute() {
-                        candidate.to_path_buf()
-                    } else {
-                        cwd.join(candidate)
-                    }
+                    self.path_validator
+                        .validate(Path::new(p))
+                        .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?
                 } else {
-                    cwd
+                    self.workspace.clone()
                 };
+
+                if !work_dir.exists() {
+                    return Err(ToolkitError::ExecutionFailed(format!(
+                        "Working directory does not exist: {}",
+                        work_dir.display()
+                    )));
+                }
+                if !work_dir.is_dir() {
+                    return Err(ToolkitError::ExecutionFailed(format!(
+                        "Working directory is not a directory: {}",
+                        work_dir.display()
+                    )));
+                }
 
                 let runner = parsed
                     .runner
                     .as_deref()
                     .unwrap_or_else(|| detect_test_runner(&work_dir));
-                let timeout = parsed.timeout_secs.unwrap_or(120);
+                if runner == "unknown" {
+                    return Err(ToolkitError::InvalidArguments(
+                        "Could not auto-detect test runner; provide runner explicitly"
+                            .to_string(),
+                    ));
+                }
 
-                info!("QAToolkit: running tests with '{runner}' in {:?}", work_dir);
+                let timeout_secs = parsed.timeout_secs.unwrap_or(120).clamp(30, 600);
+                let command =
+                    build_test_command(runner, parsed.filter.as_deref())?;
 
-                let (success, stdout, stderr, duration_ms) =
-                    run_test_command(runner, parsed.filter.as_deref(), &work_dir, timeout);
+                let decision = PolicyEngine::evaluate(&command);
+                match decision {
+                    PolicyDecision::Blocked => {
+                        self.audit(
+                            &command,
+                            PolicyDecision::Blocked,
+                            false,
+                            0,
+                            vec![work_dir.to_string_lossy().to_string()],
+                        );
+                        return Err(ToolkitError::SecurityViolation(format!(
+                            "Command blocked by policy: {}",
+                            command
+                        )));
+                    }
+                    PolicyDecision::Ask => {
+                        self.audit(
+                            &command,
+                            PolicyDecision::Ask,
+                            false,
+                            0,
+                            vec![work_dir.to_string_lossy().to_string()],
+                        );
+                        return Err(ToolkitError::SecurityViolation(format!(
+                            "Command requires approval: {}",
+                            command
+                        )));
+                    }
+                    PolicyDecision::Auto => {}
+                }
 
-                // If tests failed, auto-analyze the output
+                let sandbox = ProcessSandbox;
+                let level = timeout_to_level(timeout_secs);
+                let started = Instant::now();
+                info!(
+                    "QAToolkit: running tests with '{}' in {:?}",
+                    runner, work_dir
+                );
+
+                let sandbox_result = sandbox.exec(&command, &work_dir, level).await;
+                let duration_ms = started.elapsed().as_millis() as u64;
+                self.audit(
+                    &command,
+                    PolicyDecision::Auto,
+                    sandbox_result.success,
+                    duration_ms,
+                    vec![work_dir.to_string_lossy().to_string()],
+                );
+
+                let stdout = sandbox_result.stdout;
+                let stderr = sandbox_result.stderr;
+                let success = sandbox_result.success;
+
                 let analysis = if !success {
                     let failure = analyze_failure(&format!("{stdout}\n{stderr}"));
                     Some(json!({
@@ -523,7 +628,11 @@ impl Toolkit for QAToolkit {
 
                 // Truncate very long output
                 let stdout_trunc = if stdout.len() > 20_000 {
-                    format!("{}...[truncated, {} chars total]", &stdout[..20_000], stdout.len())
+                    format!(
+                        "{}...[truncated, {} chars total]",
+                        &stdout[..20_000],
+                        stdout.len()
+                    )
                 } else {
                     stdout
                 };
@@ -537,6 +646,10 @@ impl Toolkit for QAToolkit {
                     "runner": runner,
                     "success": success,
                     "duration_ms": duration_ms,
+                    "requested_timeout_secs": timeout_secs,
+                    "sandbox_level": format!("{:?}", level),
+                    "command": command,
+                    "work_dir": normalize_path(&work_dir),
                     "stdout": stdout_trunc,
                     "stderr": stderr_trunc,
                     "failure_analysis": analysis,
@@ -545,28 +658,22 @@ impl Toolkit for QAToolkit {
                 if success {
                     Ok(ToolResult::success(response.to_string()))
                 } else {
-                    Ok(ToolResult::failure(response.to_string(), Some(1)))
+                    Ok(ToolResult::failure(
+                        response.to_string(),
+                        sandbox_result.exit_code.or(Some(1)),
+                    ))
                 }
             }
             "list_test_files" => {
-                let parsed: ListTestFilesArgs =
-                    serde_json::from_value(args).unwrap_or_default();
-                let cwd = std::env::current_dir().map_err(|e| {
-                    ToolkitError::ExecutionFailed(format!(
-                        "Failed to resolve current directory: {}",
-                        e
-                    ))
-                })?;
+                let parsed: ListTestFilesArgs = serde_json::from_value(args)
+                    .unwrap_or_default();
 
                 let root = if let Some(path) = parsed.path.as_deref() {
-                    let p = Path::new(path);
-                    if p.is_absolute() {
-                        p.to_path_buf()
-                    } else {
-                        cwd.join(p)
-                    }
+                    self.path_validator
+                        .validate(Path::new(path))
+                        .map_err(|e| ToolkitError::SecurityViolation(e.to_string()))?
                 } else {
-                    cwd.clone()
+                    self.workspace.clone()
                 };
 
                 let limit = parsed.limit.unwrap_or(100).clamp(1, 500);
@@ -590,6 +697,7 @@ impl Toolkit for QAToolkit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::toolkits::Toolkit;
 
     #[test]
     fn detects_common_test_file_patterns() {
@@ -630,5 +738,29 @@ mod tests {
         assert!(normalized.iter().any(|p| p.ends_with("tests/auth.rs")));
         assert!(normalized.iter().any(|p| p.ends_with("src/user_test.rs")));
         assert!(!normalized.iter().any(|p| p.ends_with("src/main.rs")));
+    }
+
+    #[test]
+    fn build_test_command_quotes_filter() {
+        let cmd = build_test_command("pytest", Some("name with space")).expect("cmd");
+        assert!(cmd.contains("-k \"name with space\""));
+    }
+
+    #[tokio::test]
+    async fn run_tests_rejects_parent_traversal_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let toolkit = QAToolkit::new(temp.path().to_path_buf());
+
+        let result = toolkit
+            .execute(
+                "run_tests",
+                json!({
+                    "runner": "cargo_test",
+                    "path": "../outside"
+                }),
+            )
+            .await;
+
+        assert!(matches!(result, Err(ToolkitError::SecurityViolation(_))));
     }
 }

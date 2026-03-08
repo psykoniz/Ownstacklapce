@@ -34,15 +34,32 @@ pub fn load_local_grammars(src_dir: &PathBuf) -> Result<bool> {
         ));
     }
 
+    if !grammars_dir.exists() {
+        fs::create_dir_all(&grammars_dir)?;
+    }
+
     let mut copied = 0u32;
     for entry in fs::read_dir(src_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() {
-            let dest = grammars_dir.join(entry.file_name());
-            fs::copy(&path, &dest)?;
-            copied += 1;
+        if !path.is_file() {
+            continue;
         }
+
+        let is_dynlib = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| {
+                matches!(ext.to_ascii_lowercase().as_str(), "so" | "dylib" | "dll")
+            })
+            .unwrap_or(false);
+        if !is_dynlib {
+            continue;
+        }
+
+        let dest = grammars_dir.join(entry.file_name());
+        fs::copy(&path, &dest)?;
+        copied += 1;
     }
 
     trace!(
