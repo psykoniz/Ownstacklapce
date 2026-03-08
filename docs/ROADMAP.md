@@ -1,9 +1,8 @@
-# OwnStack Native IDE — Roadmap
+﻿# OwnStack Native IDE - Roadmap
 
-Date: 2026-03-02
+Date: 2026-03-08
 
 This roadmap is aligned with:
-
 - `GEMINI.md`
 - `AGENTS.md`
 - `.ownstack/current_phase.json`
@@ -11,59 +10,61 @@ This roadmap is aligned with:
 ## 1. Current baseline
 
 From `.ownstack/current_phase.json`:
-
 - `current_phase = 12`
 - `phase_0_complete` through `phase_12_complete` are `true`
 
-The project is in **post-phase stabilization**, not in feature bootstrap.
+The project is in post-phase stabilization, not bootstrap mode.
 
 ## 2. Completed milestones
 
-- Agent-first runtime mode/state loop (`Ask/Auto/Plan`, run-state deltas via `UiStateDelta` RPC)
-- Security path enforced: `Policy → Path → Sandbox → ToolResult → Audit`
-- Policy E2E with `correlation_id`, `timeout_secs`, `cwd` and modal UI (`window_tab.rs`)
-- JSON parse error hardening: `validate_and_parse_tool_args` (`orchestrator.rs:120`) returns structured errors with `raw_arguments` metadata — no silent null fallback
-- Anti-loop guard (`max_consecutive_failures = 10`) and tool-args size hard-limit (`16 KB`)
-- MCP runtime config + integration tests (reads `.ownstack/mcp_servers.json` and Claude Desktop config)
-- Workspace sandbox path-safety hardening
-- Onboarding wizard (5 steps, mounted at startup): provider selection, keyring key storage, mode selection, workspace config
-- OS-native keyring integration (Windows Credential Manager / macOS Keychain / Linux Secret Service) via `secret_store.rs`
-- 12 E2E test scripts in `tests/e2e/` + `scripts/healthcheck.py` (auto-skip without keys)
-- UI surfaces: status bar budgets, chat streaming/diffs/tool results, kill-switch, MCP panel (dynamic config), empty states
-- Windows installer with Python sidecar bundling (`scripts/build_windows_installer.ps1` + `scripts/bundle_python.py`)
+- Agent-first runtime mode/state loop (`ask`, `auto`, `plan`) through `UiStateDelta`
+- Security chain enforcement (`Policy -> Path -> Sandbox -> ToolResult -> Audit`)
+- Policy approval E2E with correlation IDs and timeout handling
+- Anti-loop and argument hard limits in orchestrator
+- MCP runtime config and integration tests
+- Onboarding wizard + OS keyring API key storage
+- Python-sidecar bridge path and native-agent path coexistence
+- OwnStack UI surfaces (chat, status, audit, MCP, palette, onboarding)
+- Python E2E script suite with healthcheck integration
+- Rust E2E harness crate (`ownstack-e2e`) with golden-path coverage
 
-## 3. Active priorities (next execution window)
+Recent stabilization additions:
+- E2E screenshot execution hardened (no shell command interpolation)
+- E2E launcher pipe deadlock mitigation
+- Missing-LSP detection wired to UI notification (`LspNotInstalled`)
+- Rust E2E fixture mutation serialization to reduce flaky parallel runs
 
-### P0 — CI and release hardening
+## 3. Active priorities
 
-1. Run `cargo check --workspace --all-targets` as CI gate (no compile errors).
-2. Run `scripts/healthcheck.py` as baseline smoke gate.
-3. Validate E2E scripts with a real LLM API key in a controlled environment (`test_scraper_bot_mission.py`, `test_mini_project_mission.py`).
-4. Cross-platform packaging: automate macOS DMG and Linux package signing in the release pipeline.
+### P0 - CI and release hardening
 
-### P1 — E2E mission reliability
+1. Keep `cargo check --workspace --all-targets` green.
+2. Keep baseline healthcheck scripts green.
+3. Validate complex mission E2E with real API keys in controlled CI.
+4. Continue release workflow hardening for signing/notarization and artifact verification.
 
-1. Track per-model/provider JSON parse failure rates using the structured metadata already in place (`raw_arguments`, `error_kind`).
-2. Maintain no-regression behavior for policy, MCP, sandbox, and keyring scripts.
+### P1 - E2E reliability and observability
 
-### P1 — Agent-first UI consistency
+1. Track and reduce JSON parse/tool-call failure loops in agent orchestration.
+2. Keep deterministic E2E startup/runtime behavior (`OWNSTACK_E2E`, window sizing, snapshot tooling).
+3. Improve signal-to-noise in E2E logs and artifact retention.
 
-1. Ensure all UI mode/status surfaces derive exclusively from runtime `UiStateDelta`.
-2. Keep chat/status/panel rendering thin (no duplicated business logic in UI).
-3. Continue UX polish only when it does not bypass runtime/security invariants.
+### P1 - Runtime/UI consistency
 
-## 4. Deferred items (not blocking baseline)
+1. Keep UI state driven from runtime `UiStateDelta`.
+2. Keep proxy as lifecycle owner for bridge/agent processes.
+3. Prevent local UI logic drift from runtime truth.
 
-- Settings Modal UI for key management (keyring works end-to-end; UI management panel is deferred)
-- AI model dropdown selector in chat UI
-- Per-message feedback buttons (thumbs up/down)
-- Further specialist toolkit depth (v2+ logic quality)
-- Extended docs and go-live communication material
+## 4. Deferred (non-blocking)
 
-## 5. Definition of done for this cycle
+- Expanded settings UX for key management and model selection
+- Additional specialist toolkit depth and mission quality improvements
+- Broader public release documentation and onboarding material
 
-1. Branch builds with no compile errors on workspace.
-2. No regression in core test suites and healthcheck scripts.
-3. At least one complex E2E mission validated successfully with a real API key.
-4. Updated docs reflect current runtime contract and phase status.
-5. Release branch is push-ready with reproducible validation commands.
+## 5. Definition of done for current cycle
+
+1. Workspace builds and tests without regression.
+2. Core E2E suites remain stable.
+3. Security chain remains enforced with no bypass path.
+4. Documentation reflects runtime reality and validation commands.
+5. Branch remains release-candidate ready for integration/push.

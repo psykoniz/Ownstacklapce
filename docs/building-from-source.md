@@ -1,50 +1,101 @@
-## Building from source
+﻿## Building OwnStack IDE from source
 
-It is easy to build Lapce from source on a GNU/Linux distribution. Cargo handles the build process, all you need to do, is ensure the correct dependencies are installed.
+OwnStack IDE is a Rust workspace.
+Builds are performed with Cargo.
 
-1. Install the Rust compiler and Cargo using [`rustup.rs`](https://rustup.rs/). If you already have the toolchain, ensure you are using latest Rust version.
+## 1. Prerequisites
 
-2. Install dependencies for your operating system:
+- Rust toolchain (recommended via https://rustup.rs)
+- Git
+- Platform dependencies below
 
-#### Ubuntu
+### Ubuntu / Debian
 ```sh
-sudo apt install clang libxkbcommon-x11-dev pkg-config libvulkan-dev libwayland-dev xorg-dev libxcb-shape0-dev libxcb-xfixes0-dev
+sudo apt install clang libxkbcommon-x11-dev pkg-config libvulkan-dev libwayland-dev xorg-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev
 ```
-#### Fedora
+
+### Fedora
 ```sh
 sudo dnf install clang libxkbcommon-x11-devel libxcb-devel vulkan-loader-devel wayland-devel openssl-devel pkgconf
 ```
-#### Void Linux
+
+### macOS
 ```sh
-sudo xbps-install -S base-devel clang libxkbcommon-devel vulkan-loader wayland-devel
+xcode-select --install
 ```
 
-3. Clone this repository (this command will clone to your home directory):
-```sh
-git clone https://github.com/lapce/lapce.git ~/lapce
-```
+### Windows
+- Visual Studio Build Tools with C++ workload
+- Latest stable Rust toolchain
 
-4. `cd` into the repository, and run the build command with the release flag
-```sh
-cd ~/lapce
-```
+## 2. Clone repository
 
 ```sh
-cargo install --path . --bin lapce --profile release-lto --locked
+git clone https://github.com/psykoniz/Ownstacklapce.git
+cd Ownstacklapce
 ```
 
-> If you use a different distribution, and are having trouble finding appropriate dependencies, let us know in an issue!
+## 3. Build binaries
 
-Once Lapce is compiled, the executable will be available in `$HOME/.cargo/bin/lapce` and should be available in `PATH` automatically.
+### Release editor binary
+```sh
+cargo build --release -p lapce-app --bin ownstack-ide
+```
 
-## Building using Docker or Podman
+### Release agent binary (optional explicit build)
+```sh
+cargo build --release -p ownstack-agent --bin ownstack-agent
+```
 
-Packages available in releases are built using containers based on multi-stage Dockerfiles. To easily orchestrate builds, there is a `docker-bake.hcl` manifest in root of repository that defines all stages and targets.
-If you want to build all packages for ubuntu, you can run `RELEASE_TAG_NAME=nightly docker buildx bake ubuntu` (`RELEASE_TAG_NAME` is a required environment variable used to tell what kind of release is being built as well as baking in the version itself).
-To scope in to specific distribution version, you can define target with it's version counterpart from matrix, e.g. to build only Ubuntu Focal package, you can run `RELEASE_TAG_NAME=nightly docker buildx bake ubuntu-focal`.
-Additionally to building multiple OS versions at the same time, Docker-based builds will also try to cross-compile Lapce for other architectures.
-This does not require QEMU installed as it's done via true cross-compilation meaning `HOST` will run your native OS/CPU architecture and `TARGET` will be the wanted architecture, instead of spawning container that's running OS using `TARGET` architecture.
+## 4. Run
 
-> ![WARNING]
-> Do not run plain targets like `ubuntu` or `fedora` if you don't have very powerful machine, as it will spawn many concurrent jobs
-> which will take a long time to build.
+### Linux/macOS
+```sh
+./target/release/ownstack-ide
+```
+
+### Windows (PowerShell)
+```powershell
+.\target\release\ownstack-ide.exe
+```
+
+## 5. Development workflow
+
+### Fast debug run
+```sh
+cargo run -p lapce-app --bin ownstack-ide
+```
+
+### Workspace checks
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace -- -D warnings
+cargo check --workspace --all-targets
+cargo test --workspace
+```
+
+## 6. E2E and health checks
+
+### Python script healthcheck
+```sh
+python scripts/healthcheck.py
+```
+
+### Rust E2E harness compile check
+```sh
+cargo test -p ownstack-e2e --no-run
+```
+
+Headless Linux note:
+- use `xvfb-run` for UI-driven E2E tests when no display server is available.
+
+## 7. Packaging builds
+
+Release packaging is orchestrated by:
+- `.github/workflows/release.yml`
+- platform scripts under `scripts/`
+
+For local packaging attempts, review:
+- `scripts/build_windows_installer.ps1`
+- `scripts/build_appimage.sh`
+- `scripts/build_flatpak_bundle.sh`

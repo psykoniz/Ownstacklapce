@@ -1,47 +1,80 @@
-# How to contribute
-Thank you for your interest in contributing to Lapce! No contribution is too small and we consider _all_ contributions to the project. There are many ways to contribute (a few are listed here) but if you think of something else, join us on [Discord](https://discord.gg/n8tGJ6Rn6D) or let us know via an [issue](https://github.com/lapce/lapce/issues).
+﻿# Contributing to OwnStack IDE
 
-## Questions
+Thanks for contributing.
 
-We're always around hanging on our [Discord](https://discord.gg/n8tGJ6Rn6D) server but if you're only participating on GitHub, you can open a [Discussion](https://github.com/lapce/lapce/discussions)
+OwnStack IDE is a Lapce-based Rust workspace with additional OwnStack runtime crates.
+Please keep contributions aligned with the project directives and phase constraints.
 
-## Feature Requests
+## Before opening a PR
 
-A feature request is _editor behaviour that you want to have included in Lapce_. We track feature requests on GitHub via [issues](https://github.com/lapce/lapce/issues). There are generally few kinds of features:
+1. Read `GEMINI.md` (full agent/project directives).
+2. Read `AGENTS.md` (condensed operational constraints).
+3. Read `docs/ARCHITECTURE.md` and confirm your change matches current architecture.
+4. Check `.ownstack/current_phase.json` and avoid future-phase implementation.
 
-### Core features
+## Where to discuss
 
-A feature more suited to the core development of Lapce. If this is the case please make a suggestion in an [issue](https://github.com/lapce/lapce/issues).
+- Discord: https://discord.gg/n8tGJ6Rn6D
+- Issues (this repository): https://github.com/psykoniz/Ownstacklapce/issues
 
-### Programming language support (autocompletion/intellisense/formatting)
+## Contribution scope
 
-A feature that relates to specific programming language or development tool that provides intellisense, or various editor commands.
-We do not track plugins development here, each plugin should have own issue tracker with eventual issues linked/referenced to main Lapce issue tracker.
+Typical accepted contributions:
+- Bug fixes
+- Tests and reliability improvements
+- Documentation improvements
+- Performance and DX improvements
+- Phase-appropriate features only
 
-### Syntax highlighting
+Out of scope without prior discussion:
+- Architecture rewrites
+- Security-flow bypasses
+- Protected file edits listed in `AGENTS.md`
 
-There is main issue for tracking syntax highlighting grammars support at https://github.com/lapce/lapce/issues/272.
+## Branch and commit guidance
 
----
+- Keep one logical change per commit.
+- Use descriptive commit messages.
+- Avoid `WIP` commit titles.
+- Do not commit secrets, local caches, build artifacts.
 
-To reduce the number of duplicate requests, please search through the issues to see if something has already been suggested. If a feature you want has been suggested, then comment on that issue to let us know it's popular. You can use emoji-reactions to show us just how popular.
+Suggested commit format:
+- `feat(scope): summary`
+- `fix(scope): summary`
+- `docs(scope): summary`
+- `test(scope): summary`
+- `security(scope): summary`
 
-## Bug Reports
+## Required local checks
 
-Bugs should also be reported on GitHub via [issues](https://github.com/lapce/lapce/issues). This allows us to track them and see how prevalent they are.
+Run before pushing:
 
-If you encounter a bug when using Lapce, check the issues to see if anyone else has encountered it. If it already exists, you can use emoji reactions so we can see community interest in specific issues and how important they are.
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace -- -D warnings
+cargo test --workspace
+cargo check --workspace --all-targets
+```
 
-Please follow the rule of [NoPlusOne](https://github.com/golang/go/wiki/NoPlusOne)
+For OwnStack runtime changes, also run:
 
-## Pull Requests
+```bash
+python scripts/healthcheck.py
+```
 
-If you want to write some code, develop the documentation, or otherwise work on a certain feature or bug, let us know by replying to or creating an [issue](https://github.com/lapce/lapce/issues).
+## Security and quality rules
 
-Run `cargo fmt --all` and `cargo clippy` on your code before submitting pull requests and fix any issues; this makes sure that the CI runs only fail on genuine build errors and not formatting/Clippy lints.
+- No `unwrap()` in production paths.
+- No `println!()` in production paths (use `tracing`).
+- No `unsafe` without a `// SAFETY:` explanation.
+- Keep security chain intact:
+  `Policy -> PathValidator -> Sandbox -> ToolResult -> AuditLog`
 
-We are currently in the process of improving the documentation for new developers/code contributors. Feel free to get started, or post a message on [Discord](https://discord.gg/n8tGJ6Rn6D) to see what can be done.
+## Documentation policy
 
-## Contact
-
-As always, if you have any questions or are just not sure where to start, post a message into the [Discord](https://discord.gg/n8tGJ6Rn6D) server. We suggest you start here as it is the most popular way for Lapce's contributors and users to communicate.
+If behavior changes, update the relevant docs in the same PR:
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/OPERATIONS.md`
+- `docs/ROADMAP.md`
+- feature-specific docs under `docs/`
