@@ -4,8 +4,18 @@
 
 ### Features/Changes
 
+- Integrate branch `claude/stabilize-rust-repo-8CA30` into `feat/agent-first-runtime-ui-state`
+- Add Rust E2E harness crate `ownstack-e2e` and JSON-RPC golden-path tests
+- Add E2E app control server support in `lapce-app` (`--e2e`, `--e2e-port`, `--window-size`)
+- Add workspace LSP discovery module and UI notification channel (`OwnStackRpc::LspNotInstalled`)
+- Add OwnStack packaging/rebranding updates for release workflow artifacts and metadata
+
 ### Bug Fixes
 
+- Harden E2E screenshot command execution by removing shell string interpolation (`sh -c`)
+- Prevent E2E launcher deadlocks by avoiding unconsumed stderr pipe buffering
+- Serialize Rust E2E tests that mutate shared fixture files to reduce flakiness
+- Wire missing-LSP detection from proxy buffer-open flow to UI notifications
 ## 0.4.6
 
 ### Features/Changes
