@@ -10,13 +10,49 @@ use lapce_core::directory::Directory;
 use crate::{tracing::*, update::ReleaseInfo};
 
 fn get_github_api(url: &str) -> Result<String> {
-    let user_agent = format!("Lapce/{}", lapce_core::meta::VERSION);
+    let user_agent = format!("OwnStack-IDE/{}", lapce_core::meta::VERSION);
     let resp = lapce_proxy::get_url(url, Some(user_agent.as_str()))?;
     if !resp.status().is_success() {
         return Err(anyhow!("get release info failed {}", resp.text()?));
     }
 
     Ok(resp.text()?)
+}
+
+/// Load grammars from a local directory instead of downloading.
+/// Copies .so/.dylib/.dll files into the standard grammars directory.
+pub fn load_local_grammars(src_dir: &PathBuf) -> Result<bool> {
+    use crate::tracing::*;
+
+    let grammars_dir = Directory::grammars_directory()
+        .ok_or_else(|| anyhow!("can't get grammars directory"))?;
+
+    if !src_dir.exists() {
+        return Err(anyhow!(
+            "--grammar-dir path does not exist: {}",
+            src_dir.display()
+        ));
+    }
+
+    let mut copied = 0u32;
+    for entry in fs::read_dir(src_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            let dest = grammars_dir.join(entry.file_name());
+            fs::copy(&path, &dest)?;
+            copied += 1;
+        }
+    }
+
+    trace!(
+        TraceLevel::INFO,
+        "Loaded {} grammar files from {}",
+        copied,
+        src_dir.display()
+    );
+
+    Ok(copied > 0)
 }
 
 pub fn find_grammar_release() -> Result<ReleaseInfo> {

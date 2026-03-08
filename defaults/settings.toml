@@ -6,7 +6,7 @@ color-theme = "Lapce Dark"
 icon-theme = "Lapce Codicons"
 custom-titlebar = true
 file-explorer-double-click = false
-auto-reload-plugin = false
+auto-reload-plugin = true
 
 [editor]
 font-family = "monospace"
@@ -64,7 +64,7 @@ diff-context-lines = 3
 scroll-speed-modifier = 1
 bracket-pair-colorization = false
 bracket-colorization-limit = 30000
-files-exclude = "**/{.git,.svn,.hg,CVS,.DS_Store,Thumbs.db}" # Glob patterns
+files-exclude = "**/{.git,.svn,.hg,CVS,.DS_Store,Thumbs.db,.ownstack}" # Glob patterns
 
 [terminal]
 font-family = ""

@@ -568,7 +568,7 @@ pub enum LapceWorkbenchCommand {
     RestartToUpdate,
 
     #[strum(serialize = "show_about")]
-    #[strum(message = "About Lapce")]
+    #[strum(message = "About OwnStack IDE")]
     ShowAbout,
 
     #[strum(message = "Save All Files")]
@@ -576,12 +576,12 @@ pub enum LapceWorkbenchCommand {
     SaveAll,
 
     #[cfg(target_os = "macos")]
-    #[strum(message = "Install Lapce to PATH")]
+    #[strum(message = "Install OwnStack IDE to PATH")]
     #[strum(serialize = "install_to_path")]
     InstallToPATH,
 
     #[cfg(target_os = "macos")]
-    #[strum(message = "Uninstall Lapce from PATH")]
+    #[strum(message = "Uninstall OwnStack IDE from PATH")]
     #[strum(serialize = "uninstall_from_path")]
     UninstallFromPATH,
 

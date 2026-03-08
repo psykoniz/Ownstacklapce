@@ -373,8 +373,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                                 .apply_suggested_action(action_for_click.clone());
                         })
                         .style(move |s| {
-                            s.width_full()
-                                .padding_horiz(10.0)
+                            s.padding_horiz(10.0)
                                 .padding_vert(7.0)
                                 .border_radius(8.0)
                                 .background(Color::from_rgba8(40, 50, 80, 120))
@@ -417,7 +416,11 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                     .color(Color::from_rgba8(180, 190, 220, 160))
             }),
         ))
-        .style(|s| s.width_full().gap(6.0)),
+        .style(|s| {
+            s.width_full()
+                .gap(6.0)
+                .flex_wrap(floem::style::FlexWrap::Wrap)
+        }),
         // Final Hint
         text("Tip: try '/plan' to switch agent to planning mode").style(|s| {
             s.font_size(10.0)

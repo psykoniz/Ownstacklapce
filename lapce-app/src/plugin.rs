@@ -185,6 +185,53 @@ impl PluginData {
 
         plugin.load_available_volts("", 0, core_rpc.clone());
 
+        // Auto-install recommended plugins if not already installed.
+        {
+            const RECOMMENDED_PLUGINS: &[(&str, &str)] = &[
+                ("dzhou121", "rust"),  // Rust language support
+            ];
+            let plugin_for_recommend = plugin.clone();
+            create_effect(move |prev_count: Option<usize>| {
+                let installed_count =
+                    plugin_for_recommend.installed.with(|i| i.len());
+                let available_count = plugin_for_recommend
+                    .available
+                    .volts
+                    .with(|v| v.len());
+                // Only run once when available volts first populate
+                if available_count == 0 || prev_count.is_some() {
+                    return installed_count;
+                }
+                for &(author, name) in RECOMMENDED_PLUGINS {
+                    let id = VoltID {
+                        author: author.to_string(),
+                        name: name.to_string(),
+                    };
+                    let already_installed = plugin_for_recommend
+                        .installed
+                        .with_untracked(|i| i.contains_key(&id));
+                    if !already_installed {
+                        let info = plugin_for_recommend
+                            .available
+                            .volts
+                            .with_untracked(|v| {
+                                v.get(&id)
+                                    .map(|d| d.info.get_untracked())
+                            });
+                        if let Some(info) = info {
+                            tracing::info!(
+                                "Auto-installing recommended plugin: {}/{}",
+                                author,
+                                name
+                            );
+                            plugin_for_recommend.install_volt(info);
+                        }
+                    }
+                }
+                installed_count
+            });
+        }
+
         {
             let plugin = plugin.clone();
             let extra_plugin_paths =

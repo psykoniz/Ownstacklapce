@@ -141,6 +141,12 @@ struct Cli {
     #[clap(long, env = "OWNSTACK_WINDOW_SIZE")]
     window_size: Option<String>,
 
+    /// Directory containing pre-built tree-sitter grammars (.so/.dylib/.dll).
+    /// When set, the IDE loads grammars from this directory instead of downloading
+    /// them, which is useful for offline/CI environments.
+    #[clap(long, env = "OWNSTACK_GRAMMAR_DIR")]
+    grammar_dir: Option<PathBuf>,
+
     /// Path(s) to plugins to load.
     /// This is primarily used for plugin development to make it easier to test changes to the
     /// plugin without needing to copy the plugin to the plugins directory.
@@ -3736,8 +3742,8 @@ fn window(window_data: WindowData) -> impl View {
             .or_else(|| window_tabs.last())
             .and_then(|(_, window_tab)| window_tab.workspace.display());
         match workspace {
-            Some(workspace) => format!("{workspace} - Lapce"),
-            None => "Lapce".to_string(),
+            Some(workspace) => format!("{workspace} - OwnStack IDE"),
+            None => "OwnStack IDE".to_string(),
         }
     })
     .on_event_stop(EventListener::ImeEnabled, move |_| {
@@ -3765,7 +3771,7 @@ fn window(window_data: WindowData) -> impl View {
             let lapce_command = window_tab.common.lapce_command;
             window_menu(lapce_command, workbench_command)
         } else {
-            Menu::new("Lapce")
+            Menu::new("OwnStack IDE")
         }
     })
     .style(|s| s.size_full())
@@ -3780,7 +3786,7 @@ pub fn launch() {
     }
 
     let (reload_handle, _guard) = logging::logging();
-    trace!(TraceLevel::INFO, "Starting up Lapce..");
+    trace!(TraceLevel::INFO, "Starting up OwnStack IDE..");
 
     #[cfg(feature = "vendored-fonts")]
     {
@@ -3817,6 +3823,7 @@ pub fn launch() {
     let is_e2e = cli.e2e;
     let e2e_port = cli.e2e_port;
     let window_size = cli.window_size.clone();
+    let grammar_dir = cli.grammar_dir.clone();
 
     // small hack to unblock terminal if launched from it
     // launch it as a separate process that waits
@@ -4031,9 +4038,28 @@ pub fn launch() {
                 }
             }
         });
+        let grammar_dir_for_thread = grammar_dir.clone();
         std::thread::Builder::new()
             .name("FindGrammar".to_owned())
             .spawn(move || {
+                // If --grammar-dir is set, copy grammars from that directory
+                // instead of downloading from GitHub.
+                if let Some(ref src_dir) = grammar_dir_for_thread {
+                    let updated = match grammars::load_local_grammars(src_dir) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            trace!(
+                                TraceLevel::ERROR,
+                                "failed to load local grammars from {}: {e}",
+                                src_dir.display()
+                            );
+                            false
+                        }
+                    };
+                    send(updated);
+                    return;
+                }
+
                 use self::grammars::*;
                 let updated = match find_grammar_release() {
                     Ok(release) => {
@@ -4283,10 +4309,10 @@ pub fn window_menu(
     lapce_command: Listener<LapceCommand>,
     workbench_command: Listener<LapceWorkbenchCommand>,
 ) -> Menu {
-    Menu::new("Lapce")
+    Menu::new("OwnStack IDE")
         .entry({
-            let mut menu = Menu::new("Lapce")
-                .entry(MenuItem::new("About Lapce").action(move || {
+            let mut menu = Menu::new("OwnStack IDE")
+                .entry(MenuItem::new("About OwnStack IDE").action(move || {
                     workbench_command.send(LapceWorkbenchCommand::ShowAbout)
                 }))
                 .separator()
@@ -4305,13 +4331,13 @@ pub fn window_menu(
                         )),
                 )
                 .separator()
-                .entry(MenuItem::new("Quit Lapce").action(move || {
+                .entry(MenuItem::new("Quit OwnStack IDE").action(move || {
                     workbench_command.send(LapceWorkbenchCommand::Quit);
                 }));
             if cfg!(target_os = "macos") {
                 menu = menu
                     .separator()
-                    .entry(MenuItem::new("Hide Lapce"))
+                    .entry(MenuItem::new("Hide OwnStack IDE"))
                     .entry(MenuItem::new("Hide Others"))
                     .entry(MenuItem::new("Show All"))
             }
@@ -4388,6 +4414,97 @@ pub fn window_menu(
                         data: None,
                     });
                 })),
+        )
+        .entry(
+            Menu::new("View")
+                .entry(MenuItem::new("Command Palette").action(move || {
+                    workbench_command.send(LapceWorkbenchCommand::PaletteCommand);
+                }))
+                .separator()
+                .entry(MenuItem::new("Zoom In").action(move || {
+                    workbench_command.send(LapceWorkbenchCommand::ZoomIn);
+                }))
+                .entry(MenuItem::new("Zoom Out").action(move || {
+                    workbench_command.send(LapceWorkbenchCommand::ZoomOut);
+                }))
+                .entry(MenuItem::new("Reset Zoom").action(move || {
+                    workbench_command.send(LapceWorkbenchCommand::ZoomReset);
+                }))
+                .separator()
+                .entry(MenuItem::new("Toggle File Explorer").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::ToggleFileExplorerVisual);
+                }))
+                .entry(MenuItem::new("Toggle Source Control").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::ToggleSourceControlVisual);
+                }))
+                .entry(MenuItem::new("Toggle Search").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::ToggleSearchVisual);
+                }))
+                .entry(MenuItem::new("Toggle Problems").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::ToggleProblemVisual);
+                })),
+        )
+        .entry(
+            Menu::new("Go")
+                .entry(MenuItem::new("Go to File").action(move || {
+                    workbench_command.send(LapceWorkbenchCommand::Palette);
+                }))
+                .entry(MenuItem::new("Go to Line").action(move || {
+                    workbench_command.send(LapceWorkbenchCommand::PaletteLine);
+                }))
+                .entry(MenuItem::new("Go to Symbol").action(move || {
+                    workbench_command.send(LapceWorkbenchCommand::PaletteSymbol);
+                }))
+                .separator()
+                .entry(MenuItem::new("Go to Implementation").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::GoToImplementation);
+                }))
+                .separator()
+                .entry(MenuItem::new("Jump Back").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::JumpLocationBackward);
+                }))
+                .entry(MenuItem::new("Jump Forward").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::JumpLocationForward);
+                })),
+        )
+        .entry(
+            Menu::new("Terminal")
+                .entry(MenuItem::new("New Terminal").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::NewTerminalTab);
+                }))
+                .entry(MenuItem::new("Toggle Terminal").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::ToggleTerminalVisual);
+                }))
+                .separator()
+                .entry(MenuItem::new("Focus Terminal").action(move || {
+                    workbench_command
+                        .send(LapceWorkbenchCommand::FocusTerminal);
+                })),
+        )
+        .entry(
+            Menu::new("Help")
+                .entry(MenuItem::new("About OwnStack IDE").action(move || {
+                    workbench_command.send(LapceWorkbenchCommand::ShowAbout);
+                }))
+                .separator()
+                .entry(MenuItem::new("Open Log File").action(move || {
+                    workbench_command.send(LapceWorkbenchCommand::OpenLogFile);
+                }))
+                .entry(MenuItem::new("Open Settings Directory").action(
+                    move || {
+                        workbench_command
+                            .send(LapceWorkbenchCommand::OpenSettingsDirectory);
+                    },
+                )),
         )
 }
 fn tab_secondary_click(

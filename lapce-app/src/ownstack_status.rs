@@ -188,6 +188,44 @@ impl OwnStackStatusData {
     pub fn calls_budget_level(&self) -> BudgetLevel {
         budget_level(self.budget_calls.get(), self.budget_max_calls.get())
     }
+
+    /// Single combined budget label: "tok:0/28k · steps:0/50 · calls:0/100"
+    pub fn combined_budget_label(&self) -> String {
+        let tok = format_budget_badge(
+            "\u{25CF}",
+            self.budget_tokens.get(),
+            self.budget_max_tokens.get(),
+        );
+        let steps = format_budget_badge(
+            "s",
+            self.budget_steps.get(),
+            self.budget_max_steps.get(),
+        );
+        let calls = format_budget_badge(
+            "c",
+            self.budget_calls.get(),
+            self.budget_max_calls.get(),
+        );
+        format!("{tok} {steps} {calls}")
+    }
+
+    /// Worst budget level across all 3 metrics.
+    pub fn combined_budget_level(&self) -> BudgetLevel {
+        let levels = [
+            self.tokens_budget_level(),
+            self.steps_budget_level(),
+            self.calls_budget_level(),
+        ];
+        if levels.contains(&BudgetLevel::Critical) {
+            BudgetLevel::Critical
+        } else if levels.contains(&BudgetLevel::Warning) {
+            BudgetLevel::Warning
+        } else if levels.iter().all(|l| *l == BudgetLevel::Unknown) {
+            BudgetLevel::Unknown
+        } else {
+            BudgetLevel::Healthy
+        }
+    }
 }
 
 fn mode_label(mode: &AgentMode) -> &'static str {
