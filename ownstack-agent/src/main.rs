@@ -372,7 +372,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(ownstack_agent::toolkits::vision::VisionToolkit::new(
             workspace.clone(),
             session_id.clone(),
-        ));
+        ).with_provider(provider.clone()));
 
     // Register default toolkits
     orchestrator.register_toolkit(core_toolkit.clone());
@@ -384,7 +384,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     orchestrator
         .register_toolkit(Arc::new(ownstack_agent::toolkits::extra::ExtraToolkit));
     orchestrator.register_toolkit(Arc::new(
-        ownstack_agent::toolkits::browser::BrowserToolkit,
+        ownstack_agent::toolkits::browser::BrowserToolkit::new(
+            workspace.clone(),
+        ),
     ));
     orchestrator.register_toolkit(Arc::new(
         ownstack_agent::toolkits::time_machine::TimeMachineToolkit::new(
@@ -395,7 +397,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ownstack_agent::toolkits::specialists::PMToolkit::new(workspace.clone()),
     ));
     orchestrator.register_toolkit(Arc::new(
-        ownstack_agent::toolkits::specialists::QAToolkit,
+        ownstack_agent::toolkits::specialists::QAToolkit::new(
+            workspace.clone(),
+        ),
     ));
     orchestrator.register_toolkit(Arc::new(
         ownstack_agent::toolkits::specialists::SecurityToolkit,

@@ -185,10 +185,18 @@ impl PluginData {
 
         plugin.load_available_volts("", 0, core_rpc.clone());
 
-        // Auto-install recommended plugins if not already installed.
-        {
+        // Auto-install recommended plugins only when explicitly enabled.
+        let auto_install_recommended = std::env::var(
+            "OWNSTACK_AUTO_INSTALL_RECOMMENDED_PLUGINS",
+        )
+        .ok()
+        .map(|v| {
+            matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
+        })
+        .unwrap_or(false);
+        if auto_install_recommended {
             const RECOMMENDED_PLUGINS: &[(&str, &str)] = &[
-                ("dzhou121", "rust"),  // Rust language support
+                ("dzhou121", "rust"), // Rust language support
             ];
             let plugin_for_recommend = plugin.clone();
             create_effect(move |prev_count: Option<usize>| {
@@ -198,7 +206,7 @@ impl PluginData {
                     .available
                     .volts
                     .with(|v| v.len());
-                // Only run once when available volts first populate
+                // Only run once when available volts first populate.
                 if available_count == 0 || prev_count.is_some() {
                     return installed_count;
                 }
