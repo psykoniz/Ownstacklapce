@@ -1,14 +1,20 @@
 //! Vision Toolkit
 //!
 //! Tools for capturing UI state and analyzing images.
+//! Routes images to the multi-modal LLM for real analysis when a provider is configured.
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::warn;
 
 use ownstack_engine::{AuditEntry, AuditLogger, PathValidator, PolicyDecision};
+
+use crate::provider::{
+    ContentPart, ImageSource, LlmMessage, LlmProvider, MessageContent, ProviderOptions,
+};
 
 use super::{ToolDef, ToolResult, Toolkit, ToolkitError};
 
@@ -17,6 +23,7 @@ pub struct VisionToolkit {
     session_id: String,
     path_validator: PathValidator,
     audit_logger: AuditLogger,
+    provider: Option<Arc<dyn LlmProvider + Send + Sync>>,
 }
 
 impl VisionToolkit {
@@ -28,7 +35,16 @@ impl VisionToolkit {
             session_id,
             path_validator,
             audit_logger,
+            provider: None,
         }
+    }
+
+    pub fn with_provider(
+        mut self,
+        provider: Arc<dyn LlmProvider + Send + Sync>,
+    ) -> Self {
+        self.provider = Some(provider);
+        self
     }
 
     fn audit(
@@ -81,7 +97,7 @@ impl Toolkit for VisionToolkit {
         vec![
             ToolDef {
                 name: "analyze_image".to_string(),
-                description: "Analyze an image file using the multi-modal agent"
+                description: "Analyze an image file using the multi-modal LLM agent"
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -164,17 +180,65 @@ impl Toolkit for VisionToolkit {
                     match validated_path.extension().and_then(|s| s.to_str()) {
                         Some("png") => "image/png",
                         Some("jpg") | Some("jpeg") => "image/jpeg",
+                        Some("gif") => "image/gif",
+                        Some("webp") => "image/webp",
                         _ => "image/png",
                     };
 
-                let mut result = ToolResult::success(format!(
-                    "Image loaded: {}. Prompt: {}",
-                    parsed.image_path, parsed.prompt
-                ));
+                // Route to multimodal LLM if provider is available
+                let analysis_text = if let Some(provider) = &self.provider {
+                    let messages = vec![LlmMessage {
+                        role: crate::provider::Role::User,
+                        content: MessageContent::Parts(vec![
+                            ContentPart::Image {
+                                source: ImageSource {
+                                    type_: "base64".to_string(),
+                                    media_type: media_type.to_string(),
+                                    data: b64.clone(),
+                                },
+                            },
+                            ContentPart::Text {
+                                text: parsed.prompt.clone(),
+                            },
+                        ]),
+                        tool_call_id: None,
+                        tool_calls: None,
+                    }];
+
+                    match provider
+                        .complete(messages, None, ProviderOptions::default())
+                        .await
+                    {
+                        Ok(response) => response.content.unwrap_or_else(|| {
+                            format!(
+                                "Image loaded: {}. No analysis returned.",
+                                parsed.image_path
+                            )
+                        }),
+                        Err(err) => {
+                            warn!("Vision LLM analysis failed: {err}");
+                            format!(
+                                "Image loaded: {}. LLM analysis failed: {err}. Prompt: {}",
+                                parsed.image_path, parsed.prompt
+                            )
+                        }
+                    }
+                } else {
+                    format!(
+                        "Image loaded: {}. No LLM provider configured for multimodal analysis. Prompt: {}",
+                        parsed.image_path, parsed.prompt
+                    )
+                };
+
+                let mut result = ToolResult::success(analysis_text);
                 result.metadata.insert("image_data".to_string(), b64);
                 result
                     .metadata
                     .insert("media_type".to_string(), media_type.to_string());
+                result.metadata.insert(
+                    "llm_analyzed".to_string(),
+                    if self.provider.is_some() { "true" } else { "false" }.to_string(),
+                );
 
                 self.audit(
                     "read_image",

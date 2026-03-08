@@ -4,8 +4,109 @@ use serde::Deserialize;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use tracing::info;
 
 pub struct QAToolkit;
+
+#[derive(Deserialize)]
+struct RunTestsArgs {
+    runner: Option<String>,
+    filter: Option<String>,
+    path: Option<String>,
+    timeout_secs: Option<u64>,
+}
+
+/// Detect the appropriate test runner from workspace files.
+fn detect_test_runner(root: &Path) -> &'static str {
+    if root.join("Cargo.toml").exists() {
+        "cargo_test"
+    } else if root.join("pytest.ini").exists()
+        || root.join("setup.py").exists()
+        || root.join("pyproject.toml").exists()
+    {
+        "pytest"
+    } else if root.join("package.json").exists() {
+        "npm_test"
+    } else if root.join("go.mod").exists() {
+        "go_test"
+    } else {
+        "unknown"
+    }
+}
+
+/// Execute a test runner and capture output.
+fn run_test_command(
+    runner: &str,
+    filter: Option<&str>,
+    cwd: &Path,
+    timeout_secs: u64,
+) -> (bool, String, String, u64) {
+    let start = std::time::Instant::now();
+
+    let mut cmd = match runner {
+        "cargo_test" => {
+            let mut c = Command::new("cargo");
+            c.arg("test");
+            if let Some(f) = filter {
+                c.arg(f);
+            }
+            c.arg("--").arg("--nocapture");
+            c
+        }
+        "pytest" => {
+            let mut c = Command::new("python");
+            c.args(["-m", "pytest", "-v"]);
+            if let Some(f) = filter {
+                c.arg("-k").arg(f);
+            }
+            c
+        }
+        "npm_test" => {
+            let mut c = Command::new("npm");
+            c.arg("test");
+            c
+        }
+        "go_test" => {
+            let mut c = Command::new("go");
+            c.args(["test", "-v", "./..."]);
+            if let Some(f) = filter {
+                c.arg("-run").arg(f);
+            }
+            c
+        }
+        _ => {
+            return (
+                false,
+                String::new(),
+                format!("Unknown test runner: {runner}"),
+                0,
+            );
+        }
+    };
+
+    cmd.current_dir(cwd);
+
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            return (
+                false,
+                String::new(),
+                format!("Failed to execute {runner}: {e}"),
+                start.elapsed().as_millis() as u64,
+            );
+        }
+    };
+    let _ = timeout_secs; // timeout handled by ProcessSandbox in production
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let success = output.status.success();
+
+    (success, stdout, stderr, duration_ms)
+}
 
 #[derive(Deserialize)]
 struct AnalyzeTestFailureArgs {
@@ -306,6 +407,34 @@ impl Toolkit for QAToolkit {
                     },
                 }),
             },
+            ToolDef {
+                name: "run_tests".to_string(),
+                description:
+                    "Execute tests using the appropriate runner (cargo test, pytest, npm test, go test). Auto-detects runner from workspace."
+                        .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "runner": {
+                            "type": "string",
+                            "description": "Test runner override: 'cargo_test', 'pytest', 'npm_test', 'go_test'. Auto-detected if omitted.",
+                            "enum": ["cargo_test", "pytest", "npm_test", "go_test"]
+                        },
+                        "filter": {
+                            "type": "string",
+                            "description": "Filter pattern for test names (e.g. 'test_auth' for pytest -k, or test name for cargo test)."
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Working directory for test execution. Defaults to current workspace."
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "description": "Timeout in seconds (default: 120)."
+                        }
+                    },
+                }),
+            },
         ]
     }
 
@@ -345,6 +474,79 @@ impl Toolkit for QAToolkit {
                 });
 
                 Ok(ToolResult::success(response.to_string()))
+            }
+            "run_tests" => {
+                let parsed: RunTestsArgs =
+                    serde_json::from_value(args).unwrap_or(RunTestsArgs {
+                        runner: None,
+                        filter: None,
+                        path: None,
+                        timeout_secs: None,
+                    });
+
+                let cwd = std::env::current_dir().map_err(|e| {
+                    ToolkitError::ExecutionFailed(format!("cwd: {e}"))
+                })?;
+                let work_dir = if let Some(p) = parsed.path.as_deref() {
+                    let candidate = Path::new(p);
+                    if candidate.is_absolute() {
+                        candidate.to_path_buf()
+                    } else {
+                        cwd.join(candidate)
+                    }
+                } else {
+                    cwd
+                };
+
+                let runner = parsed
+                    .runner
+                    .as_deref()
+                    .unwrap_or_else(|| detect_test_runner(&work_dir));
+                let timeout = parsed.timeout_secs.unwrap_or(120);
+
+                info!("QAToolkit: running tests with '{runner}' in {:?}", work_dir);
+
+                let (success, stdout, stderr, duration_ms) =
+                    run_test_command(runner, parsed.filter.as_deref(), &work_dir, timeout);
+
+                // If tests failed, auto-analyze the output
+                let analysis = if !success {
+                    let failure = analyze_failure(&format!("{stdout}\n{stderr}"));
+                    Some(json!({
+                        "category": failure.category,
+                        "signals": failure.signals,
+                        "suggestions": failure.suggestions,
+                    }))
+                } else {
+                    None
+                };
+
+                // Truncate very long output
+                let stdout_trunc = if stdout.len() > 20_000 {
+                    format!("{}...[truncated, {} chars total]", &stdout[..20_000], stdout.len())
+                } else {
+                    stdout
+                };
+                let stderr_trunc = if stderr.len() > 10_000 {
+                    format!("{}...[truncated]", &stderr[..10_000])
+                } else {
+                    stderr
+                };
+
+                let response = json!({
+                    "runner": runner,
+                    "success": success,
+                    "duration_ms": duration_ms,
+                    "stdout": stdout_trunc,
+                    "stderr": stderr_trunc,
+                    "failure_analysis": analysis,
+                });
+
+                if success {
+                    Ok(ToolResult::success(response.to_string()))
+                } else {
+                    Ok(ToolResult::failure(response.to_string(), Some(1)))
+                }
             }
             "list_test_files" => {
                 let parsed: ListTestFilesArgs =

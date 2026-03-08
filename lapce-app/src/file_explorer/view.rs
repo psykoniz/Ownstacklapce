@@ -67,6 +67,7 @@ pub fn file_explorer_panel(
     let config = window_tab_data.common.config;
     let data = window_tab_data.file_explorer.clone();
     let source_control = window_tab_data.source_control.clone();
+    let editor_tabs = window_tab_data.main_split.editor_tabs;
     PanelBuilder::new(config, position)
         .add_height_style(
             "Open Editors",
@@ -74,7 +75,11 @@ pub fn file_explorer_panel(
             container(open_editors_view(window_tab_data.clone()))
                 .style(|s| s.size_full()),
             window_tab_data.panel.section_open(PanelSection::OpenEditor),
-            move |s| s.apply_if(!config.get().ui.open_editors_visible, |s| s.hide()),
+            move |s| {
+                let visible = config.get().ui.open_editors_visible;
+                let has_tabs = !editor_tabs.get().is_empty();
+                s.apply_if(!visible || !has_tabs, |s| s.hide())
+            },
         )
         .add(
             "File Explorer",

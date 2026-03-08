@@ -20,7 +20,7 @@ ed25519-dalek = "2.1"
 # RAG / ML
 
 # HTTP client for LLM APIs
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

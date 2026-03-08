@@ -1,4 +1,4 @@
-E2E_READY:19879
-[2m2026-03-07T22:31:56.102423Z[0m [31mERROR[0m main [2mwgpu_hal::vulkan::instance[0m[2m:[0m [2m79:[0m GENERAL [Loader Message (0x0)]
+E2E_READY:19880
+[2m2026-03-07T23:02:16.543659Z[0m [31mERROR[0m main [2mwgpu_hal::vulkan::instance[0m[2m:[0m [2m79:[0m GENERAL [Loader Message (0x0)]
 	vkCreateInstance: Found no drivers!    
-[2m2026-03-07T22:31:56.102486Z[0m [31mERROR[0m main [2mwgpu_hal::vulkan::instance[0m[2m:[0m [2m131:[0m 	objects: (type: INSTANCE, hndl: 0x5653566ab320, name: ?)    
+[2m2026-03-07T23:02:16.543715Z[0m [31mERROR[0m main [2mwgpu_hal::vulkan::instance[0m[2m:[0m [2m131:[0m 	objects: (type: INSTANCE, hndl: 0x559cc95c1060, name: ?)    
