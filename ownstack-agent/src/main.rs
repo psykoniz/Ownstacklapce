@@ -381,8 +381,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     orchestrator.register_toolkit(healer_toolkit.clone());
     orchestrator.register_toolkit(multivers_toolkit.clone());
     orchestrator.register_toolkit(vision_toolkit.clone());
-    orchestrator
-        .register_toolkit(Arc::new(ownstack_agent::toolkits::extra::ExtraToolkit));
+    orchestrator.register_toolkit(Arc::new(
+        ownstack_agent::toolkits::extra::ExtraToolkit::new(Some(
+            provider.clone(),
+        )),
+    ));
     orchestrator.register_toolkit(Arc::new(
         ownstack_agent::toolkits::browser::BrowserToolkit,
     ));
