@@ -145,29 +145,93 @@ fn validate_and_parse_tool_args(
         });
     }
 
-    // 2. Parse guard
-    serde_json::from_str(args_str).map_err(|e| {
-        // Classify the error kind coarsely for signature matching
-        let error_kind = if e.is_eof() {
-            "unexpected_eof"
-        } else if e.is_syntax() {
-            "syntax_error"
-        } else if e.is_data() {
-            "data_error"
-        } else {
-            "other"
-        };
+    // 2. Try parsing as-is first (fast path)
+    if let Ok(value) = serde_json::from_str(args_str) {
+        return Ok(value);
+    }
 
-        let args_prefix: String = args_str.chars().take(64).collect();
-        // We piggy-back the signature data in a temporary error – the
-        // caller decides whether to abort or continue.
-        OrchestratorError::RepeatedInvalidToolArgs {
-            model: String::new(), // filled in by caller
-            tool_name: tool_name.to_string(),
-            count: 0, // filled in by caller
-            input_excerpt: format!("{}: {:?}", error_kind, args_prefix),
-        }
+    // 3. Sanitization fallback — attempt to clean common LLM JSON issues
+    let sanitized = sanitize_json_args(args_str);
+    if let Ok(value) = serde_json::from_str(&sanitized) {
+        tracing::warn!(
+            tool = tool_name,
+            "Tool args required JSON sanitization to parse correctly"
+        );
+        return Ok(value);
+    }
+
+    // 4. Parse guard — emit structured error for the tracker
+    let parse_err = serde_json::from_str::<serde_json::Value>(args_str).unwrap_err();
+    let error_kind = if parse_err.is_eof() {
+        "unexpected_eof"
+    } else if parse_err.is_syntax() {
+        "syntax_error"
+    } else if parse_err.is_data() {
+        "data_error"
+    } else {
+        "other"
+    };
+
+    let args_prefix: String = args_str.chars().take(64).collect();
+    OrchestratorError::RepeatedInvalidToolArgs {
+        model: String::new(), // filled in by caller
+        tool_name: tool_name.to_string(),
+        count: 0, // filled in by caller
+        input_excerpt: format!("{}: {:?}", error_kind, args_prefix),
+    };
+
+    Err(OrchestratorError::RepeatedInvalidToolArgs {
+        model: String::new(),
+        tool_name: tool_name.to_string(),
+        count: 0,
+        input_excerpt: format!("{}: {:?}", error_kind, args_prefix),
     })
+}
+
+/// Best-effort JSON sanitization for common LLM output issues.
+///
+/// Handles:
+/// - Trailing commas before `}` or `]`
+/// - Markdown code fences wrapping JSON
+/// - Leading/trailing whitespace and control characters
+/// - Missing closing braces (simple heuristic)
+fn sanitize_json_args(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+
+    // Strip markdown code fences
+    if s.starts_with("```") {
+        // Remove first line (```json or ```)
+        if let Some(pos) = s.find('\n') {
+            s = s[pos + 1..].to_string();
+        }
+        // Remove trailing ```
+        if s.ends_with("```") {
+            s.truncate(s.len() - 3);
+        }
+        s = s.trim().to_string();
+    }
+
+    // Strip control characters except whitespace
+    s = s
+        .chars()
+        .filter(|c| !c.is_control() || c.is_ascii_whitespace())
+        .collect();
+
+    // Remove trailing commas before } or ]
+    // Pattern: ,\s*} or ,\s*]
+    if let Ok(re) = regex::Regex::new(r",\s*([}\]])") {
+        s = re.replace_all(&s, "$1").to_string();
+    }
+
+    // Simple heuristic: if JSON starts with { but doesn't end with }, add one
+    let trimmed = s.trim();
+    if trimmed.starts_with('{') && !trimmed.ends_with('}') {
+        s.push('}');
+    } else if trimmed.starts_with('[') && !trimmed.ends_with(']') {
+        s.push(']');
+    }
+
+    s
 }
 
 // ─── Budget ────────────────────────────────────────────────────────

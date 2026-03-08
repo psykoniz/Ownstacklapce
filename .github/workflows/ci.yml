@@ -6,6 +6,7 @@ on:
     branches:
       - master
       - ownstack/main
+      - feat/agent-first-runtime-ui-state
       - claude/**
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -32,7 +33,7 @@ jobs:
   required-gates:
     name: Required Gates
     if: github.event.pull_request.draft == false
-    needs: [check-workspace, test-ownstack, healthcheck]
+    needs: [check-workspace, test-ownstack, healthcheck, smoke-release]
     runs-on: ubuntu-latest
     steps:
       - name: Confirm mandatory gates
@@ -194,3 +195,47 @@ jobs:
         run: cargo build -p ownstack-agent -p lapce-proxy --locked
       - name: Run healthcheck.py
         run: python scripts/healthcheck.py
+
+  smoke-release:
+    name: Release Smoke Test
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update toolchain
+        run: rustup update --no-self-update
+      - name: Install dependencies
+        run: sudo make ubuntu-deps
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+      - name: Build release binaries
+        run: |
+          cargo build --locked --release -p lapce-app --bin ownstack-ide
+          cargo build --locked --release -p ownstack-agent --bin ownstack-agent
+          cargo build --locked --release -p lapce-proxy --bin lapce-proxy
+      - name: Verify binaries exist
+        run: |
+          test -f target/release/ownstack-ide
+          test -f target/release/ownstack-agent
+          test -f target/release/lapce-proxy
+          echo "All release binaries produced successfully"
+
+  smoke-e2e-offline:
+    name: Offline E2E Smoke
+    if: github.event.pull_request.draft == false
+    needs: [check-workspace]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update toolchain
+        run: rustup update --no-self-update
+      - name: Install dependencies
+        run: sudo make ubuntu-deps
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+      - name: Run offline smoke test
+        run: cargo test -p ownstack-agent --test e2e_offline_smoke --locked

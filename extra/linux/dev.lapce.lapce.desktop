@@ -2,19 +2,19 @@
 Version=1.0
 Type=Application
 
-Name=Lapce
-Comment=Lightning-fast and powerful code editor written in Rust
+Name=OwnStack IDE
+Comment=Rust-native IDE with embedded AI agents
 Categories=Development;IDE;
 GenericName=Code Editor
-StartupWMClass=lapce
+StartupWMClass=ownstack-ide
 
 Icon=dev.lapce.lapce
-Exec=lapce %F
+Exec=ownstack-ide %F
 Terminal=false
 MimeType=text/plain;inode/directory;
 Actions=new-window;
 
 [Desktop Action new-window]
 Name=New Window
-Exec=lapce --new %F
+Exec=ownstack-ide --new %F
 Icon=dev.lapce.lapce
