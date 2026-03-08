@@ -28,6 +28,7 @@ temp_ownstack/
 *.pem
 .ownstack/secrets/
 .ownstack/audit.jsonl
+.ownstack/telemetry/
 
 # Python / PyInstaller
 __pycache__/
