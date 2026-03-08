@@ -1,14 +1,14 @@
-[OwnStack] Onboarding state: completed=false, path=Some("/tmp/ide_e2e_run/xdg_config/ownstack-debug/ownstack-onboarding.json")
-[e2e] Control server listening on 127.0.0.1:19879
-[2m2026-03-07T22:31:56.027416Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m OwnStack Agent starting in "/tmp/ide_e2e_run/test_workspace"
-[2m2026-03-07T22:31:56.027511Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m Session: sess-10909-1772922716027
-[2m2026-03-07T22:31:56.028155Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m LLM Provider: Local
+[OwnStack] Onboarding state: completed=false, path=Some("/tmp/ide_e2e_v3/xdg_config/ownstack-debug/ownstack-onboarding.json")
+[e2e] Control server listening on 127.0.0.1:19880
 [e2e] WindowTabData registered — driver ready
-[2m2026-03-07T22:31:56.070717Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m No budgets file found at "/tmp/ide_e2e_run/test_workspace/.ownstack/budgets.json" (using defaults)
-[2m2026-03-07T22:31:56.072954Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m WASI plugin search in: "/tmp/ide_e2e_run/test_workspace/plugins"
-[2m2026-03-07T22:31:56.081805Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m WASI plugins found: 0
-[2m2026-03-07T22:31:56.109322Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m Starting in IDE RPC mode
-[2m2026-03-07T22:31:56.110244Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m Agent RPC stdin loop started
 error: XDG_RUNTIME_DIR is invalid or not set in the environment.
 libEGL warning: DRI3 error: Could not get DRI3 device
 libEGL warning: Ensure your X server supports DRI3 to get accelerated rendering
+[2m2026-03-07T23:02:17.592556Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m OwnStack Agent starting in "/tmp/ide_e2e_v3/ws"
+[2m2026-03-07T23:02:17.592677Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m Session: sess-2807-1772924537591
+[2m2026-03-07T23:02:17.595488Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m LLM Provider: Local
+[2m2026-03-07T23:02:17.665410Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m No budgets file found at "/tmp/ide_e2e_v3/ws/.ownstack/budgets.json" (using defaults)
+[2m2026-03-07T23:02:17.784003Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m WASI plugin search in: "/tmp/ide_e2e_v3/ws/plugins"
+[2m2026-03-07T23:02:17.785491Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m WASI plugins found: 0
+[2m2026-03-07T23:02:17.809452Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m Starting in IDE RPC mode
+[2m2026-03-07T23:02:17.810249Z[0m [32m INFO[0m [2mownstack_agent[0m[2m:[0m Agent RPC stdin loop started
