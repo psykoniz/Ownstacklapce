@@ -50,6 +50,7 @@ use tokio::io::AsyncBufReadExt;
 
 use crate::{
     buffer::{Buffer, get_mod_time, load_file},
+    lsp_discovery::{LspDetectionResult, detect_lsp_for_language},
     plugin::{PluginCatalogRpcHandler, catalog::PluginCatalog},
     terminal::{Terminal, TerminalSender},
     watcher::{FileWatcher, Notify, WatchToken},
@@ -148,6 +149,7 @@ pub struct Dispatcher {
     tab_id: usize,
     bridge: Arc<Mutex<Option<PythonBridge>>>,
     agent: Arc<Mutex<Option<NativeAgent>>>,
+    notified_missing_lsps: HashSet<String>,
 }
 
 pub struct NativeAgent {
@@ -658,9 +660,11 @@ impl ProxyHandler for Dispatcher {
                 let buffer = Buffer::new(buffer_id, path.clone());
                 let content = buffer.rope.to_string();
                 let read_only = buffer.read_only;
+                let language_id = buffer.language_id.to_string();
+                self.notify_if_lsp_missing(&language_id);
                 self.catalog_rpc.did_open_document(
                     &path,
-                    buffer.language_id.to_string(),
+                    language_id,
                     buffer.rev as i32,
                     content.clone(),
                 );
@@ -1477,6 +1481,33 @@ impl Dispatcher {
             tab_id: 1,
             bridge: Arc::new(Mutex::new(None)),
             agent: Arc::new(Mutex::new(None)),
+            notified_missing_lsps: HashSet::new(),
+        }
+    }
+
+    fn notify_if_lsp_missing(&mut self, language_id: &str) {
+        if language_id.trim().is_empty()
+            || self.notified_missing_lsps.contains(language_id)
+        {
+            return;
+        }
+
+        let Some(result) = detect_lsp_for_language(language_id) else {
+            return;
+        };
+
+        if let LspDetectionResult::NotInstalled {
+            language_id,
+            install_hint,
+        } = result
+        {
+            self.notified_missing_lsps.insert(language_id.clone());
+            self.core_rpc.notification(CoreNotification::OwnStack {
+                message: lapce_rpc::ownstack::OwnStackRpc::LspNotInstalled {
+                    language_id,
+                    install_hint,
+                },
+            });
         }
     }
 

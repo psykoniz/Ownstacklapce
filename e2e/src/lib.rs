@@ -7,10 +7,12 @@ use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::mpsc,
+    thread,
     time::{Duration, Instant},
 };
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ── IDE process management ───────────────────────────────────────────────────
 
@@ -36,7 +38,8 @@ impl IdeProcess {
         cmd.env("OWNSTACK_E2E", "1")
             .env("OWNSTACK_E2E_PORT", "0")
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            // Avoid deadlocks from unconsumed stderr when the IDE logs heavily.
+            .stderr(Stdio::inherit());
 
         for (k, v) in &extra_env {
             cmd.env(k, v);
@@ -49,31 +52,51 @@ impl IdeProcess {
         // Use --wait so the process doesn't fork
         cmd.arg("--wait");
 
-        let mut child = cmd.spawn().map_err(|e| format!("failed to spawn IDE: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to spawn IDE: {e}"))?;
 
-        let stdout = child.stdout.take().expect("stdout was piped");
-        let reader = BufReader::new(stdout);
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "stdout was not piped".to_string())?;
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<u16, String>>();
 
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let mut port = None;
-
-        for line in reader.lines() {
-            if Instant::now() > deadline {
-                break;
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        eprintln!("[e2e-client] IDE stdout: {line}");
+                        if let Some(p) = line.strip_prefix("E2E_READY:") {
+                            let parsed = p
+                                .trim()
+                                .parse::<u16>()
+                                .map_err(|e| format!("bad port: {e}"));
+                            let _ = ready_tx.send(parsed);
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!("reading stdout: {e}")));
+                        return;
+                    }
+                }
             }
-            let line = line.map_err(|e| format!("reading stdout: {e}"))?;
-            eprintln!("[e2e-client] IDE stdout: {line}");
-            if let Some(p) = line.strip_prefix("E2E_READY:") {
-                port = Some(
-                    p.trim()
-                        .parse::<u16>()
-                        .map_err(|e| format!("bad port: {e}"))?,
-                );
-                break;
-            }
-        }
+            let _ =
+                ready_tx.send(Err("IDE stdout closed before E2E_READY".to_string()));
+        });
 
-        let port = port.ok_or_else(|| "IDE did not print E2E_READY within 30s".to_string())?;
+        let port = match ready_rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(Ok(port)) => port,
+            Ok(Err(e)) => return Err(e),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err("IDE did not print E2E_READY within 30s".to_string());
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("stdout reader thread disconnected".to_string());
+            }
+        };
 
         Ok(Self { child, port })
     }
@@ -131,7 +154,8 @@ impl E2eClient {
             .send()
             .map_err(|e| format!("HTTP error: {e}"))?;
 
-        let json: Value = resp.json().map_err(|e| format!("JSON parse error: {e}"))?;
+        let json: Value =
+            resp.json().map_err(|e| format!("JSON parse error: {e}"))?;
 
         if let Some(err) = json.get("result").and_then(|r| r.get("error")) {
             return Err(format!("server error: {err}"));
@@ -168,7 +192,11 @@ impl E2eClient {
         self.call("redo", json!({}))
     }
 
-    pub fn find_replace(&mut self, find: &str, replace: &str) -> Result<Value, String> {
+    pub fn find_replace(
+        &mut self,
+        find: &str,
+        replace: &str,
+    ) -> Result<Value, String> {
         self.call("find_replace", json!({ "find": find, "replace": replace }))
     }
 
@@ -203,7 +231,8 @@ impl E2eClient {
             match self.ping() {
                 Ok(_) => {
                     // Now wait for actual idle
-                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    let remaining =
+                        deadline.saturating_duration_since(Instant::now());
                     if remaining.is_zero() {
                         return Ok(());
                     }

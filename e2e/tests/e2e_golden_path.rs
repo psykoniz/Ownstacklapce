@@ -20,11 +20,16 @@
 
 use std::{
     fs,
-    path::PathBuf,
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
 use ownstack_e2e::{E2eClient, IdeProcess, find_ide_binary, fixtures_project};
+
+fn e2e_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 /// Helper: launch IDE with the fixture workspace, return (process, client).
 fn launch_ide() -> (IdeProcess, E2eClient) {
@@ -58,6 +63,7 @@ fn launch_ide() -> (IdeProcess, E2eClient) {
 
 #[test]
 fn t01_launch_ready() {
+    let _guard = e2e_test_lock().lock().expect("lock e2e tests");
     let (_proc, mut client) = launch_ide();
 
     // Ping should succeed
@@ -77,6 +83,7 @@ fn t01_launch_ready() {
 
 #[test]
 fn t02_open_workspace() {
+    let _guard = e2e_test_lock().lock().expect("lock e2e tests");
     let (_proc, mut client) = launch_ide();
 
     let state = client.get_state().expect("get_state failed");
@@ -93,6 +100,7 @@ fn t02_open_workspace() {
 
 #[test]
 fn t03_open_edit_save_persist() {
+    let _guard = e2e_test_lock().lock().expect("lock e2e tests");
     let (_proc, mut client) = launch_ide();
 
     let fixture_dir = fixtures_project();
@@ -132,6 +140,7 @@ fn t03_open_edit_save_persist() {
 
 #[test]
 fn t04_undo_redo() {
+    let _guard = e2e_test_lock().lock().expect("lock e2e tests");
     let (_proc, mut client) = launch_ide();
 
     let fixture_dir = fixtures_project();
@@ -184,6 +193,7 @@ fn t04_undo_redo() {
 
 #[test]
 fn t05_find_replace() {
+    let _guard = e2e_test_lock().lock().expect("lock e2e tests");
     let (_proc, mut client) = launch_ide();
 
     let fixture_dir = fixtures_project();
@@ -226,6 +236,7 @@ fn t05_find_replace() {
 
 #[test]
 fn t06_command_palette() {
+    let _guard = e2e_test_lock().lock().expect("lock e2e tests");
     let (_proc, mut client) = launch_ide();
 
     // Try running a known workbench command
@@ -246,7 +257,10 @@ fn t06_command_palette() {
 
     // Verify we can get state after command
     let state = client.get_state().expect("get_state after command");
-    assert!(state.get("workspace").is_some(), "state should have workspace field");
+    assert!(
+        state.get("workspace").is_some(),
+        "state should have workspace field"
+    );
 }
 
 // ── Test 7 (bonus): diagnostics ──────────────────────────────────────────────
@@ -254,6 +268,7 @@ fn t06_command_palette() {
 #[test]
 #[ignore = "requires LSP server running — enable when rust-analyzer is available"]
 fn t07_diagnostics() {
+    let _guard = e2e_test_lock().lock().expect("lock e2e tests");
     let (_proc, mut client) = launch_ide();
 
     let fixture_dir = fixtures_project();
@@ -270,9 +285,9 @@ fn t07_diagnostics() {
 
     // If LSP provided diagnostics, verify they exist for the broken file
     if let Some(map) = diag_map {
-        let has_diags = map.values().any(|v| {
-            v.as_array().map_or(false, |arr| !arr.is_empty())
-        });
+        let has_diags = map
+            .values()
+            .any(|v| v.as_array().map_or(false, |arr| !arr.is_empty()));
         if has_diags {
             eprintln!("[e2e] diagnostics found: {diags}");
         } else {

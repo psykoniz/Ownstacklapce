@@ -15,22 +15,18 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::{Sender, bounded};
 use floem::reactive::{SignalGet, SignalWith};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{
-    command::InternalCommand,
-    doc::DocContent,
-    window_tab::WindowTabData,
-};
+use crate::{command::InternalCommand, doc::DocContent, window_tab::WindowTabData};
 
 type QueryFn = Box<dyn FnOnce(&Rc<WindowTabData>) -> Value + Send>;
 
@@ -130,7 +126,8 @@ pub fn register_tab_data(tab: &Rc<WindowTabData>) {
     create_effect(move |_| {
         if ping_signal.get().is_some() {
             // Drain all pending queries
-            let queries: Vec<_> = pending_for_effect.lock().unwrap().drain(..).collect();
+            let queries: Vec<_> =
+                pending_for_effect.lock().unwrap().drain(..).collect();
             UI_TAB.with(|cell| {
                 if let Some(tab) = cell.borrow().as_ref() {
                     for (f, reply_tx) in queries {
@@ -213,10 +210,7 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
 
     let request: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
 
-    let method = request
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let method = request.get("method").and_then(Value::as_str).unwrap_or("");
     let params = request.get("params").cloned().unwrap_or(json!({}));
     let id = request.get("id").cloned().unwrap_or(json!(null));
 
@@ -268,7 +262,9 @@ fn with_handle<F: FnOnce(&E2eTabHandle) -> Value>(f: F) -> Value {
     let guard = cell.lock().unwrap();
     match guard.as_ref() {
         Some(handle) => f(handle),
-        None => json!({ "error": "IDE not yet initialized (WindowTabData not registered)" }),
+        None => {
+            json!({ "error": "IDE not yet initialized (WindowTabData not registered)" })
+        }
     }
 }
 
@@ -279,7 +275,10 @@ where
     with_handle(|handle| {
         let (reply_tx, reply_rx) = bounded(1);
         let boxed: QueryFn = Box::new(f);
-        match handle.query_tx.send_timeout((boxed, reply_tx), Duration::from_secs(5)) {
+        match handle
+            .query_tx
+            .send_timeout((boxed, reply_tx), Duration::from_secs(5))
+        {
             Ok(()) => match reply_rx.recv_timeout(Duration::from_secs(10)) {
                 Ok(val) => val,
                 Err(e) => json!({ "error": format!("query timeout: {e}") }),
@@ -315,7 +314,9 @@ fn cmd_open_file(params: Value) -> Value {
         None => return json!({ "error": "missing 'path' param" }),
     };
     query_ui(move |tab| {
-        tab.common.internal_command.send(InternalCommand::OpenFile { path });
+        tab.common
+            .internal_command
+            .send(InternalCommand::OpenFile { path });
         json!({ "status": "ok" })
     })
 }
@@ -426,28 +427,28 @@ fn cmd_run_command(params: Value) -> Value {
                 tab.run_workbench_command(cmd, None);
                 json!({ "status": "ok" })
             }
-            Err(_) => json!({ "error": format!("unknown workbench command: {name}") }),
+            Err(_) => {
+                json!({ "error": format!("unknown workbench command: {name}") })
+            }
         }
     })
 }
 
 fn cmd_get_state(_params: Value) -> Value {
     query_ui(|tab| {
-        let workspace_path = tab
-            .workspace
-            .path
-            .as_ref()
-            .map(|p| p.display().to_string());
+        let workspace_path =
+            tab.workspace.path.as_ref().map(|p| p.display().to_string());
 
-        let active_file = tab
-            .main_split
-            .active_editor
-            .get_untracked()
-            .and_then(|e| {
+        let active_file =
+            tab.main_split.active_editor.get_untracked().and_then(|e| {
                 let doc = e.doc();
                 match doc.content.get_untracked() {
-                    DocContent::File { path, .. } => Some(path.display().to_string()),
-                    DocContent::Scratch { name, .. } => Some(format!("scratch:{name}")),
+                    DocContent::File { path, .. } => {
+                        Some(path.display().to_string())
+                    }
+                    DocContent::Scratch { name, .. } => {
+                        Some(format!("scratch:{name}"))
+                    }
                     DocContent::Local => Some("local".to_string()),
                     DocContent::History(_) => Some("history".to_string()),
                 }
@@ -521,11 +522,12 @@ fn cmd_get_editor_text(_params: Value) -> Value {
         if let Some(editor) = tab.main_split.active_editor.get_untracked() {
             let doc = editor.doc();
             let text = doc.buffer.with_untracked(|b| b.to_string());
-            let path = if let DocContent::File { path, .. } = doc.content.get_untracked() {
-                Some(path.display().to_string())
-            } else {
-                None
-            };
+            let path =
+                if let DocContent::File { path, .. } = doc.content.get_untracked() {
+                    Some(path.display().to_string())
+                } else {
+                    None
+                };
             json!({ "text": text, "path": path })
         } else {
             json!({ "error": "no active editor" })
@@ -583,19 +585,54 @@ fn cmd_screenshot(params: Value) -> Value {
         .and_then(Value::as_str)
         .unwrap_or("/tmp/e2e_screenshot.png");
 
-    let result = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("xwd -root -silent | convert xwd:- {path} 2>&1"))
-        .output();
+    if path.trim().is_empty() {
+        return json!({ "error": "path must not be empty" });
+    }
 
-    match result {
+    let xwd_output = match std::process::Command::new("xwd")
+        .args(["-root", "-silent"])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return json!({ "error": format!("xwd failed: {stderr}") });
+        }
+        Err(e) => {
+            return json!({ "error": format!("failed to launch xwd: {e}") });
+        }
+    };
+
+    let mut convert = match std::process::Command::new("convert")
+        .arg("xwd:-")
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            return json!({ "error": format!("failed to launch convert: {e}") });
+        }
+    };
+
+    if let Some(stdin) = convert.stdin.as_mut() {
+        if let Err(e) = stdin.write_all(&xwd_output.stdout) {
+            return json!({ "error": format!("failed to pipe xwd output to convert: {e}") });
+        }
+    } else {
+        return json!({ "error": "failed to open convert stdin" });
+    }
+
+    match convert.wait_with_output() {
         Ok(output) if output.status.success() => {
             json!({ "status": "ok", "path": path })
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            json!({ "error": format!("screenshot failed: {stderr}") })
+            json!({ "error": format!("convert failed: {stderr}") })
         }
-        Err(e) => json!({ "error": format!("screenshot command failed: {e}") }),
+        Err(e) => json!({ "error": format!("failed waiting for convert: {e}") }),
     }
 }
