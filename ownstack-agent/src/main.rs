@@ -392,7 +392,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     ));
     orchestrator.register_toolkit(Arc::new(
-        ownstack_agent::toolkits::specialists::PMToolkit,
+        ownstack_agent::toolkits::specialists::PMToolkit::new(workspace.clone()),
     ));
     orchestrator.register_toolkit(Arc::new(
         ownstack_agent::toolkits::specialists::QAToolkit,
@@ -526,7 +526,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 | OwnStackRpc::SuggestionDecision { .. }
                                 | OwnStackRpc::UiSnapshot { .. }
                                 | OwnStackRpc::CaptureScreenshot
-                                | OwnStackRpc::UiSnapshotRequest => {
+                                | OwnStackRpc::UiSnapshotRequest
+                                | OwnStackRpc::LspNotInstalled { .. } => {
                                     let _ = work_tx_reader.send(rpc);
                                 }
                                 _ => {
@@ -719,9 +720,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     message_id,
                 } => {
                     info!(
-                        "Suggestion decision received: {} ({})",
+                        "Suggestion decision received: {} (msg={})",
                         decision, message_id
                     );
+                    // Acknowledge the decision back to the UI
+                    send_ui_delta(UiStateDelta {
+                        mode: None,
+                        run_state: None,
+                        budget: None,
+                        context: None,
+                        mission: None,
+                        pending_approval: None,
+                        tool_event: Some(ToolEventSnapshot {
+                            tool_name: "suggestion".to_string(),
+                            status: decision.clone(),
+                            summary: Some(format!(
+                                "User {} suggestion {}",
+                                decision, message_id
+                            )),
+                            duration_ms: None,
+                        }),
+                        alert: None,
+                    });
+                    send_rpc_notification(OwnStackRpc::ToolResultMsg {
+                        json_result: serde_json::json!({
+                            "suggestion_decision": decision,
+                            "message_id": message_id,
+                        })
+                        .to_string(),
+                    });
                 }
                 OwnStackRpc::UiSnapshotRequest => {
                     // Forward to UI through proxy so lapce-app can emit UiSnapshot metadata.
@@ -777,6 +804,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     send_rpc_notification(OwnStackRpc::ToolResultMsg {
                         json_result: response.to_string(),
+                    });
+                }
+                OwnStackRpc::LspNotInstalled {
+                    language_id,
+                    install_hint,
+                } => {
+                    info!(
+                        "LSP not installed for '{}': {}",
+                        language_id, install_hint
+                    );
+                    send_ui_delta(UiStateDelta {
+                        mode: None,
+                        run_state: None,
+                        budget: None,
+                        context: None,
+                        mission: None,
+                        pending_approval: None,
+                        tool_event: None,
+                        alert: Some(lapce_rpc::ownstack::AlertSnapshot {
+                            severity: lapce_rpc::ownstack::AlertSeverity::Info,
+                            message: format!(
+                                "LSP server for '{}' is not installed. {}",
+                                language_id, install_hint
+                            ),
+                        }),
+                    });
+                    send_rpc_notification(OwnStackRpc::ToolResultMsg {
+                        json_result: serde_json::json!({
+                            "lsp_not_installed": true,
+                            "language_id": language_id,
+                            "install_hint": install_hint,
+                        })
+                        .to_string(),
                     });
                 }
                 _ => {

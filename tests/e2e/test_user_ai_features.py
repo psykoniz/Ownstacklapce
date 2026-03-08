@@ -10,8 +10,18 @@ Covers:
   5.  Plan-mode mission (content streamed, run_state transitions)
   6.  run_state idle after completion
   7.  tool_exec RPC → ToolResultMsg
-  8.  MCP mock server handshake
-  9.  kill_switch terminates the agent cleanly
+  8.  Time Machine toolkit (create_snapshot, list_snapshots, current_diff)
+  9.  Browser toolkit (browse_url with HTTP fallback, invalid URL)
+  10. Vision toolkit (capture_ui)
+  11. Healer toolkit (heal command)
+  12. Multivers toolkit (A/B variant run)
+  13. Specialist toolkits (PM, Designer, QA, Reviewer, Security, Docs)
+  14. Screenshot Capture (CaptureScreenshot RPC)
+  15. SuggestionDecision RPC acknowledgment
+  16. LspNotInstalled notification → alert
+  17. UI Snapshot request/response flow
+  18. MCP mock server handshake
+  19. kill_switch terminates the agent cleanly
 
 Usage:
   export ANTHROPIC_API_KEY=sk-ant-...   # or OPENROUTER_API_KEY / OPENAI_API_KEY
@@ -383,7 +393,293 @@ def test_tool_exec(proc: subprocess.Popen, q: queue.Queue) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 8 – MCP mock server handshake
+# Test 8 – Time Machine toolkit (create_snapshot, list_snapshots)
+# ---------------------------------------------------------------------------
+
+def test_time_machine(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test Time Machine snapshot lifecycle via tool_exec."""
+    # Create a snapshot
+    send(proc, {
+        "method": "tool_exec",
+        "params": {
+            "tool_name": "time_machine:create_snapshot",
+            "command": json.dumps({"message": "E2E test snapshot"}),
+        },
+    })
+    msgs, _ = collect(q, timeout=15)
+    got_result = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("time_machine:create_snapshot → result received", got_result)
+
+    if got_result:
+        result_msg = next(m for m in msgs if m.get("method") == "tool_result_msg")
+        jr = (result_msg.get("params") or {}).get("json_result", "")
+        record("time_machine:create_snapshot → success or no-changes",
+               "snapshot" in jr.lower() or "no changes" in jr.lower() or "Snapshot" in jr,
+               "optional")
+
+    # List snapshots
+    send(proc, {
+        "method": "tool_exec",
+        "params": {
+            "tool_name": "time_machine:list_snapshots",
+            "command": json.dumps({"limit": 5}),
+        },
+    })
+    msgs, _ = collect(q, timeout=10)
+    got_list = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("time_machine:list_snapshots → result received", got_list)
+
+    # Current diff
+    send(proc, {
+        "method": "tool_exec",
+        "params": {
+            "tool_name": "time_machine:current_diff",
+            "command": "{}",
+        },
+    })
+    msgs, _ = collect(q, timeout=10)
+    got_diff = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("time_machine:current_diff → result received", got_diff)
+
+
+# ---------------------------------------------------------------------------
+# Test 9 – Browser toolkit (browse_url with HTTP fallback)
+# ---------------------------------------------------------------------------
+
+def test_browser_toolkit(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test browser toolkit HTTP fallback (no Chrome needed)."""
+    send(proc, {
+        "method": "tool_exec",
+        "params": {
+            "tool_name": "browser:browse_url",
+            "command": json.dumps({
+                "url": "https://httpbin.org/html",
+                "action": "navigate",
+                "extract": "text",
+            }),
+        },
+    })
+    msgs, _ = collect(q, timeout=30)
+    got_result = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("browser:browse_url → tool_result_msg received", got_result)
+
+    if got_result:
+        result_msg = next(m for m in msgs if m.get("method") == "tool_result_msg")
+        jr = (result_msg.get("params") or {}).get("json_result", "")
+        # HTTP fallback should return page content or an error
+        has_content = "Herman Melville" in jr or "Status:" in jr or "httpbin" in jr.lower()
+        record("browser:browse_url → page content retrieved", has_content, "optional")
+
+    # Test invalid URL rejection
+    send(proc, {
+        "method": "tool_exec",
+        "params": {
+            "tool_name": "browser:browse_url",
+            "command": json.dumps({"url": "not-a-url"}),
+        },
+    })
+    msgs, _ = collect(q, timeout=10)
+    got_err = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("browser:browse_url invalid URL → error returned", got_err)
+
+
+# ---------------------------------------------------------------------------
+# Test 10 – Vision toolkit (capture_ui)
+# ---------------------------------------------------------------------------
+
+def test_vision_toolkit(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test vision:capture_ui (expects failure without UI snapshot metadata)."""
+    send(proc, {
+        "method": "tool_exec",
+        "params": {
+            "tool_name": "vision:capture_ui",
+            "command": json.dumps({"panel": "editor"}),
+        },
+    })
+    msgs, _ = collect(q, timeout=10)
+    got_result = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("vision:capture_ui → tool_result_msg received", got_result)
+    if got_result:
+        result_msg = next(m for m in msgs if m.get("method") == "tool_result_msg")
+        jr = (result_msg.get("params") or {}).get("json_result", "")
+        # In headless E2E, UI snapshot metadata won't exist — expect a meaningful error
+        has_response = "snapshot" in jr.lower() or "capture" in jr.lower() or "success" in jr
+        record("vision:capture_ui → meaningful response", has_response)
+
+
+# ---------------------------------------------------------------------------
+# Test 11 – Healer toolkit
+# ---------------------------------------------------------------------------
+
+def test_healer_toolkit(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test healer:heal with a simple command."""
+    send(proc, {
+        "method": "tool_exec",
+        "params": {
+            "tool_name": "healer:heal",
+            "command": json.dumps({
+                "command": "echo healer_test_ok",
+                "max_attempts": 1,
+            }),
+        },
+    })
+    msgs, _ = collect(q, timeout=20)
+    got_result = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("healer:heal → tool_result_msg received", got_result)
+
+
+# ---------------------------------------------------------------------------
+# Test 12 – Multivers toolkit (A/B test)
+# ---------------------------------------------------------------------------
+
+def test_multivers_toolkit(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test multivers:multivers_run with two simple variants."""
+    send(proc, {
+        "method": "tool_exec",
+        "params": {
+            "tool_name": "multivers:multivers_run",
+            "command": json.dumps({
+                "command": "echo variant_test",
+                "variants": [
+                    {"name": "v1", "env": {}},
+                    {"name": "v2", "env": {}},
+                ],
+            }),
+        },
+    })
+    msgs, _ = collect(q, timeout=20)
+    got_result = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("multivers:multivers_run → tool_result_msg received", got_result)
+    if got_result:
+        result_msg = next(m for m in msgs if m.get("method") == "tool_result_msg")
+        jr = (result_msg.get("params") or {}).get("json_result", "")
+        record("multivers → contains result data", len(jr) > 10)
+
+
+# ---------------------------------------------------------------------------
+# Test 13 – Specialist toolkits via tool_exec
+# ---------------------------------------------------------------------------
+
+def test_specialist_toolkits(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test each specialist toolkit returns a tool_result_msg."""
+    specialists = [
+        ("pm:create_specification", {"feature_name": "E2E test", "requirements": "Test requirement"}),
+        ("designer:generate_ui_mockup", {"component": "TestPanel", "description": "A test panel"}),
+        ("qa:analyze_test_failure", {"error_output": "assert 1 == 2", "test_name": "test_basic"}),
+        ("reviewer:analyze_complexity", {"file_path": "Cargo.toml"}),
+        ("security:scan_dependencies", {}),
+        ("docs:search_external_docs", {"query": "rust tokio"}),
+    ]
+
+    for tool_name, params in specialists:
+        send(proc, {
+            "method": "tool_exec",
+            "params": {
+                "tool_name": tool_name,
+                "command": json.dumps(params),
+            },
+        })
+        msgs, _ = collect(q, timeout=10)
+        got = any(m.get("method") == "tool_result_msg" for m in msgs)
+        short_name = tool_name.split(":")[0]
+        record(f"specialist:{short_name} → tool_result_msg", got)
+
+
+# ---------------------------------------------------------------------------
+# Test 14 – Screenshot Capture RPC
+# ---------------------------------------------------------------------------
+
+def test_screenshot_capture(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test CaptureScreenshot RPC returns a tool_result_msg."""
+    send(proc, {"method": "capture_screenshot"})
+    msgs, _ = collect(q, timeout=10)
+    got = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("CaptureScreenshot → tool_result_msg received", got)
+    if got:
+        result_msg = next(m for m in msgs if m.get("method") == "tool_result_msg")
+        jr = (result_msg.get("params") or {}).get("json_result", "")
+        # May succeed or fail depending on display; just check structure
+        has_path = "path" in jr
+        record("CaptureScreenshot → response has path field", has_path)
+
+
+# ---------------------------------------------------------------------------
+# Test 15 – SuggestionDecision RPC
+# ---------------------------------------------------------------------------
+
+def test_suggestion_decision(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test SuggestionDecision RPC returns acknowledgment."""
+    send(proc, {
+        "method": "suggestion_decision",
+        "params": {"decision": "accepted", "message_id": "test-msg-001"},
+    })
+    msgs, _ = collect(q, timeout=10)
+    # Should get a tool_result_msg or ui_state_delta acknowledging the decision
+    got_result = any(m.get("method") == "tool_result_msg" for m in msgs)
+    got_delta = any(
+        m.get("method") == "ui_state_delta"
+        and (m.get("params") or {}).get("delta", {}).get("tool_event", {}).get("tool_name") == "suggestion"
+        for m in msgs
+    )
+    record("SuggestionDecision → acknowledged", got_result or got_delta)
+
+
+# ---------------------------------------------------------------------------
+# Test 16 – LspNotInstalled notification
+# ---------------------------------------------------------------------------
+
+def test_lsp_not_installed(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test LspNotInstalled RPC emits an alert."""
+    send(proc, {
+        "method": "lsp_not_installed",
+        "params": {
+            "language_id": "python",
+            "install_hint": "pip install python-lsp-server",
+        },
+    })
+    msgs, _ = collect(q, timeout=10)
+    got_alert = any(
+        m.get("method") == "ui_state_delta"
+        and (m.get("params") or {}).get("delta", {}).get("alert") is not None
+        for m in msgs
+    )
+    got_result = any(m.get("method") == "tool_result_msg" for m in msgs)
+    record("LspNotInstalled → alert emitted", got_alert or got_result)
+
+
+# ---------------------------------------------------------------------------
+# Test 17 – UI Snapshot request/response flow
+# ---------------------------------------------------------------------------
+
+def test_ui_snapshot_flow(proc: subprocess.Popen, q: queue.Queue) -> None:
+    """Test UiSnapshotRequest is echoed back and UiSnapshot is persisted."""
+    # Send UiSnapshotRequest — agent should echo it back
+    send(proc, {"method": "ui_snapshot_request"})
+    msgs, _ = collect(q, timeout=5)
+    echoed = any(m.get("method") == "ui_snapshot_request" for m in msgs)
+    record("UiSnapshotRequest → echoed back", echoed)
+
+    # Now send a UiSnapshot (simulating the IDE response)
+    snapshot_data = json.dumps({
+        "editor": {"file": "main.rs", "line": 42},
+        "panels": ["chat", "terminal"],
+        "timestamp": "2026-03-08T12:00:00Z",
+    })
+    send(proc, {
+        "method": "ui_snapshot",
+        "params": {"metadata": snapshot_data},
+    })
+    # Give the agent a moment to persist
+    time.sleep(0.5)
+    msgs, stderr = collect(q, timeout=3)
+    # Check stderr for success log
+    stderr_text = "\n".join(stderr)
+    persisted = "UI snapshot metadata received" in stderr_text or "stored" in stderr_text
+    record("UiSnapshot → metadata persisted", persisted, "optional")
+
+
+# ---------------------------------------------------------------------------
+# Test 18 – MCP mock server handshake
 # ---------------------------------------------------------------------------
 
 MOCK_MCP_SERVER = """\
@@ -570,14 +866,44 @@ def main() -> int:
 
         print("\n[7] Tool execution (tool_exec)")
         test_tool_exec(proc, q)
+
+        print("\n[8] Time Machine toolkit")
+        test_time_machine(proc, q)
+
+        print("\n[9] Browser toolkit")
+        test_browser_toolkit(proc, q)
+
+        print("\n[10] Vision toolkit")
+        test_vision_toolkit(proc, q)
+
+        print("\n[11] Healer toolkit")
+        test_healer_toolkit(proc, q)
+
+        print("\n[12] Multivers toolkit")
+        test_multivers_toolkit(proc, q)
+
+        print("\n[13] Specialist toolkits")
+        test_specialist_toolkits(proc, q)
+
+        print("\n[14] Screenshot Capture RPC")
+        test_screenshot_capture(proc, q)
+
+        print("\n[15] SuggestionDecision RPC")
+        test_suggestion_decision(proc, q)
+
+        print("\n[16] LspNotInstalled notification")
+        test_lsp_not_installed(proc, q)
+
+        print("\n[17] UI Snapshot flow")
+        test_ui_snapshot_flow(proc, q)
     finally:
         stop_agent(proc)
 
     # ── Isolated tests ───────────────────────────────────────────────────────
-    print("\n[8] MCP mock server handshake")
+    print("\n[18] MCP mock server handshake")
     test_mcp_handshake()
 
-    print("\n[9] kill_switch")
+    print("\n[19] kill_switch")
     test_kill_switch()
 
     # ── Summary ─────────────────────────────────────────────────────────────
