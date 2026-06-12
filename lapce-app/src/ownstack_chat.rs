@@ -1076,6 +1076,22 @@ pub fn ownstack_chat_panel(
                 .border_top(1.0)
                 .border_color(config.color(LapceColor::LAPCE_BORDER))
         }),
+        // ── Shortcut hints bar ──────────────────────────────────────
+        h_stack((
+            shortcut_hint("Cmd/Ctrl+K", "Inline Edit"),
+            shortcut_hint("Cmd/Ctrl+L", "Toggle Chat"),
+            shortcut_hint("Cmd/Ctrl+Shift+P", "AI Palette"),
+        ))
+        .style(move |s| {
+            let config = config.get();
+            s.width_full()
+                .padding_horiz(10.0)
+                .padding_vert(4.0)
+                .gap(12.0)
+                .justify_center()
+                .border_top(1.0)
+                .border_color(config.color(LapceColor::LAPCE_BORDER).multiply_alpha(0.5))
+        }),
     ))
     .style(|s| s.size_full().flex_col())
 }
@@ -1303,7 +1319,10 @@ fn message_view(
                 }
             },
             |diff| diff.clone(),
-            move |diff| diff_view(diff, config),
+            {
+                let chat_data = chat_data.clone();
+                move |diff| diff_view(diff, config, chat_data.clone())
+            },
         ),
     ))
     .style(move |s| {
@@ -1343,8 +1362,13 @@ fn message_view(
 fn diff_view(
     diff: String,
     config: floem::reactive::ReadSignal<Arc<crate::config::LapceConfig>>,
+    chat_data: OwnStackChatData,
 ) -> impl View {
     let lines: Vec<String> = diff.lines().map(|s| s.to_string()).collect();
+    let diff_id = format!("diff-{}", diff.len());
+    let diff_id_accept = diff_id.clone();
+    let diff_id_reject = diff_id.clone();
+    let decided = create_rw_signal(Option::<bool>::None);
 
     v_stack((
         label(move || "Proposed Changes:")
@@ -1399,8 +1423,93 @@ fn diff_view(
                 .border_color(config.color(LapceColor::LAPCE_BORDER))
                 .border_radius(4.0)
         }),
+        // Accept / Reject buttons
+        h_stack((
+            label(move || {
+                match decided.get() {
+                    Some(true) => "Accepted".to_string(),
+                    Some(false) => "Rejected".to_string(),
+                    None => "Accept".to_string(),
+                }
+            })
+            .style(move |s| {
+                let done = decided.get().is_some();
+                s.padding_horiz(12.0)
+                    .padding_vert(4.0)
+                    .border_radius(6.0)
+                    .font_size(11.0)
+                    .font_weight(Weight::BOLD)
+                    .cursor(if done { CursorStyle::Default } else { CursorStyle::Pointer })
+                    .color(crate::ownstack_theme::STATE_OK)
+                    .background(crate::ownstack_theme::STATE_OK.multiply_alpha(0.15))
+                    .border(1.0)
+                    .border_color(crate::ownstack_theme::STATE_OK.multiply_alpha(0.4))
+                    .apply_if(done, |s| s.apply_if(decided.get() != Some(true), |s| s.hide()))
+            })
+            .on_click_stop({
+                let chat = chat_data.clone();
+                let id = diff_id_accept;
+                move |_| {
+                    if decided.get_untracked().is_none() {
+                        decided.set(Some(true));
+                        chat.send_decision("accept", &id);
+                    }
+                }
+            }),
+            label(move || {
+                match decided.get() {
+                    Some(false) => "Rejected".to_string(),
+                    _ => "Reject".to_string(),
+                }
+            })
+            .style(move |s| {
+                let done = decided.get().is_some();
+                s.padding_horiz(12.0)
+                    .padding_vert(4.0)
+                    .border_radius(6.0)
+                    .font_size(11.0)
+                    .font_weight(Weight::BOLD)
+                    .cursor(if done { CursorStyle::Default } else { CursorStyle::Pointer })
+                    .color(crate::ownstack_theme::STATE_ERROR)
+                    .background(crate::ownstack_theme::STATE_ERROR.multiply_alpha(0.15))
+                    .border(1.0)
+                    .border_color(crate::ownstack_theme::STATE_ERROR.multiply_alpha(0.4))
+                    .apply_if(done, |s| s.apply_if(decided.get() != Some(false), |s| s.hide()))
+            })
+            .on_click_stop({
+                let chat = chat_data.clone();
+                let id = diff_id_reject;
+                move |_| {
+                    if decided.get_untracked().is_none() {
+                        decided.set(Some(false));
+                        chat.send_decision("reject", &id);
+                    }
+                }
+            }),
+        ))
+        .style(|s| s.gap(8.0).padding_top(6.0)),
     ))
     .style(|s| s.width_full().padding_top(8.0))
+}
+
+fn shortcut_hint(key: &'static str, action: &'static str) -> impl View {
+    h_stack((
+        label(move || key).style(|s| {
+            s.font_size(10.0)
+                .padding_horiz(5.0)
+                .padding_vert(1.0)
+                .border(1.0)
+                .border_radius(3.0)
+                .border_color(crate::ownstack_theme::BORDER)
+                .color(crate::ownstack_theme::TEXT_HINT)
+                .font_family("monospace".to_string())
+        }),
+        label(move || action).style(|s| {
+            s.font_size(10.0)
+                .color(crate::ownstack_theme::TEXT_DIM)
+        }),
+    ))
+    .style(|s| s.items_center().gap(4.0))
 }
 
 fn chrono_now() -> String {
