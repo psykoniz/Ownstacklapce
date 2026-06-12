@@ -107,49 +107,178 @@ fn launch_headless_chrome(
 }
 
 // ---------------------------------------------------------------------------
-// CDP JSON-RPC over HTTP (simpler than WebSocket for basic ops)
+// CDP JSON-RPC over WebSocket
 // ---------------------------------------------------------------------------
 
-/// Send a CDP command via the HTTP JSON endpoint (synchronous, for simplicity).
-fn cdp_http_command(port: u16, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
-    // First get the target/page list
+/// Fetch the first page target's WebSocket debugger URL.
+async fn cdp_page_ws_url(port: u16) -> Result<String, String> {
     let list_url = format!("http://127.0.0.1:{port}/json/list");
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| format!("HTTP client: {e}"))?;
-
     let pages: Vec<serde_json::Value> = client
         .get(&list_url)
         .send()
+        .await
         .map_err(|e| format!("GET /json/list: {e}"))?
         .json()
+        .await
         .map_err(|e| format!("parse /json/list: {e}"))?;
-
-    let ws_url = pages
-        .first()
+    pages
+        .iter()
+        .find(|p| p.get("type").and_then(|t| t.as_str()) == Some("page"))
+        .or_else(|| pages.first())
         .and_then(|p| p["webSocketDebuggerUrl"].as_str())
-        .ok_or("No page target found")?
-        .to_string();
+        .map(|s| s.to_string())
+        .ok_or_else(|| "no page target/webSocketDebuggerUrl".to_string())
+}
 
-    // For navigate, use the /json/version endpoint approach with simple HTTP
-    // CDP commands via fetch to the target
-    let target_id = pages
-        .first()
-        .and_then(|p| p["id"].as_str())
-        .ok_or("No target id")?;
+/// A minimal Chrome DevTools Protocol client over a single page WebSocket.
+struct CdpClient {
+    ws: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    next_id: u64,
+}
 
-    // Use the /json/protocol to send commands via HTTP bridge
-    // A simpler approach: use the /json/navigate endpoint for navigation
-    if method == "Page.navigate" {
-        if let Some(url) = params["url"].as_str() {
-            let nav_url = format!("http://127.0.0.1:{port}/json/navigate?{target_id}&{url}");
-            let _ = client.get(&nav_url).send();
-        }
+impl CdpClient {
+    async fn connect(ws_url: &str) -> Result<Self, String> {
+        let (ws, _resp) = tokio_tungstenite::connect_async(ws_url)
+            .await
+            .map_err(|e| format!("CDP connect: {e}"))?;
+        Ok(Self { ws, next_id: 1 })
     }
 
-    Ok(json!({"ws_url": ws_url, "target_id": target_id}))
+    /// Send a CDP command and await the matching result.
+    async fn call(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let id = self.next_id;
+        self.next_id += 1;
+        let req = json!({ "id": id, "method": method, "params": params });
+        self.ws
+            .send(Message::Text(req.to_string()))
+            .await
+            .map_err(|e| format!("CDP send {method}: {e}"))?;
+
+        // Read messages until we see the response with our id (skip events).
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(format!("CDP timeout waiting for {method}"));
+            }
+            let msg = tokio::time::timeout(remaining, self.ws.next())
+                .await
+                .map_err(|_| format!("CDP timeout for {method}"))?
+                .ok_or_else(|| "CDP socket closed".to_string())?
+                .map_err(|e| format!("CDP recv: {e}"))?;
+            let text = match msg {
+                Message::Text(t) => t,
+                Message::Close(_) => return Err("CDP socket closed".to_string()),
+                _ => continue,
+            };
+            let v: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if v.get("id").and_then(|i| i.as_u64()) == Some(id) {
+                if let Some(err) = v.get("error") {
+                    return Err(format!("CDP error for {method}: {err}"));
+                }
+                return Ok(v.get("result").cloned().unwrap_or(json!({})));
+            }
+            // otherwise it's an event; keep reading
+        }
+    }
 }
+
+/// JS string escaping for embedding a selector/value in a Runtime.evaluate expr.
+fn js_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n")
+}
+
+/// Run a full interactive CDP session: navigate, optionally act, return a summary.
+async fn cdp_interactive(
+    port: u16,
+    url: &str,
+    action: &str,
+    selector: Option<&str>,
+    text: Option<&str>,
+    wait_ms: u64,
+) -> Result<String, String> {
+    let ws_url = cdp_page_ws_url(port).await?;
+    let mut cdp = CdpClient::connect(&ws_url).await?;
+
+    cdp.call("Page.enable", json!({})).await.ok();
+    cdp.call("Runtime.enable", json!({})).await.ok();
+    cdp.call("Page.navigate", json!({ "url": url })).await?;
+    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+
+    match action {
+        "click" => {
+            let sel = selector.unwrap_or("body");
+            let expr = format!(
+                "(() => {{ const el = document.querySelector('{}'); if(!el) return 'NOT_FOUND'; el.click(); return 'CLICKED'; }})()",
+                js_escape(sel)
+            );
+            let res = cdp
+                .call(
+                    "Runtime.evaluate",
+                    json!({ "expression": expr, "returnByValue": true }),
+                )
+                .await?;
+            let outcome = res["result"]["value"].as_str().unwrap_or("");
+            if outcome == "NOT_FOUND" {
+                Err(format!("selector '{sel}' not found on {url}"))
+            } else {
+                Ok(format!("Clicked '{sel}' on {url}"))
+            }
+        }
+        "type" => {
+            let sel = selector.unwrap_or("input");
+            let txt = text.unwrap_or("");
+            let expr = format!(
+                "(() => {{ const el = document.querySelector('{}'); if(!el) return 'NOT_FOUND'; el.focus(); el.value = '{}'; el.dispatchEvent(new Event('input', {{bubbles:true}})); return 'TYPED'; }})()",
+                js_escape(sel),
+                js_escape(txt)
+            );
+            let res = cdp
+                .call(
+                    "Runtime.evaluate",
+                    json!({ "expression": expr, "returnByValue": true }),
+                )
+                .await?;
+            let outcome = res["result"]["value"].as_str().unwrap_or("");
+            if outcome == "NOT_FOUND" {
+                Err(format!("selector '{sel}' not found on {url}"))
+            } else {
+                Ok(format!("Typed into '{sel}' on {url}"))
+            }
+        }
+        "eval" => {
+            let expr = text.unwrap_or("document.title");
+            let res = cdp
+                .call(
+                    "Runtime.evaluate",
+                    json!({ "expression": expr, "returnByValue": true }),
+                )
+                .await?;
+            Ok(format!(
+                "eval result: {}",
+                res["result"]["value"]
+            ))
+        }
+        _ => Ok(format!("Navigated to {url}")),
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Fallback: HTTP fetch (no Chrome needed)
@@ -268,7 +397,7 @@ impl Toolkit for BrowserToolkit {
                         "url": {"type": "string", "description": "The URL to visit"},
                         "action": {
                             "type": "string",
-                            "enum": ["navigate", "click", "type", "screenshot", "extract_text", "extract_links"],
+                            "enum": ["navigate", "click", "type", "eval", "screenshot", "extract_text", "extract_links"],
                             "default": "navigate",
                             "description": "Action to perform on the page"
                         },
@@ -329,37 +458,44 @@ async fn execute_browse_url(args: serde_json::Value) -> Result<ToolResult, Toolk
     }
 
     let chrome_bin = find_chrome_binary();
-    let use_chrome = chrome_bin.is_some()
-        && matches!(parsed.action.as_str(), "click" | "type" | "screenshot");
+    let interactive = matches!(parsed.action.as_str(), "click" | "type" | "eval");
 
-    if use_chrome && matches!(parsed.action.as_str(), "click" | "type") {
-        // For interactive actions, launch Chrome
-        let chrome = chrome_bin.unwrap();
+    if interactive {
+        let Some(chrome) = chrome_bin else {
+            return Ok(ToolResult::failure(
+                format!(
+                    "Action '{}' requires Chrome/Chromium, which was not found. Install chromium or google-chrome.",
+                    parsed.action
+                ),
+                Some(1),
+            ));
+        };
+        // Launch Chrome and drive it over a real CDP WebSocket session.
         match launch_headless_chrome(&chrome) {
             Ok((mut child, _ws_url, port)) => {
-                // Navigate
-                let _ = cdp_http_command(port, "Page.navigate", json!({"url": &parsed.url}));
-                if let Some(ms) = parsed.wait_ms {
-                    tokio::time::sleep(Duration::from_millis(ms)).await;
-                } else {
-                    tokio::time::sleep(Duration::from_millis(1500)).await;
-                }
-
-                let action_result = match parsed.action.as_str() {
-                    "click" => {
-                        let sel = parsed.selector.as_deref().unwrap_or("body");
-                        format!("Clicked element '{}' on {}", sel, parsed.url)
-                    }
-                    "type" => {
-                        let sel = parsed.selector.as_deref().unwrap_or("input");
-                        let txt = parsed.text.as_deref().unwrap_or("");
-                        format!("Typed '{}' into '{}' on {}", txt, sel, parsed.url)
-                    }
-                    _ => format!("Action {} completed on {}", parsed.action, parsed.url),
-                };
-
+                let wait = parsed.wait_ms.unwrap_or(1500);
+                let result = cdp_interactive(
+                    port,
+                    &parsed.url,
+                    &parsed.action,
+                    parsed.selector.as_deref(),
+                    parsed.text.as_deref(),
+                    wait,
+                )
+                .await;
                 let _ = child.kill();
-                Ok(ToolResult::success(action_result))
+                let _ = child.wait();
+                match result {
+                    Ok(summary) => {
+                        let mut r = ToolResult::success(summary);
+                        r.metadata.insert("backend".to_string(), "cdp".to_string());
+                        Ok(r)
+                    }
+                    Err(e) => Ok(ToolResult::failure(
+                        format!("CDP {} failed on {}: {e}", parsed.action, parsed.url),
+                        Some(1),
+                    )),
+                }
             }
             Err(e) => {
                 warn!("Chrome launch failed, falling back to HTTP: {}", e);
@@ -499,6 +635,14 @@ async fn execute_screenshot(args: serde_json::Value) -> Result<ToolResult, Toolk
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_js_escape() {
+        assert_eq!(js_escape("a'b"), "a\\'b");
+        assert_eq!(js_escape("c\\d"), "c\\\\d");
+        assert_eq!(js_escape("e\nf"), "e\\nf");
+        assert_eq!(js_escape("input#name"), "input#name");
+    }
 
     #[test]
     fn test_find_chrome_binary() {

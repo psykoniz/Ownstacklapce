@@ -44,6 +44,9 @@ ownstack-engine = { path = "../ownstack-engine" }
 tokio-stream = "0.1"
 futures-util = "0.3"
 
+# Browser automation (Chrome DevTools Protocol over WebSocket)
+tokio-tungstenite = "0.21"
+
 # LSP support
 lsp-types = { version = "0.94", features = ["proposed"] }
 url = "2"
