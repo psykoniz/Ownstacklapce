@@ -8,7 +8,6 @@ members = [
     "lapce-proxy",
     "lapce-rpc",
     "ownstack-engine",
-    "ownstack-bridge",
     "ownstack-agent",
     "e2e",
 ]

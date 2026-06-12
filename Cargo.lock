@@ -4100,7 +4100,6 @@ dependencies = [
  "locale_config",
  "lsp-types 0.95.1",
  "notify",
- "ownstack-bridge",
  "parking_lot",
  "polling 3.11.0",
  "psp-types",
@@ -5377,19 +5376,6 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wat",
-]
-
-[[package]]
-name = "ownstack-bridge"
-version = "0.1.0"
-dependencies = [
- "ownstack-engine",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing 0.1.44",
 ]
 
 [[package]]
