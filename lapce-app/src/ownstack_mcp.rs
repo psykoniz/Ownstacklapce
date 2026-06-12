@@ -346,6 +346,12 @@ impl OwnStackMcpData {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&config_path, &json) {
                     tracing::error!("Failed to persist MCP server config: {e}");
+                    // Surface the failure to the user instead of silently
+                    // pretending the server was saved.
+                    self.no_config_message.set(Some(format!(
+                        "Failed to save MCP server to {}: {e}",
+                        config_path.display()
+                    )));
                 }
             }
             Err(e) => tracing::error!("Failed to serialize MCP config: {e}"),

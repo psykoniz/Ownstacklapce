@@ -111,7 +111,23 @@ impl OnboardingData {
     }
 
     pub fn skip(&self) {
-        self.finish();
+        // Skipping must not leave the agent pointed at a provider with no key.
+        // Persist completion but with NO chosen provider when nothing is set up;
+        // the chat then shows a "configuration required" state instead of
+        // emitting API-key errors.
+        let state = OnboardingState {
+            completed: true,
+            chosen_provider: if is_ai_provider_configured() {
+                Some(self.chosen_provider.get_untracked())
+            } else {
+                None
+            },
+            chosen_mode: Some(self.chosen_mode.get_untracked()),
+            ollama_host: Some(self.ollama_host.get_untracked()),
+        };
+        save_state_file(&state);
+        self.active.set(false);
+        self.completed.set(true);
     }
 
     pub fn finish(&self) {
@@ -150,14 +166,7 @@ impl OnboardingData {
     }
 
     fn persist_runtime_setup(&self) {
-        let state = OnboardingState {
-            completed: true,
-            chosen_provider: Some(self.chosen_provider.get_untracked()),
-            chosen_mode: Some(self.chosen_mode.get_untracked()),
-            ollama_host: Some(self.ollama_host.get_untracked()),
-        };
-        save_state_file(&state);
-
+        // Save any entered keys FIRST so the configured-check below is accurate.
         let openrouter = self.openrouter_api_key.get_untracked();
         if !openrouter.trim().is_empty()
             && save_secret(OPENROUTER_KEY_ENTRY, openrouter.trim())
@@ -173,6 +182,20 @@ impl OnboardingData {
             self.anthropic_key_saved.set(true);
             self.anthropic_api_key.set(String::new());
         }
+
+        // Only record a chosen provider if a credential actually exists, so a
+        // finish-without-key does not leave the agent on an unreachable provider.
+        let state = OnboardingState {
+            completed: true,
+            chosen_provider: if is_ai_provider_configured() {
+                Some(self.chosen_provider.get_untracked())
+            } else {
+                None
+            },
+            chosen_mode: Some(self.chosen_mode.get_untracked()),
+            ollama_host: Some(self.ollama_host.get_untracked()),
+        };
+        save_state_file(&state);
     }
 }
 
@@ -976,6 +999,26 @@ fn save_state_file(state: &OnboardingState) {
     if let Err(err) = fs::write(path, serialized) {
         tracing::error!("Failed to persist onboarding state: {err}");
     }
+}
+
+/// Returns true if at least one AI provider has a usable credential —
+/// either an API key in the OS keyring, or set via environment variable.
+/// Used by the chat UI to show a "configuration required" state instead of
+/// firing requests that would fail with an API-key error.
+pub fn is_ai_provider_configured() -> bool {
+    if std::env::var("OPENROUTER_API_KEY")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+        || std::env::var("ANTHROPIC_API_KEY")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+        || std::env::var("OPENAI_API_KEY")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    {
+        return true;
+    }
+    secret_exists(OPENROUTER_KEY_ENTRY) || secret_exists(ANTHROPIC_KEY_ENTRY)
 }
 
 fn secret_exists(entry_name: &str) -> bool {

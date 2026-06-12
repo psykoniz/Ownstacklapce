@@ -198,6 +198,25 @@ impl OwnStackChatData {
             return;
         }
 
+        // Guard: no AI provider configured (e.g. onboarding was skipped without
+        // a key). Show a clear, actionable message instead of firing a request
+        // that would fail with an API-key error.
+        if !crate::ownstack_onboarding::is_ai_provider_configured() {
+            self.messages.update(|msgs| {
+                msgs.push(ChatMessage {
+                    role: ChatRole::Alert,
+                    content: "No AI provider is configured. Open Settings to add an API key (OpenRouter, Anthropic, or a custom OpenAI-compatible endpoint), then try again.".to_string(),
+                    timestamp: chrono_now(),
+                    diff_content: None,
+                    sub_role: None,
+                    tool_result: None,
+                    diff_target: None,
+                    is_error: true,
+                });
+            });
+            return;
+        }
+
         // Guard: warn if bridge is disconnected
         if !self.bridge_connected.get_untracked() {
             self.messages.update(|msgs| {
