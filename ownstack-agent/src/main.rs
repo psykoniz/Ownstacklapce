@@ -7,9 +7,10 @@ use ownstack_agent::orchestrator::{
     RuntimeContextSnapshot,
 };
 use ownstack_agent::policy_approval::{PolicyApprovalManager, RpcSink};
-use ownstack_agent::provider::LlmProvider;
+use ownstack_agent::provider::{LlmProvider, ProviderError};
 use ownstack_agent::providers::anthropic::AnthropicProvider;
 use ownstack_agent::providers::local::LocalProvider;
+use ownstack_agent::providers::openai_compatible::OpenAiCompatibleProvider;
 use ownstack_agent::providers::openrouter::OpenRouterProvider;
 use ownstack_agent::secret_store;
 use ownstack_agent::toolkits::mcp::{McpServerConfig, McpToolkit};
@@ -220,6 +221,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|v| v.to_ascii_lowercase());
     let has_anthropic = secret_store::has_secret("ANTHROPIC_API_KEY");
     let has_openrouter = secret_store::has_secret("OPENROUTER_API_KEY");
+    let has_openai = secret_store::has_secret("OPENAI_API_KEY");
+
+    // Auto-selection order when no explicit preference: Anthropic > OpenRouter >
+    // OpenAI-compatible > Local.
+    let auto_provider = || -> Result<Arc<dyn LlmProvider>, ProviderError> {
+        if has_anthropic {
+            info!("LLM Provider: Anthropic");
+            Ok(Arc::new(AnthropicProvider::from_env()?))
+        } else if has_openrouter {
+            info!("LLM Provider: OpenRouter");
+            Ok(Arc::new(OpenRouterProvider::from_env()?))
+        } else if has_openai {
+            info!("LLM Provider: OpenAI-compatible");
+            Ok(Arc::new(OpenAiCompatibleProvider::from_env()?))
+        } else {
+            info!("LLM Provider: Local");
+            Ok(Arc::new(LocalProvider::from_env()?))
+        }
+    };
+
     let provider: Arc<dyn LlmProvider> = match provider_preference.as_deref() {
         Some("anthropic") if has_anthropic => {
             info!("LLM Provider: Anthropic (preferred)");
@@ -228,6 +249,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("openrouter") if has_openrouter => {
             info!("LLM Provider: OpenRouter (preferred)");
             Arc::new(OpenRouterProvider::from_env()?)
+        }
+        Some("openai") | Some("openai-compatible") if has_openai => {
+            info!("LLM Provider: OpenAI-compatible (preferred)");
+            Arc::new(OpenAiCompatibleProvider::from_env()?)
         }
         Some("local") | Some("ollama") => {
             info!("LLM Provider: Local (preferred)");
@@ -238,29 +263,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Preferred provider '{}' is unavailable; falling back to auto selection",
                 pref
             );
-            if has_anthropic {
-                info!("LLM Provider: Anthropic");
-                Arc::new(AnthropicProvider::from_env()?)
-            } else if has_openrouter {
-                info!("LLM Provider: OpenRouter");
-                Arc::new(OpenRouterProvider::from_env()?)
-            } else {
-                info!("LLM Provider: Local");
-                Arc::new(LocalProvider::from_env()?)
-            }
+            auto_provider()?
         }
-        None => {
-            if has_anthropic {
-                info!("LLM Provider: Anthropic");
-                Arc::new(AnthropicProvider::from_env()?)
-            } else if has_openrouter {
-                info!("LLM Provider: OpenRouter");
-                Arc::new(OpenRouterProvider::from_env()?)
-            } else {
-                info!("LLM Provider: Local");
-                Arc::new(LocalProvider::from_env()?)
-            }
-        }
+        None => auto_provider()?,
     };
 
     let mut orchestrator = AgentOrchestrator::new(
