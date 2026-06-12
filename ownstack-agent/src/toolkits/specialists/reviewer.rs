@@ -20,6 +20,11 @@ struct CheckStyleComplianceArgs {
     max_findings: Option<usize>,
 }
 
+#[derive(Deserialize)]
+struct RunLinterArgs {
+    path: Option<String>,
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 struct ComplexityMetrics {
     file: String,
@@ -363,6 +368,20 @@ impl Toolkit for ReviewerToolkit {
                     "required": ["file_path"],
                 }),
             },
+            ToolDef {
+                name: "run_linter".to_string(),
+                description: "Run cargo clippy (Rust) or ruff (Python) and return diagnostics."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Optional workspace path (defaults to current directory)."
+                        }
+                    }
+                }),
+            },
         ]
     }
 
@@ -372,6 +391,63 @@ impl Toolkit for ReviewerToolkit {
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolkitError> {
         match tool_name {
+            "run_linter" => {
+                let parsed: RunLinterArgs = serde_json::from_value(args)
+                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
+                let dir = parsed.path.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+
+                let is_rust = dir.join("Cargo.toml").exists();
+                let is_python = dir.join("pyproject.toml").exists()
+                    || dir.join("setup.py").exists()
+                    || dir.join("requirements.txt").exists();
+
+                let (tool_name_str, cmd, cmd_args) = if is_rust {
+                    ("cargo clippy", "cargo", vec!["clippy", "--message-format=short", "--", "-W", "clippy::all"])
+                } else if is_python {
+                    ("ruff", "ruff", vec!["check", "."])
+                } else {
+                    return Ok(ToolResult::failure(
+                        "No supported project found (need Cargo.toml or Python project files).".to_string(),
+                        None,
+                    ));
+                };
+
+                let output = std::process::Command::new(cmd)
+                    .args(&cmd_args)
+                    .current_dir(&dir)
+                    .output();
+
+                match output {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let combined = format!("{}{}", stdout, stderr);
+                        let lines: Vec<&str> = combined.lines()
+                            .filter(|l| !l.trim().is_empty())
+                            .collect();
+                        let diag_count = lines.len();
+
+                        let mut result = ToolResult::success(format!(
+                            "## {} results\n\n**Diagnostics**: {}\n\n```\n{}\n```",
+                            tool_name_str,
+                            diag_count,
+                            if lines.len() > 100 {
+                                lines[..100].join("\n") + "\n... (truncated)"
+                            } else {
+                                lines.join("\n")
+                            }
+                        ));
+                        result.metadata.insert("linter".to_string(), tool_name_str.to_string());
+                        result.metadata.insert("diagnostic_count".to_string(), diag_count.to_string());
+                        result.metadata.insert("exit_code".to_string(), out.status.code().unwrap_or(-1).to_string());
+                        Ok(result)
+                    }
+                    Err(e) => Ok(ToolResult::failure(
+                        format!("{} not found or failed to execute: {}", tool_name_str, e),
+                        None,
+                    )),
+                }
+            }
             "analyze_complexity" => {
                 let parsed: AnalyzeComplexityArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;

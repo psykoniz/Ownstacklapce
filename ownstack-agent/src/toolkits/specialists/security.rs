@@ -472,6 +472,20 @@ impl Toolkit for SecurityToolkit {
                 }),
             },
             ToolDef {
+                name: "audit_dependencies".to_string(),
+                description: "Run cargo-audit (Rust) or pip-audit (Python) to find known vulnerabilities."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Optional workspace path (defaults to current directory)."
+                        }
+                    }
+                }),
+            },
+            ToolDef {
                 name: "check_policies".to_string(),
                 description:
                     "Check security-policy baseline files and detect blocked command patterns in scripts."
@@ -545,6 +559,58 @@ impl Toolkit for SecurityToolkit {
                     "findings": findings,
                 });
                 Ok(ToolResult::success(response.to_string()))
+            }
+            "audit_dependencies" => {
+                let dir = args.get("path")
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."));
+
+                let is_rust = dir.join("Cargo.toml").exists() || dir.join("Cargo.lock").exists();
+                let is_python = dir.join("requirements.txt").exists()
+                    || dir.join("pyproject.toml").exists();
+
+                let (tool_label, cmd, cmd_args) = if is_rust {
+                    ("cargo audit", "cargo", vec!["audit".to_string()])
+                } else if is_python {
+                    ("pip-audit", "pip-audit", vec!["-r".to_string(), "requirements.txt".to_string()])
+                } else {
+                    return Ok(ToolResult::failure(
+                        "No supported project found (need Cargo.lock or requirements.txt).".to_string(),
+                        None,
+                    ));
+                };
+
+                let output = std::process::Command::new(cmd)
+                    .args(&cmd_args)
+                    .current_dir(&dir)
+                    .output();
+
+                match output {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let combined = format!("{}{}", stdout, stderr);
+                        let vuln_count = combined.lines()
+                            .filter(|l| l.contains("RUSTSEC") || l.contains("PYSEC") || l.contains("vulnerability"))
+                            .count();
+
+                        let mut result = ToolResult::success(format!(
+                            "## {} results\n\n**Potential vulnerabilities**: {}\n\n```\n{}\n```",
+                            tool_label,
+                            vuln_count,
+                            if combined.len() > 4000 { &combined[..4000] } else { &combined }
+                        ));
+                        result.metadata.insert("audit_tool".to_string(), tool_label.to_string());
+                        result.metadata.insert("vulnerability_count".to_string(), vuln_count.to_string());
+                        result.metadata.insert("exit_code".to_string(), out.status.code().unwrap_or(-1).to_string());
+                        Ok(result)
+                    }
+                    Err(e) => Ok(ToolResult::failure(
+                        format!("{} not found or failed to execute: {}. Install it with `cargo install cargo-audit` or `pip install pip-audit`.", tool_label, e),
+                        None,
+                    )),
+                }
             }
             "check_policies" => {
                 let parsed: CheckPoliciesArgs =
