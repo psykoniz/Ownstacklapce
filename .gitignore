@@ -29,6 +29,9 @@ temp_ownstack/
 .ownstack/secrets/
 .ownstack/audit.jsonl
 .ownstack/telemetry/
+.ownstack/multivers/
+**/.ownstack/telemetry/
+**/.ownstack/multivers/
 
 # Python / PyInstaller
 __pycache__/

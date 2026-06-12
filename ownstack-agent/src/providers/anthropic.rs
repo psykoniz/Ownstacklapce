@@ -156,7 +156,9 @@ impl LlmProvider for AnthropicProvider {
                 let role = match m.role {
                     Role::User | Role::Tool => "user",
                     Role::Assistant => "assistant",
-                    Role::System => unreachable!(),
+                    // System is filtered out above; fall back to "user" rather
+                    // than panicking if that invariant ever changes.
+                    Role::System => "user",
                 };
 
                 let content = match m.role {
@@ -312,7 +314,9 @@ impl LlmProvider for AnthropicProvider {
                 let role = match m.role {
                     Role::User | Role::Tool => "user",
                     Role::Assistant => "assistant",
-                    Role::System => unreachable!(),
+                    // System is filtered out above; fall back to "user" rather
+                    // than panicking if that invariant ever changes.
+                    Role::System => "user",
                 };
                 let content = if m.role == Role::Tool {
                     AnthropicContent::Blocks(vec![

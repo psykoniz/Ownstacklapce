@@ -9,6 +9,22 @@ use std::path::Path;
 
 pub struct DocsToolkit;
 
+fn strip_html_to_text(html: &str) -> String {
+    let no_script = regex::Regex::new(r"(?is)<script[^>]*>.*?</script>")
+        .unwrap()
+        .replace_all(html, "");
+    let no_style = regex::Regex::new(r"(?is)<style[^>]*>.*?</style>")
+        .unwrap()
+        .replace_all(&no_script, "");
+    let no_tags = regex::Regex::new(r"<[^>]+>")
+        .unwrap()
+        .replace_all(&no_style, " ");
+    let collapsed = regex::Regex::new(r"\s+")
+        .unwrap()
+        .replace_all(&no_tags, " ");
+    collapsed.trim().to_string()
+}
+
 #[derive(Deserialize)]
 struct SearchExternalDocsArgs {
     query: String,
@@ -406,6 +422,21 @@ impl Toolkit for DocsToolkit {
                     "required": ["description"],
                 }),
             },
+            ToolDef {
+                name: "fetch_docs_page".to_string(),
+                description: "Fetch a documentation page from docs.rs, crates.io, or any HTTPS URL and extract text."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "Full HTTPS URL to fetch (e.g. https://docs.rs/tokio/latest/tokio/)."
+                        }
+                    },
+                    "required": ["url"],
+                }),
+            },
         ]
     }
 
@@ -415,6 +446,45 @@ impl Toolkit for DocsToolkit {
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolkitError> {
         match tool_name {
+            "fetch_docs_page" => {
+                let url = args.get("url")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolkitError::InvalidArguments("url is required".to_string()))?
+                    .to_string();
+
+                if !url.starts_with("https://") {
+                    return Err(ToolkitError::InvalidArguments(
+                        "Only HTTPS URLs are allowed.".to_string(),
+                    ));
+                }
+
+                let fetch_url = url.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    reqwest::blocking::Client::builder()
+                        .timeout(std::time::Duration::from_secs(15))
+                        .build()
+                        .and_then(|c| c.get(&fetch_url).send())
+                        .and_then(|r| r.text())
+                }).await.map_err(|e| ToolkitError::ExecutionFailed(e.to_string()))?;
+
+                match result {
+                    Ok(html) => {
+                        let text = strip_html_to_text(&html);
+                        let truncated = if text.len() > 8000 { &text[..8000] } else { &text };
+                        let mut tr = ToolResult::success(format!(
+                            "## Fetched: {}\n\n{}",
+                            url, truncated
+                        ));
+                        tr.metadata.insert("url".to_string(), url);
+                        tr.metadata.insert("length".to_string(), text.len().to_string());
+                        Ok(tr)
+                    }
+                    Err(e) => Ok(ToolResult::failure(
+                        format!("Failed to fetch {}: {}", url, e),
+                        None,
+                    )),
+                }
+            }
             "search_external_docs" => {
                 let parsed: SearchExternalDocsArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;

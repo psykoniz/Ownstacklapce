@@ -264,7 +264,43 @@ impl MultiversToolkit {
 
         run.evaluate();
         info!("Multivers: winner = {:?}", run.winner);
+
+        self.persist_run(&run);
         run
+    }
+
+    fn persist_run(&self, run: &MultiversRun) {
+        let dir = self.workspace.join(".ownstack").join("multivers");
+        if std::fs::create_dir_all(&dir).is_err() {
+            warn!("Multivers: failed to create history directory");
+            return;
+        }
+        let path = dir.join(format!("{}.json", run.run_id));
+        match serde_json::to_string_pretty(run) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    warn!("Multivers: failed to persist run: {}", e);
+                }
+            }
+            Err(e) => warn!("Multivers: serialize error: {}", e),
+        }
+    }
+
+    fn list_history(&self) -> Vec<serde_json::Value> {
+        let dir = self.workspace.join(".ownstack").join("multivers");
+        let mut runs = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                            runs.push(v);
+                        }
+                    }
+                }
+            }
+        }
+        runs
     }
 
     async fn run_variant_in_workspace(
@@ -339,7 +375,16 @@ impl Toolkit for MultiversToolkit {
     }
 
     fn tools(&self) -> Vec<ToolDef> {
-        vec![ToolDef {
+        vec![
+            ToolDef {
+                name: "multivers_list_runs".to_string(),
+                description: "List past multivers A/B test runs from history.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            ToolDef {
             name: "multivers_run".to_string(),
             description: "Run a command with multiple variant configurations in parallel and compare results"
                 .to_string(),
@@ -366,6 +411,16 @@ impl Toolkit for MultiversToolkit {
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolkitError> {
         match tool_name {
+            "multivers_list_runs" => {
+                let runs = self.list_history();
+                if runs.is_empty() {
+                    Ok(ToolResult::success("No multivers runs recorded yet.".to_string()))
+                } else {
+                    let summary = serde_json::to_string_pretty(&runs)
+                        .unwrap_or_else(|_| format!("{} runs found", runs.len()));
+                    Ok(ToolResult::success(summary))
+                }
+            }
             "multivers_run" => {
                 let parsed: MultiversArgs = serde_json::from_value(args)
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;

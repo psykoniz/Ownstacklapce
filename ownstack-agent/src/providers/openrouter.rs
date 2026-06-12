@@ -37,7 +37,7 @@ impl OpenRouterProvider {
             })?;
 
         let model = std::env::var("OPENROUTER_MODEL")
-            .unwrap_or_else(|_| "anthropic/claude-3.5-sonnet".to_string());
+            .unwrap_or_else(|_| "google/gemini-flash-1.5-8b".to_string());
 
         Ok(Self::new(ProviderConfig {
             api_key,

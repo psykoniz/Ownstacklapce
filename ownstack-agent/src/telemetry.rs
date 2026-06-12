@@ -113,7 +113,7 @@ impl BlackBoxLogger {
             timestamp,
             event: event_type.to_string(),
             session_id: self.session_id.clone(),
-            data,
+            data: sanitize_log_data(data),
             trace_id: trace.map(|t| t.trace_id.clone()),
             span_id: trace.map(|t| t.span_id.clone()),
             parent_span_id: trace.and_then(|t| t.parent_span_id.clone()),
@@ -140,6 +140,46 @@ impl BlackBoxLogger {
     /// Log a simple event without trace context.
     pub fn log_simple(&self, event_type: &str, data: serde_json::Value) {
         self.log(event_type, data, None);
+    }
+}
+
+/// Returns true if a JSON object key looks like it holds a secret.
+fn is_sensitive_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    ["api_key", "apikey", "token", "secret", "password", "credential", "authorization", "bearer"]
+        .iter()
+        .any(|needle| k.contains(needle))
+}
+
+/// Scrub known secret formats from a free-text string value.
+fn scrub_secret_strings(s: &str) -> String {
+    // Common API-key prefixes: sk-..., sk-or-v1-..., sk-ant-..., etc.
+    // Replace any token of the form (sk|pk|rk)-... with [REDACTED].
+    let re = regex::Regex::new(r"\b(?:sk|pk|rk)-[A-Za-z0-9\-_]{8,}\b").unwrap();
+    re.replace_all(s, "[REDACTED]").to_string()
+}
+
+/// Recursively redact sensitive fields from telemetry data before persisting.
+/// Port of `ownstack-python/app/utils/security.py::sanitize_log_data`.
+fn sanitize_log_data(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (k, v) in map {
+                if is_sensitive_key(&k) {
+                    out.insert(k, Value::String("[REDACTED]".to_string()));
+                } else {
+                    out.insert(k, sanitize_log_data(v));
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(arr) => {
+            Value::Array(arr.into_iter().map(sanitize_log_data).collect())
+        }
+        Value::String(s) => Value::String(scrub_secret_strings(&s)),
+        other => other,
     }
 }
 
@@ -244,6 +284,39 @@ mod tests {
         let entry: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(entry["event"], "tool_call");
         assert_eq!(entry["session_id"], "test-session");
+    }
+
+    #[test]
+    fn test_sanitize_redacts_keys_and_strings() {
+        let input = serde_json::json!({
+            "api_key": "sk-or-v1-abcdef0123456789",
+            "nested": { "Authorization": "Bearer xyz", "ok": "value" },
+            "message": "my key is sk-ant-0123456789abcd here",
+            "list": ["sk-deadbeefcafebabe", "plain"],
+            "count": 42
+        });
+        let out = sanitize_log_data(input);
+        assert_eq!(out["api_key"], "[REDACTED]");
+        assert_eq!(out["nested"]["Authorization"], "[REDACTED]");
+        assert_eq!(out["nested"]["ok"], "value");
+        assert!(out["message"].as_str().unwrap().contains("[REDACTED]"));
+        assert!(!out["message"].as_str().unwrap().contains("sk-ant"));
+        assert_eq!(out["list"][0], "[REDACTED]");
+        assert_eq!(out["list"][1], "plain");
+        assert_eq!(out["count"], 42);
+    }
+
+    #[test]
+    fn test_blackbox_logger_redacts_secrets_on_disk() {
+        let dir = tempdir().unwrap();
+        let logger = BlackBoxLogger::new("sec-session", dir.path());
+        logger.log_simple(
+            "llm_call",
+            serde_json::json!({"api_key": "sk-or-v1-shouldnotappear"}),
+        );
+        let content = std::fs::read_to_string(&logger.log_file).unwrap();
+        assert!(!content.contains("shouldnotappear"));
+        assert!(content.contains("[REDACTED]"));
     }
 
     #[test]

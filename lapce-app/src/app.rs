@@ -3354,6 +3354,47 @@ fn rename(window_tab_data: Rc<WindowTabData>) -> impl View {
     .debug_name("Rename Layer")
 }
 
+fn inline_edit(window_tab_data: Rc<WindowTabData>) -> impl View {
+    let editor = window_tab_data.inline_edit.editor.clone();
+    let active = window_tab_data.inline_edit.active;
+    let layout_rect = window_tab_data.inline_edit.layout_rect;
+    let config = window_tab_data.common.config;
+
+    container(
+        container(
+            TextInputBuilder::new()
+                .is_focused(move || active.get())
+                .build_editor(editor)
+                .style(|s| s.width(320.0)),
+        )
+        .style(move |s| {
+            let config = config.get();
+            s.font_family(config.editor.font_family.clone())
+                .font_size(config.editor.font_size() as f32)
+                .border(1.5)
+                .border_radius(8.0)
+                .border_color(crate::ownstack_theme::BORDER_STRONG)
+                .background(crate::ownstack_theme::SURFACE_1)
+                .color(crate::ownstack_theme::TEXT)
+        }),
+    )
+    .on_resize(move |rect| {
+        layout_rect.set(rect);
+    })
+    .on_event_stop(EventListener::PointerMove, |_| {})
+    .on_event_stop(EventListener::PointerDown, |_| {})
+    .style(move |s| {
+        let origin = window_tab_data.inline_edit_origin();
+        s.position(Position::Absolute)
+            .apply_if(!active.get(), |s| s.hide())
+            .margin_left(origin.x as f32)
+            .margin_top(origin.y as f32)
+            .border_radius(8.0)
+            .padding(6.0)
+    })
+    .debug_name("Inline Edit Layer")
+}
+
 fn window_tab(window_tab_data: Rc<WindowTabData>) -> impl View {
     let source_control = window_tab_data.source_control.clone();
     let window_origin = window_tab_data.common.window_origin;
@@ -3388,6 +3429,7 @@ fn window_tab(window_tab_data: Rc<WindowTabData>) -> impl View {
         hover(window_tab_data.clone()),
         code_action(window_tab_data.clone()),
         rename(window_tab_data.clone()),
+        inline_edit(window_tab_data.clone()),
         palette(window_tab_data.clone()),
         crate::ownstack_palette::ownstack_palette_view(
             window_tab_data.ownstack_palette.clone(),

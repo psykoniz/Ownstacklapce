@@ -241,13 +241,13 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
             h_stack((
                 text("\u{27D0}").style(|s| {
                     s.font_size(18.0)
-                        .color(Color::from_rgb8(74, 158, 255))
+                        .color(crate::ownstack_theme::ACCENT)
                         .margin_right(8.0)
                 }),
                 text("AI Command Palette").style(|s| {
                     s.font_size(15.0)
                         .font_weight(Weight::BOLD)
-                        .color(Color::from_rgb8(200, 225, 255))
+                        .color(crate::ownstack_theme::TEXT)
                 }),
                 // Spacer
                 label(|| "").style(|s| s.flex_grow(1.0)),
@@ -257,8 +257,8 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         .padding_vert(2.0)
                         .border(1.0)
                         .border_radius(4.0)
-                        .border_color(Color::from_rgba8(120, 140, 180, 80))
-                        .color(Color::from_rgba8(150, 170, 210, 180))
+                        .border_color(crate::ownstack_theme::BORDER)
+                        .color(crate::ownstack_theme::TEXT_HINT)
                         .margin_right(4.0)
                 }),
                 label(|| "Enter").style(|s| {
@@ -267,8 +267,8 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         .padding_vert(2.0)
                         .border(1.0)
                         .border_radius(4.0)
-                        .border_color(Color::from_rgba8(120, 140, 180, 80))
-                        .color(Color::from_rgba8(150, 170, 210, 180))
+                        .border_color(crate::ownstack_theme::BORDER)
+                        .color(crate::ownstack_theme::TEXT_HINT)
                 }),
             ))
             .style(|s| s.items_center().width_full()),
@@ -277,7 +277,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                 s.width_full()
                     .height(1.0)
                     .margin_top(10.0)
-                    .background(Color::from_rgba8(74, 158, 255, 40))
+                    .background(crate::ownstack_theme::ACCENT.multiply_alpha(0.16))
             }),
         ))
         .style(|s| s.width_full().padding_bottom(12.0)),
@@ -290,12 +290,12 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         .padding(10.0)
                         .border(1.5)
                         .border_radius(10.0)
-                        .border_color(Color::from_rgba8(74, 158, 255, 180))
-                        .background(Color::from_rgb8(18, 22, 32))
+                        .border_color(crate::ownstack_theme::BORDER_STRONG)
+                        .background(crate::ownstack_theme::SURFACE_1)
                         .color(Color::WHITE)
                         .font_size(13.0)
                         .box_shadow_blur(8.0)
-                        .box_shadow_color(Color::from_rgba8(74, 158, 255, 40))
+                        .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.16))
                 })
                 .on_event_stop(floem::event::EventListener::KeyDown, {
                     let pd = palette_data.clone();
@@ -315,16 +315,14 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                     s.padding_horiz(16.0)
                         .padding_vert(10.0)
                         .border_radius(10.0)
-                        .background(Color::from_rgb8(74, 158, 255))
+                        .background(crate::ownstack_theme::ACCENT)
                         .color(Color::WHITE)
                         .font_size(14.0)
                         .cursor(CursorStyle::Pointer)
                         .hover(|s| {
-                            s.background(Color::from_rgb8(100, 180, 255))
+                            s.background(crate::ownstack_theme::ACCENT_BRIGHT)
                                 .box_shadow_blur(12.0)
-                                .box_shadow_color(Color::from_rgba8(
-                                    74, 158, 255, 120,
-                                ))
+                                .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.47))
                         })
                 })
                 .on_click_stop({
@@ -338,11 +336,11 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
             text("Suggested Actions").style(|s| {
                 s.font_size(10.0)
                     .font_weight(Weight::BOLD)
-                    .color(Color::from_rgb8(120, 140, 180))
+                    .color(crate::ownstack_theme::TEXT_DIM)
                     .padding_top(12.0)
                     .padding_bottom(6.0)
                     .border_top(1.0)
-                    .border_color(Color::from_rgba8(74, 158, 255, 25))
+                    .border_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.10))
             }),
             dyn_stack(
                 {
@@ -364,7 +362,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         h_stack((
                             text("+").style(|s| {
                                 s.margin_right(8.0)
-                                    .color(Color::from_rgb8(74, 158, 255))
+                                    .color(crate::ownstack_theme::ACCENT)
                             }),
                             text(action.title),
                         ))
@@ -376,14 +374,12 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                             s.padding_horiz(10.0)
                                 .padding_vert(7.0)
                                 .border_radius(8.0)
-                                .background(Color::from_rgba8(40, 50, 80, 120))
-                                .color(Color::from_rgb8(200, 220, 255))
+                                .background(crate::ownstack_theme::SURFACE_2.multiply_alpha(0.47))
+                                .color(crate::ownstack_theme::TEXT)
                                 .font_size(11.5)
                                 .cursor(CursorStyle::Pointer)
                                 .hover(|s| {
-                                    s.background(Color::from_rgba8(
-                                        74, 158, 255, 100,
-                                    ))
+                                    s.background(crate::ownstack_theme::ACCENT.multiply_alpha(0.39))
                                     .color(Color::WHITE)
                                 })
                         })
@@ -413,7 +409,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                 s.apply_if(!visible, |s| s.hide())
                     .padding_vert(10.0)
                     .font_size(11.0)
-                    .color(Color::from_rgba8(180, 190, 220, 160))
+                    .color(crate::ownstack_theme::TEXT_HINT)
             }),
         ))
         .style(|s| {
@@ -424,7 +420,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
         // Final Hint
         text("Tip: try '/plan' to switch agent to planning mode").style(|s| {
             s.font_size(10.0)
-                .color(Color::from_rgba8(160, 180, 255, 110))
+                .color(crate::ownstack_theme::TEXT_HINT)
                 .padding_top(12.0)
         }),
     ))
@@ -435,12 +431,12 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
             .max_width(640.0)
             .width_pct(90.0)
             .padding(18.0)
-            .background(Color::from_rgba8(14, 18, 28, 240))
+            .background(crate::ownstack_theme::SURFACE_0.multiply_alpha(0.94))
             .border(1.5)
-            .border_color(Color::from_rgba8(74, 158, 255, 150))
+            .border_color(crate::ownstack_theme::BORDER_STRONG)
             .border_radius(16.0)
             .box_shadow_blur(40.0)
-            .box_shadow_color(Color::from_rgba8(0, 0, 0, 200))
+            .box_shadow_color(Color::from_rgba8(0, 0, 0, 180))
     });
 
     // ── Full-screen overlay (click-outside backdrop) ─────────────────────
@@ -464,7 +460,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
             .size_full()
             .items_start()
             .justify_center()
-            .background(Color::from_rgba8(0, 0, 0, 80))
+            .background(crate::ownstack_theme::overlay_backdrop())
             .cursor(CursorStyle::Default)
         })
 }

@@ -7,9 +7,10 @@ use ownstack_agent::orchestrator::{
     RuntimeContextSnapshot,
 };
 use ownstack_agent::policy_approval::{PolicyApprovalManager, RpcSink};
-use ownstack_agent::provider::LlmProvider;
+use ownstack_agent::provider::{LlmProvider, ProviderError};
 use ownstack_agent::providers::anthropic::AnthropicProvider;
 use ownstack_agent::providers::local::LocalProvider;
+use ownstack_agent::providers::openai_compatible::OpenAiCompatibleProvider;
 use ownstack_agent::providers::openrouter::OpenRouterProvider;
 use ownstack_agent::secret_store;
 use ownstack_agent::toolkits::mcp::{McpServerConfig, McpToolkit};
@@ -191,6 +192,45 @@ fn emit_runtime_state(state: &RuntimeUiState) {
     });
 }
 
+/// Validate the runtime environment before the agent starts real work.
+/// Returns a list of human-readable findings (empty == all good).
+/// Port of `ownstack-python/app/core/preflight.py`.
+fn preflight_checks(workspace: &std::path::Path) -> Vec<String> {
+    let mut findings = Vec::new();
+
+    if !workspace.exists() {
+        findings.push(format!("workspace does not exist: {}", workspace.display()));
+    } else if !workspace.is_dir() {
+        findings.push(format!("workspace is not a directory: {}", workspace.display()));
+    }
+
+    // git is required for the Time Machine toolkit (snapshots/rollback).
+    let git_ok = std::process::Command::new("git")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !git_ok {
+        findings.push("git not found on PATH — Time Machine snapshots disabled".to_string());
+    }
+
+    // At least one LLM provider credential should be configured.
+    let has_provider = secret_store::has_secret("ANTHROPIC_API_KEY")
+        || secret_store::has_secret("OPENROUTER_API_KEY")
+        || secret_store::has_secret("OPENAI_API_KEY")
+        || std::env::var("OLLAMA_HOST").is_ok();
+    if !has_provider {
+        findings.push(
+            "no LLM provider configured (set ANTHROPIC_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY, or run Ollama)"
+                .to_string(),
+        );
+    }
+
+    findings
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -214,12 +254,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("OwnStack Agent starting in {:?}", workspace);
     info!("Session: {}", session_id);
 
+    // Preflight: validate the environment before doing real work. Non-fatal —
+    // findings are logged so the operator can see why a feature may not work.
+    for finding in preflight_checks(&workspace) {
+        warn!("Preflight: {finding}");
+    }
+
     // Initialize provider based on env.
     let provider_preference = std::env::var("OWNSTACK_PROVIDER")
         .ok()
         .map(|v| v.to_ascii_lowercase());
     let has_anthropic = secret_store::has_secret("ANTHROPIC_API_KEY");
     let has_openrouter = secret_store::has_secret("OPENROUTER_API_KEY");
+    let has_openai = secret_store::has_secret("OPENAI_API_KEY");
+
+    // Auto-selection order when no explicit preference: Anthropic > OpenRouter >
+    // OpenAI-compatible > Local.
+    let auto_provider = || -> Result<Arc<dyn LlmProvider>, ProviderError> {
+        if has_anthropic {
+            info!("LLM Provider: Anthropic");
+            Ok(Arc::new(AnthropicProvider::from_env()?))
+        } else if has_openrouter {
+            info!("LLM Provider: OpenRouter");
+            Ok(Arc::new(OpenRouterProvider::from_env()?))
+        } else if has_openai {
+            info!("LLM Provider: OpenAI-compatible");
+            Ok(Arc::new(OpenAiCompatibleProvider::from_env()?))
+        } else {
+            info!("LLM Provider: Local");
+            Ok(Arc::new(LocalProvider::from_env()?))
+        }
+    };
+
     let provider: Arc<dyn LlmProvider> = match provider_preference.as_deref() {
         Some("anthropic") if has_anthropic => {
             info!("LLM Provider: Anthropic (preferred)");
@@ -228,6 +294,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("openrouter") if has_openrouter => {
             info!("LLM Provider: OpenRouter (preferred)");
             Arc::new(OpenRouterProvider::from_env()?)
+        }
+        Some("openai") | Some("openai-compatible") if has_openai => {
+            info!("LLM Provider: OpenAI-compatible (preferred)");
+            Arc::new(OpenAiCompatibleProvider::from_env()?)
         }
         Some("local") | Some("ollama") => {
             info!("LLM Provider: Local (preferred)");
@@ -238,29 +308,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Preferred provider '{}' is unavailable; falling back to auto selection",
                 pref
             );
-            if has_anthropic {
-                info!("LLM Provider: Anthropic");
-                Arc::new(AnthropicProvider::from_env()?)
-            } else if has_openrouter {
-                info!("LLM Provider: OpenRouter");
-                Arc::new(OpenRouterProvider::from_env()?)
-            } else {
-                info!("LLM Provider: Local");
-                Arc::new(LocalProvider::from_env()?)
-            }
+            auto_provider()?
         }
-        None => {
-            if has_anthropic {
-                info!("LLM Provider: Anthropic");
-                Arc::new(AnthropicProvider::from_env()?)
-            } else if has_openrouter {
-                info!("LLM Provider: OpenRouter");
-                Arc::new(OpenRouterProvider::from_env()?)
-            } else {
-                info!("LLM Provider: Local");
-                Arc::new(LocalProvider::from_env()?)
-            }
-        }
+        None => auto_provider()?,
     };
 
     let mut orchestrator = AgentOrchestrator::new(
@@ -382,14 +432,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     orchestrator.register_toolkit(multivers_toolkit.clone());
     orchestrator.register_toolkit(vision_toolkit.clone());
     orchestrator.register_toolkit(Arc::new(
-        ownstack_agent::toolkits::extra::ExtraToolkit::new(Some(
-            provider.clone(),
-        )),
+        ownstack_agent::toolkits::extra::ExtraToolkit::new(Some(provider.clone())),
     ));
     orchestrator.register_toolkit(Arc::new(
-        ownstack_agent::toolkits::browser::BrowserToolkit::new(
-            workspace.clone(),
-        ),
+        ownstack_agent::toolkits::browser::BrowserToolkit,
     ));
     orchestrator.register_toolkit(Arc::new(
         ownstack_agent::toolkits::time_machine::TimeMachineToolkit::new(
@@ -400,9 +446,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ownstack_agent::toolkits::specialists::PMToolkit::new(workspace.clone()),
     ));
     orchestrator.register_toolkit(Arc::new(
-        ownstack_agent::toolkits::specialists::QAToolkit::new(
-            workspace.clone(),
-        ),
+        ownstack_agent::toolkits::specialists::QAToolkit,
     ));
     orchestrator.register_toolkit(Arc::new(
         ownstack_agent::toolkits::specialists::SecurityToolkit,

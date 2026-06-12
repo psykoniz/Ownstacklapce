@@ -137,7 +137,7 @@ impl AgentMode {
     /// Returns the accent color for this mode.
     pub fn color(&self) -> Color {
         match self {
-            AgentMode::Ask => Color::from_rgb8(74, 158, 255), // Blue
+            AgentMode::Ask => crate::ownstack_theme::ACCENT,
             AgentMode::Auto => Color::from_rgb8(255, 179, 71), // Amber
             AgentMode::Plan => Color::from_rgb8(155, 89, 182), // Violet
         }
@@ -195,6 +195,25 @@ impl OwnStackChatData {
     pub fn send_message(&self) {
         let prompt = self.input.get_untracked();
         if prompt.trim().is_empty() {
+            return;
+        }
+
+        // Guard: no AI provider configured (e.g. onboarding was skipped without
+        // a key). Show a clear, actionable message instead of firing a request
+        // that would fail with an API-key error.
+        if !crate::ownstack_onboarding::is_ai_provider_configured() {
+            self.messages.update(|msgs| {
+                msgs.push(ChatMessage {
+                    role: ChatRole::Alert,
+                    content: "No AI provider is configured. Open Settings to add an API key (OpenRouter, Anthropic, or a custom OpenAI-compatible endpoint), then try again.".to_string(),
+                    timestamp: chrono_now(),
+                    diff_content: None,
+                    sub_role: None,
+                    tool_result: None,
+                    diff_target: None,
+                    is_error: true,
+                });
+            });
             return;
         }
 
@@ -444,6 +463,14 @@ impl OwnStackChatData {
         );
     }
 
+    /// Set a specific agent mode.
+    pub fn set_mode(&self, mode: AgentMode) {
+        tracing::info!("Agent mode set: {:?}", mode);
+        self.common.proxy.ownstack(OwnStackRpc::SetAgentMode {
+            mode: mode.to_runtime(),
+        });
+    }
+
     /// Cycle through agent modes: Ask → Auto → Plan → Ask
     pub fn cycle_mode(&self) {
         let current = self.agent_mode.get_untracked();
@@ -452,10 +479,7 @@ impl OwnStackChatData {
             AgentMode::Auto => AgentMode::Plan,
             AgentMode::Plan => AgentMode::Ask,
         };
-        tracing::info!("Agent mode changed request: {:?} -> {:?}", current, next);
-        self.common.proxy.ownstack(OwnStackRpc::SetAgentMode {
-            mode: next.to_runtime(),
-        });
+        self.set_mode(next);
     }
 
     /// Get message count
@@ -475,7 +499,6 @@ pub fn ownstack_chat_panel(
     let workspace_root = window_tab_data.workspace.path.clone();
     let monitor_tab = create_rw_signal(ChatMonitorTab::Output);
 
-    let chat_data_hdr = chat_data.clone();
     let chat_data_trash = chat_data.clone();
     let chat_data_attach = chat_data.clone();
     let chat_data_output = chat_data.clone();
@@ -491,26 +514,54 @@ pub fn ownstack_chat_panel(
                 .style(|s| s.font_weight(Weight::BOLD).font_size(13.0)),
             // Right-side controls
             h_stack((
-                // ① Colored mode badge — clic = cycle mode
-                label(move || chat_data_hdr.agent_mode.get().label_with_icon())
-                    .style(move |s| {
-                        let mode = chat_data_hdr.agent_mode.get();
-                        let accent = mode.color();
-                        s.padding_horiz(8.0)
-                            .padding_vert(4.0)
-                            .border(1.5)
+                // ① Segmented mode selector: Ask | Plan | Auto
+                {
+                    fn mode_segment(chat: OwnStackChatData, mode: AgentMode) -> impl View {
+                        let lbl = match mode {
+                            AgentMode::Ask  => "Ask",
+                            AgentMode::Plan => "Plan",
+                            AgentMode::Auto => "Auto",
+                        };
+                        let mc = mode.color();
+                        let target = mode.clone();
+                        label(move || lbl)
+                            .style(move |s| {
+                                let active = chat.agent_mode.get() == target;
+                                let base = s
+                                    .padding_horiz(10.0)
+                                    .padding_vert(3.0)
+                                    .font_size(11.0)
+                                    .font_weight(Weight::BOLD)
+                                    .cursor(CursorStyle::Pointer)
+                                    .border_radius(4.0);
+                                if active {
+                                    base.background(mc.multiply_alpha(0.25)).color(mc)
+                                } else {
+                                    base.color(crate::ownstack_theme::TEXT_DIM)
+                                        .hover(|s| s.background(crate::ownstack_theme::SURFACE_HOVER))
+                                }
+                            })
+                            .on_click_stop({
+                                let chat = chat.clone();
+                                let m = mode.clone();
+                                move |_| chat.set_mode(m.clone())
+                            })
+                    }
+                    h_stack((
+                        mode_segment(chat_data.clone(), AgentMode::Ask),
+                        mode_segment(chat_data.clone(), AgentMode::Plan),
+                        mode_segment(chat_data.clone(), AgentMode::Auto),
+                    ))
+                    .style(|s| {
+                        s.items_center()
+                            .gap(2.0)
+                            .padding(2.0)
+                            .border(1.0)
                             .border_radius(6.0)
-                            .border_color(accent)
-                            .color(accent)
-                            .font_weight(Weight::BOLD)
-                            .font_size(11.0)
-                            .cursor(floem::style::CursorStyle::Pointer)
-                            .hover(|s| s.background(accent.multiply_alpha(0.18)))
+                            .border_color(crate::ownstack_theme::BORDER)
+                            .background(crate::ownstack_theme::SURFACE_1)
                     })
-                    .on_click_stop({
-                        let chat_data = chat_data.clone();
-                        move |_| chat_data.cycle_mode()
-                    }),
+                },
                 // ② Trash — Clear History
                 clickable_icon(
                     || LapceIcons::TRASH,
@@ -571,7 +622,7 @@ pub fn ownstack_chat_panel(
                             label(move || format!("Mission: {}", goal)).style(|s| {
                                 s.font_weight(Weight::BOLD)
                                     .padding_bottom(5.0)
-                                    .color(Color::from_rgb8(180, 220, 255))
+                                    .color(crate::ownstack_theme::TEXT)
                             }),
                             v_stack((dyn_stack(
                                 move || steps.clone(),
@@ -699,12 +750,12 @@ pub fn ownstack_chat_panel(
                                     config.get().color(LapceColor::LAPCE_BORDER),
                                 )
                                 .background(if is_active {
-                                    Color::from_rgba8(74, 158, 255, 40)
+                                    crate::ownstack_theme::ACCENT.multiply_alpha(0.16)
                                 } else {
                                     Color::from_rgba8(0, 0, 0, 0)
                                 })
                                 .color(if is_active {
-                                    Color::from_rgb8(130, 190, 255)
+                                    crate::ownstack_theme::ACCENT_BRIGHT
                                 } else {
                                     config.get().color(LapceColor::STATUS_FOREGROUND)
                                 })
@@ -726,12 +777,12 @@ pub fn ownstack_chat_panel(
                                     config.get().color(LapceColor::LAPCE_BORDER),
                                 )
                                 .background(if is_active {
-                                    Color::from_rgba8(255, 196, 82, 40)
+                                    crate::ownstack_theme::STATE_WARN.multiply_alpha(0.16)
                                 } else {
                                     Color::from_rgba8(0, 0, 0, 0)
                                 })
                                 .color(if is_active {
-                                    Color::from_rgb8(255, 210, 130)
+                                    crate::ownstack_theme::STATE_WARN
                                 } else {
                                     config.get().color(LapceColor::STATUS_FOREGROUND)
                                 })
@@ -875,11 +926,11 @@ pub fn ownstack_chat_panel(
                                         .clamp(0.0, 100.0)
                                 };
                                 let fill = if ratio >= 95.0 {
-                                    Color::from_rgb8(255, 112, 112)
+                                    crate::ownstack_theme::STATE_ERROR
                                 } else if ratio >= 80.0 {
-                                    Color::from_rgb8(255, 196, 82)
+                                    crate::ownstack_theme::STATE_WARN
                                 } else {
-                                    Color::from_rgb8(94, 190, 129)
+                                    crate::ownstack_theme::STATE_OK
                                 };
                                 s.width_pct(ratio)
                                     .height(4.0)
@@ -901,8 +952,8 @@ pub fn ownstack_chat_panel(
                                 .padding_horiz(10.0)
                                 .padding_vert(6.0)
                                 .font_size(11.0)
-                                .color(Color::from_rgb8(255, 200, 60))
-                                .background(Color::from_rgba8(255, 200, 60, 20))
+                                .color(crate::ownstack_theme::STATE_WARN)
+                                .background(crate::ownstack_theme::STATE_WARN.multiply_alpha(0.08))
                                 .border_radius(6.0)
                                 .margin_bottom(6.0)
                                 .apply_if(connected, |s| s.hide())
@@ -921,7 +972,7 @@ pub fn ownstack_chat_panel(
                                     s.background(Color::from_rgba8(
                                         100, 150, 255, 40,
                                     ))
-                                    .color(Color::from_rgb8(100, 150, 255))
+                                    .color(crate::ownstack_theme::ACCENT)
                                 })
                         })
                         .on_click_stop(move |_| {
@@ -946,10 +997,10 @@ pub fn ownstack_chat_panel(
                                     config.color(LapceColor::EDITOR_BACKGROUND),
                                 )
                                 .hover(|s| {
-                                    s.border_color(Color::from_rgb8(100, 150, 255))
+                                    s.border_color(crate::ownstack_theme::ACCENT)
                                 })
                                 .active(|s| {
-                                    s.border_color(Color::from_rgb8(100, 200, 255))
+                                    s.border_color(crate::ownstack_theme::ACCENT_BRIGHT)
                                         .box_shadow_blur(5.0)
                                         .box_shadow_color(Color::from_rgba8(
                                             100, 200, 255, 100,
@@ -1025,6 +1076,22 @@ pub fn ownstack_chat_panel(
                 .border_top(1.0)
                 .border_color(config.color(LapceColor::LAPCE_BORDER))
         }),
+        // ── Shortcut hints bar ──────────────────────────────────────
+        h_stack((
+            shortcut_hint("Cmd/Ctrl+K", "Inline Edit"),
+            shortcut_hint("Cmd/Ctrl+L", "Toggle Chat"),
+            shortcut_hint("Cmd/Ctrl+Shift+P", "AI Palette"),
+        ))
+        .style(move |s| {
+            let config = config.get();
+            s.width_full()
+                .padding_horiz(10.0)
+                .padding_vert(4.0)
+                .gap(12.0)
+                .justify_center()
+                .border_top(1.0)
+                .border_color(config.color(LapceColor::LAPCE_BORDER).multiply_alpha(0.5))
+        }),
     ))
     .style(|s| s.size_full().flex_col())
 }
@@ -1090,34 +1157,34 @@ fn message_view(
     let is_user = msg.role == ChatRole::User;
 
     let bubble_bg = if is_user {
-        Color::from_rgb8(37, 99, 235)
+        crate::ownstack_theme::ACCENT_DIM
     } else if msg.is_error {
-        Color::from_rgba8(110, 20, 20, 80)
+        crate::ownstack_theme::STATE_ERROR.multiply_alpha(0.31)
     } else {
-        Color::from_rgb8(24, 24, 37)
+        crate::ownstack_theme::SURFACE_0
     };
 
     let bubble_border = if is_user {
         Color::TRANSPARENT
     } else if msg.is_error {
-        Color::from_rgba8(239, 68, 68, 120)
+        crate::ownstack_theme::STATE_ERROR.multiply_alpha(0.47)
     } else {
-        Color::from_rgba8(30, 30, 46, 150)
+        crate::ownstack_theme::SURFACE_0.multiply_alpha(0.59)
     };
 
     let text_color = if is_user {
         Color::WHITE
     } else {
-        Color::from_rgb8(203, 213, 225)
+        crate::ownstack_theme::TEXT
     };
 
     let role_dot_color = if msg.is_error {
-        Color::from_rgb8(250, 204, 21)
+        crate::ownstack_theme::STATE_WARN
     } else {
         match msg.sub_role.as_deref() {
-            Some("Critic") => Color::from_rgb8(248, 113, 113),
-            Some("System") => Color::from_rgb8(156, 163, 175),
-            _ => Color::from_rgb8(96, 165, 250),
+            Some("Critic") => crate::ownstack_theme::STATE_ERROR,
+            Some("System") => crate::ownstack_theme::TEXT_DIM,
+            _ => crate::ownstack_theme::ACCENT,
         }
     };
 
@@ -1148,7 +1215,7 @@ fn message_view(
             label(move || role_label_text.clone()).style(move |s| {
                 s.font_size(10.0)
                     .font_weight(Weight::BOLD)
-                    .color(Color::from_rgb8(100, 116, 139))
+                    .color(crate::ownstack_theme::TEXT_HINT)
             }),
         ))
         .style(|s| s.items_center().padding_bottom(6.0).padding_left(2.0))
@@ -1165,7 +1232,7 @@ fn message_view(
                 h_stack((
                     label(|| "📄 ").style(|s| s.margin_right(4.0).font_size(10.0)),
                     label(move || target_clone.clone()).style(|s| {
-                        s.color(Color::from_rgb8(203, 213, 225)).font_size(12.0)
+                        s.color(crate::ownstack_theme::TEXT).font_size(12.0)
                     }),
                 ))
                 .style(|s| s.items_center()),
@@ -1174,13 +1241,13 @@ fn message_view(
                         s.padding_horiz(8.0)
                             .padding_vert(4.0)
                             .border_radius(4.0)
-                            .background(Color::from_rgba8(37, 99, 235, 50))
-                            .color(Color::from_rgb8(96, 165, 250))
+                            .background(crate::ownstack_theme::ACCENT_DIM.multiply_alpha(0.20))
+                            .color(crate::ownstack_theme::ACCENT)
                             .font_size(10.0)
                             .font_weight(Weight::SEMIBOLD)
                             .cursor(CursorStyle::Pointer)
                             .hover(|s| {
-                                s.background(Color::from_rgba8(37, 99, 235, 100))
+                                s.background(crate::ownstack_theme::ACCENT_DIM.multiply_alpha(0.39))
                             })
                     })
                     .on_click_stop(move |_| {
@@ -1195,9 +1262,9 @@ fn message_view(
                     .padding(8.0)
                     .border(1.0)
                     .border_radius(4.0)
-                    .border_color(Color::from_rgba8(51, 65, 85, 120))
-                    .background(Color::from_rgb8(17, 17, 27))
-                    .hover(|s| s.border_color(Color::from_rgba8(59, 130, 246, 120)))
+                    .border_color(crate::ownstack_theme::BORDER)
+                    .background(crate::ownstack_theme::SURFACE_0)
+                    .hover(|s| s.border_color(crate::ownstack_theme::BORDER_STRONG))
             })
             .into_any()
         } else {
@@ -1209,12 +1276,12 @@ fn message_view(
         v_stack((
             h_stack((
                 label(|| "✓").style(|s| {
-                    s.color(Color::from_rgb8(52, 211, 153))
+                    s.color(crate::ownstack_theme::STATE_OK)
                         .font_weight(Weight::BOLD)
                         .margin_right(6.0)
                 }),
                 label(move || tool_res_clone.clone()).style(|s| {
-                    s.color(Color::from_rgba8(52, 211, 153, 230))
+                    s.color(crate::ownstack_theme::STATE_OK.multiply_alpha(0.90))
                         .font_size(12.0)
                         .font_weight(Weight::SEMIBOLD)
                 }),
@@ -1227,7 +1294,7 @@ fn message_view(
                 .margin_top(12.0)
                 .padding_top(12.0)
                 .border_top(1.0)
-                .border_color(Color::from_rgba8(51, 65, 85, 120))
+                .border_color(crate::ownstack_theme::BORDER)
         })
         .into_any()
     } else {
@@ -1252,7 +1319,10 @@ fn message_view(
                 }
             },
             |diff| diff.clone(),
-            move |diff| diff_view(diff, config),
+            {
+                let chat_data = chat_data.clone();
+                move |diff| diff_view(diff, config, chat_data.clone())
+            },
         ),
     ))
     .style(move |s| {
@@ -1292,8 +1362,13 @@ fn message_view(
 fn diff_view(
     diff: String,
     config: floem::reactive::ReadSignal<Arc<crate::config::LapceConfig>>,
+    chat_data: OwnStackChatData,
 ) -> impl View {
     let lines: Vec<String> = diff.lines().map(|s| s.to_string()).collect();
+    let diff_id = format!("diff-{}", diff.len());
+    let diff_id_accept = diff_id.clone();
+    let diff_id_reject = diff_id.clone();
+    let decided = create_rw_signal(Option::<bool>::None);
 
     v_stack((
         label(move || "Proposed Changes:")
@@ -1348,8 +1423,93 @@ fn diff_view(
                 .border_color(config.color(LapceColor::LAPCE_BORDER))
                 .border_radius(4.0)
         }),
+        // Accept / Reject buttons
+        h_stack((
+            label(move || {
+                match decided.get() {
+                    Some(true) => "Accepted".to_string(),
+                    Some(false) => "Rejected".to_string(),
+                    None => "Accept".to_string(),
+                }
+            })
+            .style(move |s| {
+                let done = decided.get().is_some();
+                s.padding_horiz(12.0)
+                    .padding_vert(4.0)
+                    .border_radius(6.0)
+                    .font_size(11.0)
+                    .font_weight(Weight::BOLD)
+                    .cursor(if done { CursorStyle::Default } else { CursorStyle::Pointer })
+                    .color(crate::ownstack_theme::STATE_OK)
+                    .background(crate::ownstack_theme::STATE_OK.multiply_alpha(0.15))
+                    .border(1.0)
+                    .border_color(crate::ownstack_theme::STATE_OK.multiply_alpha(0.4))
+                    .apply_if(done, |s| s.apply_if(decided.get() != Some(true), |s| s.hide()))
+            })
+            .on_click_stop({
+                let chat = chat_data.clone();
+                let id = diff_id_accept;
+                move |_| {
+                    if decided.get_untracked().is_none() {
+                        decided.set(Some(true));
+                        chat.send_decision("accept", &id);
+                    }
+                }
+            }),
+            label(move || {
+                match decided.get() {
+                    Some(false) => "Rejected".to_string(),
+                    _ => "Reject".to_string(),
+                }
+            })
+            .style(move |s| {
+                let done = decided.get().is_some();
+                s.padding_horiz(12.0)
+                    .padding_vert(4.0)
+                    .border_radius(6.0)
+                    .font_size(11.0)
+                    .font_weight(Weight::BOLD)
+                    .cursor(if done { CursorStyle::Default } else { CursorStyle::Pointer })
+                    .color(crate::ownstack_theme::STATE_ERROR)
+                    .background(crate::ownstack_theme::STATE_ERROR.multiply_alpha(0.15))
+                    .border(1.0)
+                    .border_color(crate::ownstack_theme::STATE_ERROR.multiply_alpha(0.4))
+                    .apply_if(done, |s| s.apply_if(decided.get() != Some(false), |s| s.hide()))
+            })
+            .on_click_stop({
+                let chat = chat_data.clone();
+                let id = diff_id_reject;
+                move |_| {
+                    if decided.get_untracked().is_none() {
+                        decided.set(Some(false));
+                        chat.send_decision("reject", &id);
+                    }
+                }
+            }),
+        ))
+        .style(|s| s.gap(8.0).padding_top(6.0)),
     ))
     .style(|s| s.width_full().padding_top(8.0))
+}
+
+fn shortcut_hint(key: &'static str, action: &'static str) -> impl View {
+    h_stack((
+        label(move || key).style(|s| {
+            s.font_size(10.0)
+                .padding_horiz(5.0)
+                .padding_vert(1.0)
+                .border(1.0)
+                .border_radius(3.0)
+                .border_color(crate::ownstack_theme::BORDER)
+                .color(crate::ownstack_theme::TEXT_HINT)
+                .font_family("monospace".to_string())
+        }),
+        label(move || action).style(|s| {
+            s.font_size(10.0)
+                .color(crate::ownstack_theme::TEXT_DIM)
+        }),
+    ))
+    .style(|s| s.items_center().gap(4.0))
 }
 
 fn chrono_now() -> String {

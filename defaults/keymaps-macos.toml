@@ -315,3 +315,7 @@ command = "palette.workspace_symbol"
 [[keymaps]]
 key = "ctrl+g"
 command = "palette.line"
+
+[[keymaps]]
+key = "meta+k"
+command = "ownstack.inline_edit"

@@ -38,7 +38,6 @@ lapce-xi-rope     = { workspace = true }
 lapce-core        = { workspace = true }
 lapce-rpc         = { workspace = true }
 floem-editor-core = { workspace = true }
-ownstack-bridge   = { path = "../ownstack-bridge" }
 
 # proxy specific dependencies
 

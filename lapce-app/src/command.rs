@@ -462,6 +462,10 @@ pub enum LapceWorkbenchCommand {
     #[strum(serialize = "ownstack.toggle_audit")]
     OwnStackToggleAudit,
 
+    #[strum(message = "OwnStack: Inline AI Edit (Cmd+K)")]
+    #[strum(serialize = "ownstack.inline_edit")]
+    OwnStackInlineEdit,
+
     // Focus toggle commands
     #[strum(message = "Toggle Terminal Focus")]
     #[strum(serialize = "toggle_terminal_focus")]

@@ -43,10 +43,8 @@ use lsp_types::{
     TextDocumentItem, Url,
     notification::{Cancel, Notification},
 };
-use ownstack_bridge::PythonBridge;
 use parking_lot::Mutex;
 use serde::Deserialize;
-use tokio::io::AsyncBufReadExt;
 
 use crate::{
     buffer::{Buffer, get_mod_time, load_file},
@@ -147,7 +145,6 @@ pub struct Dispatcher {
     file_watcher: FileWatcher,
     window_id: usize,
     tab_id: usize,
-    bridge: Arc<Mutex<Option<PythonBridge>>>,
     agent: Arc<Mutex<Option<NativeAgent>>>,
     notified_missing_lsps: HashSet<String>,
 }
@@ -561,18 +558,11 @@ impl ProxyHandler for Dispatcher {
             }
             OwnStack { message } => {
                 if matches!(message, lapce_rpc::ownstack::OwnStackRpc::KillSwitch) {
-                    // Kill-Switch: stop agent + bridge immediately, and do not auto-restart.
-                    {
-                        let mut agent_guard = self.agent.lock();
-                        if let Some(mut agent) = agent_guard.take() {
-                            let _ = agent.child.kill();
-                            let _ = agent.child.wait();
-                        }
-                    }
-                    {
-                        // Dropping PythonBridge kills the backend process (kill_on_drop).
-                        let mut bridge_guard = self.bridge.lock();
-                        let _ = bridge_guard.take();
+                    // Kill-Switch: stop the native agent immediately, no restart.
+                    let mut agent_guard = self.agent.lock();
+                    if let Some(mut agent) = agent_guard.take() {
+                        let _ = agent.child.kill();
+                        let _ = agent.child.wait();
                     }
                     return;
                 }
@@ -588,63 +578,8 @@ impl ProxyHandler for Dispatcher {
                     return;
                 }
 
-                let mut bridge_guard = self.bridge.lock();
-                if bridge_guard.is_some() {
-                    // PythonBridge::send_request is async — take the bridge out
-                    // of the mutex, send in a tokio task, then put it back.
-                    let mut bridge = bridge_guard.take().unwrap();
-                    drop(bridge_guard);
-
-                    let bridge_mutex = self.bridge.clone();
-                    let core_rpc = self.core_rpc.clone();
-                    let method = match &message {
-                        lapce_rpc::ownstack::OwnStackRpc::AiPrompt { .. } => {
-                            "ai.prompt"
-                        }
-                        lapce_rpc::ownstack::OwnStackRpc::SetAgentMode {
-                            ..
-                        } => "agent.set_mode",
-                        lapce_rpc::ownstack::OwnStackRpc::ToolExec { .. } => {
-                            "tools.exec"
-                        }
-                        _ => "rpc.forward",
-                    }
-                    .to_string();
-                    let params = serde_json::to_value(&message)
-                        .unwrap_or(serde_json::Value::Null);
-
-                    tokio::spawn(async move {
-                        match bridge.send_request(&method, params).await {
-                            Ok(result) => {
-                                if let Some(json_str) =
-                                    result.get("response").and_then(|v| v.as_str())
-                                {
-                                    if let Ok(rpc) = serde_json::from_str::<
-                                        lapce_rpc::ownstack::OwnStackRpc,
-                                    >(
-                                        json_str
-                                    ) {
-                                        core_rpc.notification(
-                                            CoreNotification::OwnStack {
-                                                message: rpc,
-                                            },
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("Python bridge send failed: {}", e);
-                            }
-                        }
-                        // Return bridge to the mutex so it can be reused
-                        *bridge_mutex.lock() = Some(bridge);
-                    });
-                    return;
-                }
-
-                // If neither is started, prefer agent (default for Phase 2+)
+                // Agent not started yet: start it, then send.
                 drop(agent_guard);
-                drop(bridge_guard);
                 self.start_native_agent();
                 if let Some(agent) = self.agent.lock().as_mut() {
                     let _ = agent.send_rpc(&message);
@@ -1479,7 +1414,6 @@ impl Dispatcher {
             file_watcher,
             window_id: 1,
             tab_id: 1,
-            bridge: Arc::new(Mutex::new(None)),
             agent: Arc::new(Mutex::new(None)),
             notified_missing_lsps: HashSet::new(),
         }
@@ -1515,74 +1449,6 @@ impl Dispatcher {
         let agent =
             NativeAgent::spawn(self.workspace.clone(), self.core_rpc.clone());
         *self.agent.lock() = agent;
-    }
-
-    pub fn start_bridge(&self) {
-        use ownstack_bridge::{
-            BridgeLaunchConfig, BridgeRuntimeMode, default_bundled_binary_name,
-        };
-
-        let workspace = self.workspace.clone().unwrap_or_default();
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(|p| p.to_path_buf()));
-
-        let bundled_path = exe_dir.map(|d| d.join(default_bundled_binary_name()));
-
-        let config = BridgeLaunchConfig {
-            mode: BridgeRuntimeMode::Auto,
-            workspace: workspace.clone(),
-            python_root: Some(workspace.join("ownstack-python")),
-            bundled_path,
-        };
-
-        let core_rpc = self.core_rpc.clone();
-        let bridge_mutex = self.bridge.clone();
-
-        // PythonBridge::start is async, so spawn a task
-        tokio::spawn(async move {
-            match PythonBridge::start(config).await {
-                Ok(mut bridge) => {
-                    // Start reading from bridge
-                    let mut reader = match bridge.take_stdout() {
-                        Ok(reader) => reader,
-                        Err(e) => {
-                            tracing::error!("Failed to take bridge stdout: {}", e);
-                            *bridge_mutex.lock() = Some(bridge);
-                            return;
-                        }
-                    };
-                    let core_rpc_inner = core_rpc.clone();
-                    tokio::spawn(async move {
-                        let mut line = String::new();
-                        while let Ok(n) = reader.read_line(&mut line).await {
-                            if n == 0 {
-                                break;
-                            }
-                            if let Ok(rpc) = serde_json::from_str::<
-                                lapce_rpc::ownstack::OwnStackRpc,
-                            >(&line)
-                            {
-                                core_rpc_inner.notification(
-                                    CoreNotification::OwnStack { message: rpc },
-                                );
-                            }
-                            line.clear();
-                        }
-                    });
-                    *bridge_mutex.lock() = Some(bridge);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to start Python bridge: {}", e);
-                }
-            }
-        });
-    }
-
-    pub fn kill_bridge(&self) {
-        if self.bridge.lock().take().is_some() {
-            // PythonBridge child is tokio process; dropping the handle terminates ownership.
-        }
     }
 
     pub fn kill_native_agent(&self) {

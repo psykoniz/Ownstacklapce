@@ -23,6 +23,10 @@ const SECRET_SPECS: &[SecretSpec] = &[
         env_var: "ANTHROPIC_API_KEY",
         entry_name: "anthropic_api_key",
     },
+    SecretSpec {
+        env_var: "OPENAI_API_KEY",
+        entry_name: "openai_api_key",
+    },
 ];
 
 fn spec_for_env_var(env_var: &str) -> Option<SecretSpec> {
