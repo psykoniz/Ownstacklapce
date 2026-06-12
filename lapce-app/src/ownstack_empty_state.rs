@@ -10,20 +10,22 @@ use floem::style::CursorStyle;
 use floem::text::Weight;
 use floem::views::{Decorators, label, v_stack};
 
-// ── Design tokens (consistent across all empty states) ───────────────────────
+// ── Design tokens — sourced from the central OwnStack theme ──────────────────
 
-const TITLE_COLOR: Color = Color::from_rgb8(190, 210, 235);
-const DESC_COLOR: Color = Color::from_rgb8(130, 150, 180);
-const HINT_COLOR: Color = Color::from_rgb8(95, 115, 145);
-const ICON_COLOR: Color = Color::from_rgb8(74, 158, 255);
-const ICON_DIM: Color = Color::from_rgb8(55, 100, 170);
-const CTA_BG: Color = Color::from_rgb8(28, 48, 78);
-const CTA_BG_HOVER: Color = Color::from_rgb8(38, 65, 105);
-const CTA_BG_ACTIVE: Color = Color::from_rgb8(32, 55, 88);
-const CTA_BORDER: Color = Color::from_rgb8(60, 100, 160);
-const CTA_BORDER_HOVER: Color = Color::from_rgb8(80, 130, 200);
-const CTA_TEXT: Color = Color::from_rgb8(180, 215, 255);
-const BRAND_ACCENT: Color = Color::from_rgb8(74, 158, 255);
+use crate::ownstack_theme as tok;
+
+const TITLE_COLOR: Color = tok::TITLE;
+const DESC_COLOR: Color = tok::TEXT_DIM;
+const HINT_COLOR: Color = tok::TEXT_HINT;
+const ICON_COLOR: Color = tok::ACCENT;
+const ICON_DIM: Color = tok::ACCENT_DIM;
+const CTA_BG: Color = tok::CTA_BG;
+const CTA_BG_HOVER: Color = tok::CTA_BG_HOVER;
+const CTA_BG_ACTIVE: Color = tok::CTA_BG_ACTIVE;
+const CTA_BORDER: Color = tok::CTA_BORDER;
+const CTA_BORDER_HOVER: Color = tok::CTA_BORDER_HOVER;
+const CTA_TEXT: Color = tok::CTA_TEXT;
+const BRAND_ACCENT: Color = tok::ACCENT;
 
 // ── Main editor area placeholder ─────────────────────────────────────────────
 

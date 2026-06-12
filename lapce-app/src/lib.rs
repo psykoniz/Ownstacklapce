@@ -31,6 +31,7 @@ pub mod ownstack_empty_state;
 pub mod ownstack_onboarding;
 pub mod ownstack_palette;
 pub mod ownstack_status;
+pub mod ownstack_theme;
 pub mod palette;
 pub mod panel;
 pub mod plugin;
