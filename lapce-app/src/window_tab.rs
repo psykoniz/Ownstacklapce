@@ -103,6 +103,7 @@ pub enum Focus {
     Palette,
     CodeAction,
     Rename,
+    InlineEdit,
     AboutPopup,
     Panel(PanelKind),
 }
@@ -190,6 +191,7 @@ pub struct WindowTabData {
     pub ownstack_audit: crate::ownstack_audit::OwnStackAuditData,
     pub ownstack_status: crate::ownstack_status::OwnStackStatusData,
     pub ownstack_mcp: crate::ownstack_mcp::OwnStackMcpData,
+    pub inline_edit: crate::ownstack_inline_edit::InlineEditData,
     pub policy_prompt_seq: RwSignal<u64>,
     pub layout_rect: RwSignal<Rect>,
     pub title_height: RwSignal<f64>,
@@ -517,6 +519,9 @@ impl WindowTabData {
         }
 
         let rename = RenameData::new(cx, main_split.editors, common.clone());
+        let inline_edit = crate::ownstack_inline_edit::InlineEditData::new(
+            cx, main_split.editors, common.clone(),
+        );
         let global_search = GlobalSearchData::new(cx, main_split.clone());
 
         let plugin = PluginData::new(
@@ -598,6 +603,7 @@ impl WindowTabData {
             ownstack_audit,
             ownstack_status,
             ownstack_mcp,
+            inline_edit,
             policy_prompt_seq: cx.create_rw_signal(0),
             layout_rect: cx.create_rw_signal(Rect::ZERO),
             title_height,
@@ -614,6 +620,7 @@ impl WindowTabData {
             let focus = window_tab_data.common.focus;
             let active_editor = window_tab_data.main_split.active_editor;
             let rename_active = window_tab_data.rename.active;
+            let inline_edit_active = window_tab_data.inline_edit.active;
             let internal_command = window_tab_data.common.internal_command;
             cx.create_effect(move |_| {
                 let focus = focus.get();
@@ -622,6 +629,9 @@ impl WindowTabData {
 
                 if focus != Focus::Rename && rename_active.get_untracked() {
                     rename_active.set(false);
+                }
+                if focus != Focus::InlineEdit && inline_edit_active.get_untracked() {
+                    inline_edit_active.set(false);
                 }
             });
         }
@@ -1341,6 +1351,29 @@ impl WindowTabData {
                     self.ownstack_audit.reload_from_disk();
                 }
                 self.ownstack_audit.toggle();
+            }
+            OwnStackInlineEdit => {
+                if let Some(ed) = self.main_split.active_editor.get_untracked() {
+                    let file_path = ed.doc().content.with_untracked(|c| {
+                        if let crate::doc::DocContent::File { path, .. } = c {
+                            path.to_string_lossy().to_string()
+                        } else {
+                            String::new()
+                        }
+                    });
+                    let selected = ed.doc().buffer.with_untracked(|b| {
+                        let sel = ed.cursor().with_untracked(|c| c.edit_selection(b));
+                        let start = sel.min_offset();
+                        let end = sel.max_offset();
+                        if start < end {
+                            b.slice_to_cow(start..end).to_string()
+                        } else {
+                            String::new()
+                        }
+                    });
+                    let offset = ed.cursor().with_untracked(|c| c.offset());
+                    self.inline_edit.start(file_path, selected, offset);
+                }
             }
             ToggleTerminalFocus => {
                 self.toggle_panel_focus(PanelKind::Terminal);
@@ -2790,6 +2823,7 @@ impl WindowTabData {
                 Some(keypress.key_down(event, &code_action))
             }
             Focus::Rename => Some(keypress.key_down(event, &self.rename)),
+            Focus::InlineEdit => Some(keypress.key_down(event, &self.inline_edit)),
             Focus::AboutPopup => Some(keypress.key_down(event, &self.about_data)),
             Focus::Panel(PanelKind::Terminal) => {
                 self.terminal.key_down(event, &keypress)
@@ -3040,6 +3074,54 @@ impl WindowTabData {
         }
         if origin.x + rename_size.width + 1.0 > tab_size.width {
             origin.x = tab_size.width - rename_size.width - 1.0;
+        }
+        if origin.x <= 0.0 {
+            origin.x = 0.0;
+        }
+
+        origin
+    }
+
+    pub fn inline_edit_origin(&self) -> Point {
+        let config = self.common.config.get();
+        if !self.inline_edit.active.get() {
+            return Point::ZERO;
+        }
+
+        let tab_size = self.layout_rect.get().size();
+        let edit_size = self.inline_edit.layout_rect.get().size();
+
+        let editor_data =
+            if let Some(editor) = self.main_split.active_editor.get_untracked() {
+                editor
+            } else {
+                return Point::ZERO;
+            };
+
+        let (window_origin, viewport, editor) = (
+            editor_data.window_origin(),
+            editor_data.viewport(),
+            &editor_data.editor,
+        );
+
+        let (_point_above, point_below) = editor.points_of_offset(
+            self.inline_edit.offset.get_untracked(),
+            CursorAffinity::Forward,
+        );
+
+        let window_origin =
+            window_origin.get() - self.common.window_origin.get().to_vec2();
+        let viewport = viewport.get();
+
+        let mut origin = window_origin
+            + Vec2::new(point_below.x - viewport.x0, point_below.y - viewport.y0);
+
+        if origin.y + edit_size.height > tab_size.height {
+            origin.y =
+                origin.y - config.editor.line_height() as f64 - edit_size.height;
+        }
+        if origin.x + edit_size.width + 1.0 > tab_size.width {
+            origin.x = tab_size.width - edit_size.width - 1.0;
         }
         if origin.x <= 0.0 {
             origin.x = 0.0;
