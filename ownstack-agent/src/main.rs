@@ -192,6 +192,45 @@ fn emit_runtime_state(state: &RuntimeUiState) {
     });
 }
 
+/// Validate the runtime environment before the agent starts real work.
+/// Returns a list of human-readable findings (empty == all good).
+/// Port of `ownstack-python/app/core/preflight.py`.
+fn preflight_checks(workspace: &std::path::Path) -> Vec<String> {
+    let mut findings = Vec::new();
+
+    if !workspace.exists() {
+        findings.push(format!("workspace does not exist: {}", workspace.display()));
+    } else if !workspace.is_dir() {
+        findings.push(format!("workspace is not a directory: {}", workspace.display()));
+    }
+
+    // git is required for the Time Machine toolkit (snapshots/rollback).
+    let git_ok = std::process::Command::new("git")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !git_ok {
+        findings.push("git not found on PATH — Time Machine snapshots disabled".to_string());
+    }
+
+    // At least one LLM provider credential should be configured.
+    let has_provider = secret_store::has_secret("ANTHROPIC_API_KEY")
+        || secret_store::has_secret("OPENROUTER_API_KEY")
+        || secret_store::has_secret("OPENAI_API_KEY")
+        || std::env::var("OLLAMA_HOST").is_ok();
+    if !has_provider {
+        findings.push(
+            "no LLM provider configured (set ANTHROPIC_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY, or run Ollama)"
+                .to_string(),
+        );
+    }
+
+    findings
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -214,6 +253,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("OwnStack Agent starting in {:?}", workspace);
     info!("Session: {}", session_id);
+
+    // Preflight: validate the environment before doing real work. Non-fatal —
+    // findings are logged so the operator can see why a feature may not work.
+    for finding in preflight_checks(&workspace) {
+        warn!("Preflight: {finding}");
+    }
 
     // Initialize provider based on env.
     let provider_preference = std::env::var("OWNSTACK_PROVIDER")
