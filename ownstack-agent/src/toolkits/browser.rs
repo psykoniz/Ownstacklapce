@@ -193,10 +193,14 @@ fn http_fetch_page(url: &str) -> Result<(String, u16, HashMap<String, String>), 
 }
 
 /// Extract readable text from HTML (simple tag stripping).
+/// Note: the `regex` crate has no backreferences, so script/style are stripped
+/// with separate patterns rather than a single `</\1>` capture.
 fn extract_text(html: &str) -> String {
-    // Remove script and style blocks
-    let re_script = regex::Regex::new(r"(?is)<(script|style)[^>]*>.*?</\1>").unwrap();
+    // Remove script and style blocks separately
+    let re_script = regex::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
+    let re_style = regex::Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap();
     let cleaned = re_script.replace_all(html, "");
+    let cleaned = re_style.replace_all(&cleaned, "");
     // Remove HTML tags
     let re_tags = regex::Regex::new(r"<[^>]+>").unwrap();
     let text = re_tags.replace_all(&cleaned, " ");
@@ -359,17 +363,22 @@ async fn execute_browse_url(args: serde_json::Value) -> Result<ToolResult, Toolk
             }
             Err(e) => {
                 warn!("Chrome launch failed, falling back to HTTP: {}", e);
-                fallback_http_browse(&parsed)
+                fallback_http_browse(&parsed).await
             }
         }
     } else {
         // HTTP fallback for navigate / extract_text / extract_links
-        fallback_http_browse(&parsed)
+        fallback_http_browse(&parsed).await
     }
 }
 
-fn fallback_http_browse(parsed: &BrowseArgs) -> Result<ToolResult, ToolkitError> {
-    match http_fetch_page(&parsed.url) {
+async fn fallback_http_browse(parsed: &BrowseArgs) -> Result<ToolResult, ToolkitError> {
+    // reqwest::blocking cannot run inside the async runtime; offload it.
+    let url = parsed.url.clone();
+    let fetch = tokio::task::spawn_blocking(move || http_fetch_page(&url))
+        .await
+        .map_err(|e| ToolkitError::ExecutionFailed(format!("join error: {e}")))?;
+    match fetch {
         Ok((body, status, headers)) => {
             let content_type = headers.get("content-type").cloned().unwrap_or_default();
 
@@ -528,7 +537,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_browse_url_http_fallback() {
-        // This test actually fetches from the network; skip in offline CI
+        // Network-dependent: this exercises the spawn_blocking HTTP path.
+        // It must NOT panic regardless of connectivity; a network error is
+        // returned as Ok(failure) or Err, both acceptable offline.
         let toolkit = BrowserToolkit;
         let result = toolkit
             .execute(
@@ -536,9 +547,9 @@ mod tests {
                 json!({"url": "https://httpbin.org/html", "extract": "text"}),
             )
             .await;
-        // May fail if offline, that's OK
-        if let Ok(r) = result {
-            println!("browse_url result: success={}", r.success);
+        match result {
+            Ok(r) => println!("browse_url result: success={}", r.success),
+            Err(e) => println!("browse_url offline (acceptable): {e}"),
         }
     }
 }
