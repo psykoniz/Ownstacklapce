@@ -1375,6 +1375,48 @@ impl WindowTabData {
                     self.inline_edit.start(file_path, selected, offset);
                 }
             }
+            OwnStackAnalyzeFile => {
+                let file_name = self.main_split.active_editor.get_untracked()
+                    .map(|ed| ed.doc().content.with_untracked(|c| {
+                        if let crate::doc::DocContent::File { path, .. } = c {
+                            path.to_string_lossy().to_string()
+                        } else {
+                            "the current file".to_string()
+                        }
+                    }))
+                    .unwrap_or_else(|| "the current file".to_string());
+                self.show_panel(PanelKind::OwnStackChat);
+                self.ownstack_chat.input.set(
+                    format!("Analyze {} — summarize key risks, code smells, and improvements.", file_name),
+                );
+                self.ownstack_chat.send_message();
+            }
+            OwnStackCodeReview => {
+                let file_name = self.main_split.active_editor.get_untracked()
+                    .map(|ed| ed.doc().content.with_untracked(|c| {
+                        if let crate::doc::DocContent::File { path, .. } = c {
+                            path.to_string_lossy().to_string()
+                        } else {
+                            "the current file".to_string()
+                        }
+                    }))
+                    .unwrap_or_else(|| "the current file".to_string());
+                self.show_panel(PanelKind::OwnStackChat);
+                self.ownstack_chat.input.set(
+                    format!("Review {} for bugs, security issues, and code quality.", file_name),
+                );
+                self.ownstack_chat.send_message();
+            }
+            OwnStackFixBuild => {
+                self.show_panel(PanelKind::OwnStackChat);
+                self.ownstack_chat.input.set(
+                    "Fix the current build errors — run the build, analyze failures, and propose patches.".to_string(),
+                );
+                self.ownstack_chat.send_message();
+            }
+            OwnStackClearChat => {
+                self.ownstack_chat.clear_history();
+            }
             ToggleTerminalFocus => {
                 self.toggle_panel_focus(PanelKind::Terminal);
             }

@@ -40,7 +40,6 @@ pub fn default_panel_order() -> PanelOrder {
             PanelKind::CallHierarchy,
             PanelKind::References,
             PanelKind::Implementation,
-            PanelKind::OwnStackMcp,
         ],
     );
     order.insert(

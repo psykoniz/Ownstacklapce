@@ -581,7 +581,7 @@ fn panel_picker(
                 PanelKind::DocumentSymbol => "Document Symbol",
                 PanelKind::References => "References",
                 PanelKind::Implementation => "Implementation",
-                PanelKind::OwnStackChat => "OwnStack AI (Ctrl+Shift+A)",
+                PanelKind::OwnStackChat => "OwnStack AI Hub (Ctrl+Shift+A)",
                 PanelKind::OwnStackMcp => "MCP Servers",
                 PanelKind::OwnStackAudit => "Audit Log (Ctrl+Shift+U)",
             };

@@ -466,6 +466,22 @@ pub enum LapceWorkbenchCommand {
     #[strum(serialize = "ownstack.inline_edit")]
     OwnStackInlineEdit,
 
+    #[strum(message = "OwnStack: Analyze Active File")]
+    #[strum(serialize = "ownstack.analyze_file")]
+    OwnStackAnalyzeFile,
+
+    #[strum(message = "OwnStack: Code Review")]
+    #[strum(serialize = "ownstack.code_review")]
+    OwnStackCodeReview,
+
+    #[strum(message = "OwnStack: Fix Build Errors")]
+    #[strum(serialize = "ownstack.fix_build")]
+    OwnStackFixBuild,
+
+    #[strum(message = "OwnStack: Clear Chat History")]
+    #[strum(serialize = "ownstack.clear_chat")]
+    OwnStackClearChat,
+
     // Focus toggle commands
     #[strum(message = "Toggle Terminal Focus")]
     #[strum(serialize = "toggle_terminal_focus")]

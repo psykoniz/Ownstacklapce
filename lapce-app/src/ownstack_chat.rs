@@ -80,6 +80,8 @@ pub struct OwnStackChatData {
     pub context_max: RwSignal<u64>,
     /// Whether the agent bridge is connected.
     pub bridge_connected: RwSignal<bool>,
+    /// Active hub sub-tab (Chat / Tools / Audit).
+    pub hub_tab: RwSignal<OwnStackHubTab>,
     #[allow(dead_code)]
     common: CommonData,
     db: Arc<crate::db::LapceDb>,
@@ -97,6 +99,13 @@ pub enum AgentMode {
 enum ChatMonitorTab {
     Output,
     Problems,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnStackHubTab {
+    Chat,
+    Tools,
+    Audit,
 }
 
 impl std::fmt::Display for AgentMode {
@@ -171,6 +180,7 @@ impl OwnStackChatData {
             context_current: create_rw_signal(0),
             context_max: create_rw_signal(0),
             bridge_connected: create_rw_signal(false),
+            hub_tab: create_rw_signal(OwnStackHubTab::Chat),
             common,
             db,
         }
@@ -490,9 +500,81 @@ impl OwnStackChatData {
 
 pub fn ownstack_chat_panel(
     window_tab_data: Rc<WindowTabData>,
-    _position: PanelPosition,
+    position: PanelPosition,
 ) -> impl View {
     let chat_data = window_tab_data.ownstack_chat.clone();
+    let hub_tab = chat_data.hub_tab;
+    let config_hub = window_tab_data.common.config;
+
+    // ── Hub tab bar ──────────────────────────────────────────────────────
+    fn hub_tab_segment(
+        hub_tab: RwSignal<OwnStackHubTab>,
+        tab: OwnStackHubTab,
+    ) -> impl View {
+        let lbl = match tab {
+            OwnStackHubTab::Chat  => "Chat",
+            OwnStackHubTab::Tools => "Tools",
+            OwnStackHubTab::Audit => "Audit",
+        };
+        label(move || lbl)
+            .style(move |s| {
+                let active = hub_tab.get() == tab;
+                let base = s
+                    .padding_horiz(12.0)
+                    .padding_vert(5.0)
+                    .font_size(11.0)
+                    .font_weight(Weight::BOLD)
+                    .cursor(CursorStyle::Pointer)
+                    .border_radius(4.0);
+                if active {
+                    base.background(crate::ownstack_theme::ACCENT.multiply_alpha(0.20))
+                        .color(crate::ownstack_theme::ACCENT_BRIGHT)
+                } else {
+                    base.color(crate::ownstack_theme::TEXT_DIM)
+                        .hover(|s| s.background(crate::ownstack_theme::SURFACE_HOVER))
+                }
+            })
+            .on_click_stop(move |_| hub_tab.set(tab))
+    }
+
+    let hub_bar = h_stack((
+        hub_tab_segment(hub_tab, OwnStackHubTab::Chat),
+        hub_tab_segment(hub_tab, OwnStackHubTab::Tools),
+        hub_tab_segment(hub_tab, OwnStackHubTab::Audit),
+    ))
+    .style(move |s| {
+        let config = config_hub.get();
+        s.width_full()
+            .items_center()
+            .gap(2.0)
+            .padding_horiz(10.0)
+            .padding_vert(6.0)
+            .border_bottom(1.0)
+            .border_color(config.color(LapceColor::LAPCE_BORDER))
+    });
+
+    // ── MCP sub-view ─────────────────────────────────────────────────────
+    let mcp_view = {
+        let wtd = window_tab_data.clone();
+        container(crate::ownstack_mcp::mcp_panel(wtd, position))
+            .style(move |s| {
+                s.size_full()
+                    .apply_if(hub_tab.get() != OwnStackHubTab::Tools, |s| s.hide())
+            })
+    };
+
+    // ── Audit sub-view ───────────────────────────────────────────────────
+    let audit_view = {
+        let wtd = window_tab_data.clone();
+        container(crate::ownstack_audit::audit_panel(wtd, position))
+            .style(move |s| {
+                s.size_full()
+                    .apply_if(hub_tab.get() != OwnStackHubTab::Audit, |s| s.hide())
+            })
+    };
+
+    // ── Chat sub-view ────────────────────────────────────────────────────
+    let chat_view = {
     let config = window_tab_data.common.config;
     let input = chat_data.input;
     let diagnostics = window_tab_data.main_split.diagnostics;
@@ -510,7 +592,7 @@ pub fn ownstack_chat_panel(
         // ── Header ───────────────────────────────────────────────────────
         h_stack((
             // Title
-            text("OwnStack AI Chat")
+            text("OwnStack AI")
                 .style(|s| s.font_weight(Weight::BOLD).font_size(13.0)),
             // Right-side controls
             h_stack((
@@ -728,6 +810,24 @@ pub fn ownstack_chat_panel(
                         }
                     },
                 ),
+                // "Thinking" indicator — visible before first streaming token arrives
+                {
+                    let chat_data = chat_data.clone();
+                    label(move || "AI is thinking\u{2026}")
+                        .style(move |s| {
+                            let visible = chat_data.is_loading.get()
+                                && chat_data.streaming_content.get().is_empty();
+                            s.apply_if(!visible, |s| s.hide())
+                                .padding(14.0)
+                                .border_radius(12.0)
+                                .background(crate::ownstack_theme::SURFACE_0)
+                                .border(1.0)
+                                .border_color(crate::ownstack_theme::BORDER)
+                                .color(crate::ownstack_theme::TEXT_DIM)
+                                .font_size(12.0)
+                                .font_style(floem::text::Style::Italic)
+                        })
+                },
             ))
             .style(|s| s.width_full().padding(12.0).gap(20.0)),
         )
@@ -735,7 +835,7 @@ pub fn ownstack_chat_panel(
         container(
             v_stack((
                 h_stack((
-                    label(|| "OUTPUT".to_string())
+                    label(|| "Output".to_string())
                         .on_click_stop(move |_| {
                             monitor_tab_output.set(ChatMonitorTab::Output);
                         })
@@ -760,9 +860,11 @@ pub fn ownstack_chat_panel(
                                     config.get().color(LapceColor::STATUS_FOREGROUND)
                                 })
                                 .font_size(10.0)
+                                .font_weight(if is_active { Weight::BOLD } else { Weight::NORMAL })
                                 .cursor(CursorStyle::Pointer)
+                                .hover(|s| s.background(crate::ownstack_theme::SURFACE_HOVER))
                         }),
-                    label(|| "PROBLEMS".to_string())
+                    label(|| "Problems".to_string())
                         .on_click_stop(move |_| {
                             monitor_tab_problems.set(ChatMonitorTab::Problems);
                         })
@@ -787,7 +889,9 @@ pub fn ownstack_chat_panel(
                                     config.get().color(LapceColor::STATUS_FOREGROUND)
                                 })
                                 .font_size(10.0)
+                                .font_weight(if is_active { Weight::BOLD } else { Weight::NORMAL })
                                 .cursor(CursorStyle::Pointer)
+                                .hover(|s| s.background(crate::ownstack_theme::SURFACE_HOVER))
                         }),
                 ))
                 .style(|s| s.width_full().items_center().gap(8.0)),
@@ -891,9 +995,9 @@ pub fn ownstack_chat_panel(
                             let current = context_label.context_current.get();
                             let max = context_label.context_max.get();
                             if max == 0 {
-                                "Context window: n/a".to_string()
+                                "Context: waiting for connection".to_string()
                             } else {
-                                format!("Context window: {current}/{max}")
+                                format!("Context: {current}/{max} tokens used")
                             }
                         })
                         .style(move |s| {
@@ -943,24 +1047,44 @@ pub fn ownstack_chat_panel(
                     .style(|s| s.width_full().padding_bottom(8.0))
                 },
                 // ── Bridge disconnected warning ──────────────────────────
-                label(|| "Agent bridge disconnected — messages cannot be sent")
-                    .style({
-                        let chat_data = chat_data.clone();
-                        move |s| {
-                            let connected = chat_data.bridge_connected.get();
-                            s.width_full()
-                                .padding_horiz(10.0)
-                                .padding_vert(6.0)
-                                .font_size(11.0)
-                                .color(crate::ownstack_theme::STATE_WARN)
-                                .background(crate::ownstack_theme::STATE_WARN.multiply_alpha(0.08))
-                                .border_radius(6.0)
-                                .margin_bottom(6.0)
-                                .apply_if(connected, |s| s.hide())
-                        }
-                    }),
+                {
+                    let chat_data_dc = chat_data.clone();
+                    let chat_data_retry = chat_data.clone();
+                    h_stack((
+                        label(|| "Agent bridge disconnected")
+                            .style(|s| s.flex_grow(1.0).font_size(11.0).color(crate::ownstack_theme::STATE_WARN)),
+                        label(|| "Retry")
+                            .on_click_stop(move |_| {
+                                chat_data_retry.add_system_message(
+                                    "Reconnection requested — the bridge will retry automatically.".to_string(),
+                                );
+                            })
+                            .style(|s| {
+                                s.padding_horiz(8.0)
+                                    .padding_vert(3.0)
+                                    .border_radius(4.0)
+                                    .background(crate::ownstack_theme::CTA_BG)
+                                    .color(crate::ownstack_theme::CTA_TEXT)
+                                    .font_size(10.0)
+                                    .font_weight(Weight::SEMIBOLD)
+                                    .cursor(CursorStyle::Pointer)
+                                    .hover(|s| s.background(crate::ownstack_theme::CTA_BG_HOVER))
+                            }),
+                    ))
+                    .style(move |s| {
+                        let connected = chat_data_dc.bridge_connected.get();
+                        s.width_full()
+                            .items_center()
+                            .padding_horiz(10.0)
+                            .padding_vert(6.0)
+                            .background(crate::ownstack_theme::STATE_WARN.multiply_alpha(0.08))
+                            .border_radius(6.0)
+                            .margin_bottom(6.0)
+                            .apply_if(connected, |s| s.hide())
+                    })
+                },
                 h_stack((
-                    label(|| "Ctx")
+                    label(|| "+ Context")
                         .style(move |s| {
                             let config = config.get();
                             s.padding(6.0)
@@ -1078,6 +1202,7 @@ pub fn ownstack_chat_panel(
         }),
         // ── Shortcut hints bar ──────────────────────────────────────
         h_stack((
+            shortcut_hint("Enter", "Send"),
             shortcut_hint("Cmd/Ctrl+K", "Inline Edit"),
             shortcut_hint("Cmd/Ctrl+L", "Toggle Chat"),
             shortcut_hint("Cmd/Ctrl+Shift+P", "AI Palette"),
@@ -1092,6 +1217,20 @@ pub fn ownstack_chat_panel(
                 .border_top(1.0)
                 .border_color(config.color(LapceColor::LAPCE_BORDER).multiply_alpha(0.5))
         }),
+    ))
+    .style(move |s| {
+        s.size_full()
+            .flex_col()
+            .apply_if(hub_tab.get() != OwnStackHubTab::Chat, |s| s.hide())
+    })
+    }; // end chat_view
+
+    // ── Compose hub ──────────────────────────────────────────────────────
+    v_stack((
+        hub_bar,
+        chat_view,
+        mcp_view,
+        audit_view,
     ))
     .style(|s| s.size_full().flex_col())
 }

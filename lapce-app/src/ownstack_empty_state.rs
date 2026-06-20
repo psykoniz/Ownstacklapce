@@ -141,10 +141,17 @@ pub fn chat_empty_state() -> impl View {
                     .margin_bottom(16.0)
                     .selectable(false)
             }),
-        // Hint
-        label(|| "Start by asking a question or pasting code").style(|s| {
-            s.font_size(11.0)
-                .color(HINT_COLOR)
+        // CTA hint
+        label(|| "Type a message below and press Enter").style(|s| {
+            s.padding_horiz(20.0)
+                .padding_vert(9.0)
+                .background(CTA_BG)
+                .border(2.0)
+                .border_color(CTA_BORDER)
+                .border_radius(8.0)
+                .color(CTA_TEXT)
+                .font_size(12.0)
+                .font_weight(Weight::SEMIBOLD)
                 .selectable(false)
         }),
     ))
