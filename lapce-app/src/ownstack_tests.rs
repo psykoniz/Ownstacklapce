@@ -95,6 +95,7 @@ mod tests {
 
     #[test]
     fn test_chat_message_sending() {
+        unsafe { std::env::set_var("OPENROUTER_API_KEY", "test-dummy-key") };
         let (_cx, chat_data) = setup_test_data();
 
         chat_data.bridge_connected.set(true);
