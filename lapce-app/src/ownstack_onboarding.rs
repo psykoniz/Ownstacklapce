@@ -278,7 +278,7 @@ pub fn onboarding_view(
                     s.font_size(12.0)
                         .font_bold()
                         .color(Color::WHITE)
-                        .background(Color::from_rgb8(74, 158, 255))
+                        .background(crate::ownstack_theme::ACCENT)
                         .padding_horiz(10.0)
                         .padding_vert(3.0)
                         .border_radius(10.0)
@@ -301,7 +301,7 @@ pub fn onboarding_view(
                             s.width(8.0)
                                 .height(8.0)
                                 .border_radius(4.0)
-                                .background(Color::from_rgb8(74, 158, 255))
+                                .background(crate::ownstack_theme::ACCENT)
                         })
                     },
                     // Dot 2
@@ -312,11 +312,11 @@ pub fn onboarding_view(
                             let dot_base =
                                 s.width(8.0).height(8.0).border_radius(4.0);
                             if current >= 1 {
-                                dot_base.background(Color::from_rgb8(74, 158, 255))
+                                dot_base.background(crate::ownstack_theme::ACCENT)
                             } else {
-                                dot_base.border(1.5).border_color(Color::from_rgba8(
-                                    74, 158, 255, 100,
-                                ))
+                                dot_base.border(1.5).border_color(
+                                    crate::ownstack_theme::ACCENT.multiply_alpha(0.39),
+                                )
                             }
                         })
                     },
@@ -328,11 +328,11 @@ pub fn onboarding_view(
                             let dot_base =
                                 s.width(8.0).height(8.0).border_radius(4.0);
                             if current >= 2 {
-                                dot_base.background(Color::from_rgb8(74, 158, 255))
+                                dot_base.background(crate::ownstack_theme::ACCENT)
                             } else {
-                                dot_base.border(1.5).border_color(Color::from_rgba8(
-                                    74, 158, 255, 100,
-                                ))
+                                dot_base.border(1.5).border_color(
+                                    crate::ownstack_theme::ACCENT.multiply_alpha(0.39),
+                                )
                             }
                         })
                     },
@@ -344,11 +344,11 @@ pub fn onboarding_view(
                             let dot_base =
                                 s.width(8.0).height(8.0).border_radius(4.0);
                             if current >= 3 {
-                                dot_base.background(Color::from_rgb8(74, 158, 255))
+                                dot_base.background(crate::ownstack_theme::ACCENT)
                             } else {
-                                dot_base.border(1.5).border_color(Color::from_rgba8(
-                                    74, 158, 255, 100,
-                                ))
+                                dot_base.border(1.5).border_color(
+                                    crate::ownstack_theme::ACCENT.multiply_alpha(0.39),
+                                )
                             }
                         })
                     },
@@ -360,11 +360,11 @@ pub fn onboarding_view(
                             let dot_base =
                                 s.width(8.0).height(8.0).border_radius(4.0);
                             if current >= 4 {
-                                dot_base.background(Color::from_rgb8(74, 158, 255))
+                                dot_base.background(crate::ownstack_theme::ACCENT)
                             } else {
-                                dot_base.border(1.5).border_color(Color::from_rgba8(
-                                    74, 158, 255, 100,
-                                ))
+                                dot_base.border(1.5).border_color(
+                                    crate::ownstack_theme::ACCENT.multiply_alpha(0.39),
+                                )
                             }
                         })
                     },
@@ -386,13 +386,13 @@ pub fn onboarding_view(
                     s.height(3.0)
                         .width_pct(pct)
                         .border_radius(2.0)
-                        .background(Color::from_rgb8(74, 158, 255))
+                        .background(crate::ownstack_theme::ACCENT)
                 }),))
                 .style(|s| {
                     s.width_full()
                         .height(3.0)
                         .border_radius(2.0)
-                        .background(Color::from_rgba8(74, 158, 255, 40))
+                        .background(crate::ownstack_theme::ACCENT.multiply_alpha(0.16))
                         .margin_bottom(12.0)
                 })
             },
@@ -456,13 +456,9 @@ pub fn onboarding_view(
                                 .border_color(Color::TRANSPARENT)
                                 .border_radius(4.0)
                                 .hover(|s| {
-                                    s.color(Color::from_rgb8(180, 200, 230))
-                                        .border_color(Color::from_rgba8(
-                                            120, 140, 170, 80,
-                                        ))
-                                        .background(Color::from_rgba8(
-                                            255, 255, 255, 8,
-                                        ))
+                                    s.color(crate::ownstack_theme::TEXT)
+                                        .border_color(crate::ownstack_theme::BORDER)
+                                        .background(crate::ownstack_theme::SURFACE_HOVER)
                                 })
                                 .apply_if(is_last, |s| s.hide())
                         })
@@ -489,13 +485,13 @@ pub fn onboarding_view(
                             == ONBOARDING_STEPS.len();
                         let (bg, bg_hover) = if is_finish {
                             (
-                                Color::from_rgb8(50, 180, 100),
-                                Color::from_rgb8(60, 200, 115),
+                                crate::ownstack_theme::STATE_OK,
+                                crate::ownstack_theme::STATE_OK,
                             )
                         } else {
                             (
-                                Color::from_rgb8(74, 158, 255),
-                                Color::from_rgb8(95, 172, 255),
+                                crate::ownstack_theme::ACCENT,
+                                crate::ownstack_theme::ACCENT_BRIGHT,
                             )
                         };
                         s.padding_horiz(30.0)
@@ -687,7 +683,7 @@ fn workspace_file_row(
         label(move || filename.to_string()).style(move |s| {
             s.font_size(12.0)
                 .font_bold()
-                .color(Color::from_rgb8(74, 158, 255))
+                .color(crate::ownstack_theme::ACCENT)
                 .min_width(130.0)
         }),
         label(move || desc.to_string()).style(move |s| {
@@ -718,7 +714,7 @@ fn finish_step(
         label(|| "\u{2713}".to_string()).style(move |s| {
             s.font_size(42.0)
                 .font_bold()
-                .color(Color::from_rgb8(80, 200, 120))
+                .color(crate::ownstack_theme::STATE_OK)
                 .margin_bottom(4.0)
         }),
         // ── "Setup Complete" header ──────────────────────────────────
@@ -814,12 +810,12 @@ fn provider_secret_input(
                     s.padding_horiz(10.0)
                         .padding_vert(10.0)
                         .font_size(11.0)
-                        .color(Color::from_rgb8(120, 160, 220))
+                        .color(crate::ownstack_theme::TEXT_DIM)
                         .cursor(CursorStyle::Pointer)
                         .border(1.0)
                         .border_radius(4.0)
                         .border_color(config.get().color(LapceColor::LAPCE_BORDER))
-                        .hover(|s| s.color(Color::from_rgb8(160, 200, 255)))
+                        .hover(|s| s.color(crate::ownstack_theme::ACCENT_BRIGHT))
                 }),
         ))
         .style(|s| s.width_full().gap(6.0).items_center()),
@@ -840,7 +836,7 @@ fn provider_secret_input(
             let vis = !show_key.get() && !value.get().is_empty();
             s.apply_if(!vis, |s| s.hide())
                 .font_size(11.0)
-                .color(Color::from_rgb8(100, 120, 150))
+                .color(crate::ownstack_theme::TEXT_HINT)
                 .margin_top(2.0)
         }),
         label(move || {
@@ -903,8 +899,8 @@ fn provider_button(
                 .items_center()
                 .apply_if(selected, |s| {
                     s.border(2.0)
-                        .border_color(Color::from_rgb8(74, 158, 255))
-                        .background(Color::from_rgba8(74, 158, 255, 25))
+                        .border_color(crate::ownstack_theme::ACCENT)
+                        .background(crate::ownstack_theme::ACCENT.multiply_alpha(0.10))
                 })
                 .apply_if(!selected, |s| {
                     s.border(1.0)
@@ -912,8 +908,8 @@ fn provider_button(
                         .background(config.color(LapceColor::PANEL_BACKGROUND))
                 })
                 .hover(|s| {
-                    s.background(Color::from_rgba8(74, 158, 255, 20))
-                        .border_color(Color::from_rgba8(74, 158, 255, 100))
+                    s.background(crate::ownstack_theme::ACCENT.multiply_alpha(0.08))
+                        .border_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.39))
                 })
         })
 }
@@ -929,7 +925,7 @@ fn mode_button(
     v_stack((
         label(move || name.to_string()).style(move |s| {
             s.font_bold()
-                .apply_if(is_selected(), |s| s.color(Color::from_rgb8(74, 158, 255)))
+                .apply_if(is_selected(), |s| s.color(crate::ownstack_theme::ACCENT))
         }),
         label(move || desc.to_string()).style(move |s| {
             let config = config.get();
@@ -951,8 +947,8 @@ fn mode_button(
             .cursor(CursorStyle::Pointer)
             .apply_if(selected, |s| {
                 s.border(2.0)
-                    .border_color(Color::from_rgb8(74, 158, 255))
-                    .background(Color::from_rgba8(74, 158, 255, 25))
+                    .border_color(crate::ownstack_theme::ACCENT)
+                    .background(crate::ownstack_theme::ACCENT.multiply_alpha(0.10))
             })
             .apply_if(!selected, |s| {
                 s.border(1.0)
@@ -960,8 +956,8 @@ fn mode_button(
                     .background(config.color(LapceColor::PANEL_BACKGROUND))
             })
             .hover(|s| {
-                s.background(Color::from_rgba8(74, 158, 255, 20))
-                    .border_color(Color::from_rgba8(74, 158, 255, 100))
+                s.background(crate::ownstack_theme::ACCENT.multiply_alpha(0.08))
+                    .border_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.39))
             })
     })
 }
