@@ -147,8 +147,8 @@ impl AgentMode {
     pub fn color(&self) -> Color {
         match self {
             AgentMode::Ask => crate::ownstack_theme::ACCENT,
-            AgentMode::Auto => Color::from_rgb8(255, 179, 71), // Amber
-            AgentMode::Plan => Color::from_rgb8(155, 89, 182), // Violet
+            AgentMode::Auto => crate::ownstack_theme::MODE_AUTO,
+            AgentMode::Plan => crate::ownstack_theme::MODE_PLAN,
         }
     }
 
@@ -731,15 +731,15 @@ pub fn ownstack_chat_panel(
                                                 .as_str()
                                             {
                                                 "inprogress" => {
-                                                    Color::from_rgb8(120, 180, 255)
+                                                    crate::ownstack_theme::STEP_ACTIVE
                                                 }
                                                 "completed" | "done" => {
-                                                    Color::from_rgb8(120, 220, 140)
+                                                    crate::ownstack_theme::STEP_DONE
                                                 }
                                                 "failed" => {
-                                                    Color::from_rgb8(255, 120, 120)
+                                                    crate::ownstack_theme::STEP_FAILED
                                                 }
-                                                _ => Color::from_rgb8(180, 180, 180),
+                                                _ => crate::ownstack_theme::STEP_PENDING,
                                             };
                                             s.width(20.0).color(color)
                                         }),
@@ -762,9 +762,7 @@ pub fn ownstack_chat_panel(
                                         .multiply_alpha(0.6),
                                 )
                                 .box_shadow_blur(10.0)
-                                .box_shadow_color(Color::from_rgba8(
-                                    100, 150, 255, 30,
-                                ))
+                                .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.12))
                         })
                     },
                 ),
@@ -1093,9 +1091,7 @@ pub fn ownstack_chat_panel(
                                 .cursor(floem::style::CursorStyle::Pointer)
                                 .color(config.color(LapceColor::EDITOR_DIM))
                                 .hover(|s| {
-                                    s.background(Color::from_rgba8(
-                                        100, 150, 255, 40,
-                                    ))
+                                    s.background(crate::ownstack_theme::ACCENT.multiply_alpha(0.16))
                                     .color(crate::ownstack_theme::ACCENT)
                                 })
                         })
@@ -1126,9 +1122,7 @@ pub fn ownstack_chat_panel(
                                 .active(|s| {
                                     s.border_color(crate::ownstack_theme::ACCENT_BRIGHT)
                                         .box_shadow_blur(5.0)
-                                        .box_shadow_color(Color::from_rgba8(
-                                            100, 200, 255, 100,
-                                        ))
+                                        .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.39))
                                 })
                         })
                         .on_event_stop(floem::event::EventListener::KeyDown, {
@@ -1518,18 +1512,18 @@ fn diff_view(
             move |line| {
                 let (bg_color, text_color) = if line.starts_with('+') {
                     (
-                        Some(Color::from_rgba8(0, 255, 0, 30)),
-                        Some(Color::from_rgb8(100, 255, 100)),
+                        Some(crate::ownstack_theme::DIFF_ADD_BG),
+                        Some(crate::ownstack_theme::DIFF_ADD_TEXT),
                     )
                 } else if line.starts_with('-') {
                     (
-                        Some(Color::from_rgba8(255, 0, 0, 30)),
-                        Some(Color::from_rgb8(255, 100, 100)),
+                        Some(crate::ownstack_theme::DIFF_REMOVE_BG),
+                        Some(crate::ownstack_theme::DIFF_REMOVE_TEXT),
                     )
                 } else if line.starts_with("@@") {
                     (
-                        Some(Color::from_rgba8(0, 0, 255, 30)),
-                        Some(Color::from_rgb8(100, 100, 255)),
+                        Some(crate::ownstack_theme::DIFF_HUNK_BG),
+                        Some(crate::ownstack_theme::DIFF_HUNK_TEXT),
                     )
                 } else {
                     (None, None)

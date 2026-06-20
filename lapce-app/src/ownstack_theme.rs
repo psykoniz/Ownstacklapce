@@ -61,6 +61,33 @@ pub const STATE_OK: Color = Color::from_rgb8(100, 200, 150);
 pub const STATE_WARN: Color = Color::from_rgb8(230, 180, 80);
 pub const STATE_ERROR: Color = Color::from_rgb8(235, 110, 110);
 
+// ── Agent mode accents ──────────────────────────────────────────────────────
+
+pub const MODE_AUTO: Color = Color::from_rgb8(255, 179, 71);
+pub const MODE_PLAN: Color = Color::from_rgb8(155, 89, 182);
+
+// ── Diff syntax ─────────────────────────────────────────────────────────────
+
+pub const DIFF_ADD_BG: Color = Color::from_rgba8(0, 255, 0, 30);
+pub const DIFF_ADD_TEXT: Color = Color::from_rgb8(100, 255, 100);
+pub const DIFF_REMOVE_BG: Color = Color::from_rgba8(255, 0, 0, 30);
+pub const DIFF_REMOVE_TEXT: Color = Color::from_rgb8(255, 100, 100);
+pub const DIFF_HUNK_BG: Color = Color::from_rgba8(0, 0, 255, 30);
+pub const DIFF_HUNK_TEXT: Color = Color::from_rgb8(100, 100, 255);
+
+// ── MCP status ──────────────────────────────────────────────────────────────
+
+pub const MCP_AVAILABLE: Color = Color::from_rgb8(52, 211, 153);
+pub const MCP_ERROR: Color = Color::from_rgb8(248, 113, 113);
+pub const MCP_UNKNOWN: Color = Color::from_rgb8(250, 204, 21);
+
+// ── Step progress ───────────────────────────────────────────────────────────
+
+pub const STEP_ACTIVE: Color = Color::from_rgb8(120, 180, 255);
+pub const STEP_DONE: Color = Color::from_rgb8(120, 220, 140);
+pub const STEP_FAILED: Color = Color::from_rgb8(255, 120, 120);
+pub const STEP_PENDING: Color = Color::from_rgb8(180, 180, 180);
+
 // ── Spacing scale (px) ───────────────────────────────────────────────────────
 
 pub const SPACE_XS: f64 = 4.0;

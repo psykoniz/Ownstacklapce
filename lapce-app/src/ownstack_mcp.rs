@@ -37,9 +37,9 @@ impl McpServerStatus {
 
     fn color(&self) -> Color {
         match self {
-            Self::Available => Color::from_rgb8(52, 211, 153),
-            Self::CommandNotFound => Color::from_rgb8(248, 113, 113),
-            Self::Unknown => Color::from_rgb8(250, 204, 21),
+            Self::Available => crate::ownstack_theme::MCP_AVAILABLE,
+            Self::CommandNotFound => crate::ownstack_theme::MCP_ERROR,
+            Self::Unknown => crate::ownstack_theme::MCP_UNKNOWN,
         }
     }
 }

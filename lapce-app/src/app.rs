@@ -1333,7 +1333,9 @@ fn editor_tab_content(
                     )
                     .into_any()
                 } else {
-                    crate::ownstack_empty_state::empty_editor_placeholder()
+                    crate::ownstack_empty_state::empty_editor_placeholder(
+                            window_tab_data.common.workbench_command,
+                        )
                         .into_any()
                 }
             }
@@ -1993,8 +1995,10 @@ fn split_list(
                         )
                         .into_any()
                     } else {
-                        crate::ownstack_empty_state::empty_editor_placeholder()
-                            .into_any()
+                        crate::ownstack_empty_state::empty_editor_placeholder(
+                            window_tab_data.common.workbench_command,
+                        )
+                        .into_any()
                     }
                 }
                 SplitContent::Split(split_id) => {
@@ -2009,8 +2013,10 @@ fn split_list(
                         )
                         .into_any()
                     } else {
-                        crate::ownstack_empty_state::empty_editor_placeholder()
-                            .into_any()
+                        crate::ownstack_empty_state::empty_editor_placeholder(
+                            window_tab_data.common.workbench_command,
+                        )
+                        .into_any()
                     }
                 }
             };
@@ -3365,6 +3371,7 @@ fn inline_edit(window_tab_data: Rc<WindowTabData>) -> impl View {
             TextInputBuilder::new()
                 .is_focused(move || active.get())
                 .build_editor(editor)
+                .placeholder(|| "Describe your edit\u{2026}".to_string())
                 .style(|s| s.width(320.0)),
         )
         .style(move |s| {
