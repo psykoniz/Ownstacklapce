@@ -362,12 +362,9 @@ pub fn status(
                         }),
                     label(|| "Settings".to_string())
                         .debug_name("Settings Button")
-                        .on_click_stop({
-                            let workbench_command = workbench_command.clone();
-                            move |_| {
-                                workbench_command
-                                    .send(LapceWorkbenchCommand::OpenSettings);
-                            }
+                        .on_click_stop(move |_| {
+                            workbench_command
+                                .send(LapceWorkbenchCommand::OpenSettings);
                         })
                         .style(move |s| {
                             let config = config.get();

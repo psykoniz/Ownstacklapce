@@ -76,6 +76,7 @@ pub struct OwnStackChatData {
     /// Content currently being streamed from the agent
     pub streaming_content: RwSignal<String>,
     /// Current mission being executed
+    #[allow(clippy::type_complexity)]
     pub current_mission: RwSignal<Option<(String, Vec<(String, String)>)>>,
     /// Context-window usage telemetry.
     pub context_current: RwSignal<u64>,
@@ -84,7 +85,6 @@ pub struct OwnStackChatData {
     pub bridge_connected: RwSignal<bool>,
     /// Active hub sub-tab (Chat / Tools / Audit).
     pub hub_tab: RwSignal<OwnStackHubTab>,
-    #[allow(dead_code)]
     common: CommonData,
     db: Arc<crate::db::LapceDb>,
 }

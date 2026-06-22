@@ -824,7 +824,7 @@ fn provider_secret_input(
             if !show_key.get() {
                 let len = value.get().len();
                 if len > 0 {
-                    format!("{}", "*".repeat(len.min(32)))
+                    "*".repeat(len.min(32))
                 } else {
                     String::new()
                 }

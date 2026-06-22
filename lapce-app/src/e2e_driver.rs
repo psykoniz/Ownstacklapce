@@ -122,6 +122,7 @@ pub fn register_tab_data(tab: &Rc<WindowTabData>) {
     let ping_signal = create_signal_from_channel(ping_rx);
 
     // Global queue: the bridge thread pushes queries here, the effect pops them.
+    #[allow(clippy::type_complexity)]
     let pending: std::sync::Arc<Mutex<Vec<(QueryFn, Sender<Value>)>>> =
         std::sync::Arc::new(Mutex::new(Vec::new()));
     let pending_for_effect = pending.clone();
@@ -447,13 +448,13 @@ fn cmd_get_state(_params: Value) -> Value {
             .main_split
             .active_editor
             .get_untracked()
-            .and_then(|e| {
+            .map(|e| {
                 let doc = e.doc();
                 match doc.content.get_untracked() {
-                    DocContent::File { path, .. } => Some(path.display().to_string()),
-                    DocContent::Scratch { name, .. } => Some(format!("scratch:{name}")),
-                    DocContent::Local => Some("local".to_string()),
-                    DocContent::History(_) => Some("history".to_string()),
+                    DocContent::File { path, .. } => path.display().to_string(),
+                    DocContent::Scratch { name, .. } => format!("scratch:{name}"),
+                    DocContent::Local => "local".to_string(),
+                    DocContent::History(_) => "history".to_string(),
                 }
             });
 
