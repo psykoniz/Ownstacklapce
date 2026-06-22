@@ -677,9 +677,6 @@ pub fn ownstack_chat_panel(
         scroll(
             v_stack((
                 // Empty state — shown when there are no messages yet
-                label(|| "")
-                    .style(|s| s.hide()) // placeholder, real empty state below
-                    .into_any(),
                 crate::ownstack_empty_state::chat_empty_state()
                     .style(move |s| {
                         let has_messages = !chat_data.messages.get().is_empty()

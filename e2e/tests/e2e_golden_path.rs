@@ -16,13 +16,14 @@
 //!
 //! # Or with xvfb:
 //! xvfb-run -a cargo test -p ownstack-e2e -- --test-threads=1
+//!
+//! # On hosts without a working GL stack, force software Vulkan (lavapipe).
+//! # The harness forwards WGPU_BACKEND / VK_ICD_FILENAMES to the IDE:
+//! VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json WGPU_BACKEND=vulkan \
+//!   xvfb-run -a cargo test -p ownstack-e2e -- --test-threads=1
 //! ```
 
-use std::{
-    fs,
-    path::PathBuf,
-    time::Duration,
-};
+use std::{fs, time::Duration};
 
 use ownstack_e2e::{E2eClient, IdeProcess, find_ide_binary, fixtures_project};
 
@@ -35,13 +36,27 @@ fn launch_ide() -> (IdeProcess, E2eClient) {
     let config_dir = std::env::temp_dir().join("ownstack-e2e-config");
     let _ = fs::create_dir_all(&config_dir);
 
-    let env_vars = vec![
-        ("LIBGL_ALWAYS_SOFTWARE", "1"),
-        ("WGPU_BACKEND", "gl"),
-        ("XDG_CONFIG_HOME", config_dir.to_str().unwrap()),
-    ];
+    // Default to software GL, but let the surrounding environment override the
+    // rendering backend (e.g. WGPU_BACKEND=vulkan with lavapipe on hosts where
+    // the GL stack is unavailable). Honouring the parent env keeps this working
+    // across CI machines and headless containers alike.
+    let wgpu_backend =
+        std::env::var("WGPU_BACKEND").unwrap_or_else(|_| "gl".to_string());
+    let vk_icd = std::env::var("VK_ICD_FILENAMES").ok();
 
-    let process = IdeProcess::launch(&binary, Some(&workspace), env_vars)
+    let mut env_vars = vec![
+        ("LIBGL_ALWAYS_SOFTWARE", "1".to_string()),
+        ("WGPU_BACKEND", wgpu_backend),
+        ("XDG_CONFIG_HOME", config_dir.to_string_lossy().into_owned()),
+    ];
+    if let Some(icd) = vk_icd {
+        env_vars.push(("VK_ICD_FILENAMES", icd));
+    }
+
+    let env_refs: Vec<(&str, &str)> =
+        env_vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
+    let process = IdeProcess::launch(&binary, Some(&workspace), env_refs)
         .expect("Failed to launch IDE");
 
     let mut client = E2eClient::new(process.port);

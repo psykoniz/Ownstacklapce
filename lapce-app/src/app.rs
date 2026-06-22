@@ -128,8 +128,9 @@ struct Cli {
 
     /// Enable E2E testing mode: starts a JSON-RPC control server on localhost,
     /// uses isolated config directory, disables animations, fixed window size.
-    /// Also enabled by env OWNSTACK_E2E=1.
-    #[clap(long, action, env = "OWNSTACK_E2E")]
+    /// Also enabled by env OWNSTACK_E2E=1 (handled manually so values like "1"
+    /// are accepted, not just clap's bool literals "true"/"false").
+    #[clap(long, action)]
     e2e: bool,
 
     /// Port for the E2E control server (default: 0 = random).
@@ -3869,7 +3870,15 @@ pub fn launch() {
     }
 
     // In E2E mode, treat as if --wait was passed (no fork).
-    let is_e2e = cli.e2e;
+    // Accept the OWNSTACK_E2E env var with truthy values ("1"/"true") since
+    // clap's bool parser rejects "1" when the flag is env-backed.
+    let is_e2e = cli.e2e
+        || std::env::var("OWNSTACK_E2E")
+            .map(|v| {
+                let v = v.trim();
+                v == "1" || v.eq_ignore_ascii_case("true")
+            })
+            .unwrap_or(false);
     let e2e_port = cli.e2e_port;
     let window_size = cli.window_size.clone();
     let grammar_dir = cli.grammar_dir.clone();
@@ -3919,8 +3928,9 @@ pub fn launch() {
     }
 
     // If the cli is not requesting a new window, and we're not developing a plugin, we try to open
-    // in the existing Lapce process
-    if !cli.new {
+    // in the existing Lapce process. In E2E mode we must always start a fresh
+    // instance with its own control server, so never delegate to a running one.
+    if !cli.new && !is_e2e {
         match get_socket() {
             Ok(socket) => {
                 if let Err(e) = try_open_in_existing_process(socket, &cli.paths) {

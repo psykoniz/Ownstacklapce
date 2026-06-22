@@ -1376,20 +1376,32 @@ impl WindowTabData {
                 }
             }
             OwnStackAnalyzeFile => {
-                let file_name = self.active_file_name();
                 self.open_chat_hub();
-                self.ownstack_chat.input.set(
-                    format!("Analyze {} — summarize key risks, code smells, and improvements.", file_name),
-                );
-                self.ownstack_chat.send_message();
+                match self.active_file_name() {
+                    Some(file_name) => {
+                        self.ownstack_chat.input.set(
+                            format!("Analyze {} — summarize key risks, code smells, and improvements.", file_name),
+                        );
+                        self.ownstack_chat.send_message();
+                    }
+                    None => self.ownstack_chat.add_alert_message(
+                        "Open a file first, then run Analyze Active File.".to_string(),
+                    ),
+                }
             }
             OwnStackCodeReview => {
-                let file_name = self.active_file_name();
                 self.open_chat_hub();
-                self.ownstack_chat.input.set(
-                    format!("Review {} for bugs, security issues, and code quality.", file_name),
-                );
-                self.ownstack_chat.send_message();
+                match self.active_file_name() {
+                    Some(file_name) => {
+                        self.ownstack_chat.input.set(
+                            format!("Review {} for bugs, security issues, and code quality.", file_name),
+                        );
+                        self.ownstack_chat.send_message();
+                    }
+                    None => self.ownstack_chat.add_alert_message(
+                        "Open a file first, then run Code Review.".to_string(),
+                    ),
+                }
             }
             OwnStackFixBuild => {
                 self.open_chat_hub();
@@ -3263,20 +3275,21 @@ impl WindowTabData {
         self.common.focus.set(Focus::Workbench);
     }
 
-    fn active_file_name(&self) -> String {
+    /// Path of the active editor's file, or `None` when no real file is open
+    /// (e.g. scratch buffer, settings, or no editor at all).
+    fn active_file_name(&self) -> Option<String> {
         self.main_split
             .active_editor
             .get_untracked()
-            .map(|ed| {
+            .and_then(|ed| {
                 ed.doc().content.with_untracked(|c| {
                     if let crate::doc::DocContent::File { path, .. } = c {
-                        path.to_string_lossy().to_string()
+                        Some(path.to_string_lossy().to_string())
                     } else {
-                        "the current file".to_string()
+                        None
                     }
                 })
             })
-            .unwrap_or_else(|| "the current file".to_string())
     }
 
     fn open_chat_hub(&self) {

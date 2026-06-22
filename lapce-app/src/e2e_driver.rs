@@ -203,8 +203,12 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
         if header.is_empty() {
             break;
         }
-        if let Some(val) = header.strip_prefix("Content-Length:") {
-            content_length = val.trim().parse().unwrap_or(0);
+        // HTTP header names are case-insensitive: curl sends "Content-Length"
+        // while reqwest/hyper sends "content-length". Match either form.
+        if let Some((name, val)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = val.trim().parse().unwrap_or(0);
+            }
         }
     }
 
