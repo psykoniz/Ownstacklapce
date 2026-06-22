@@ -1376,39 +1376,23 @@ impl WindowTabData {
                 }
             }
             OwnStackAnalyzeFile => {
-                let file_name = self.main_split.active_editor.get_untracked()
-                    .map(|ed| ed.doc().content.with_untracked(|c| {
-                        if let crate::doc::DocContent::File { path, .. } = c {
-                            path.to_string_lossy().to_string()
-                        } else {
-                            "the current file".to_string()
-                        }
-                    }))
-                    .unwrap_or_else(|| "the current file".to_string());
-                self.show_panel(PanelKind::OwnStackChat);
+                let file_name = self.active_file_name();
+                self.open_chat_hub();
                 self.ownstack_chat.input.set(
                     format!("Analyze {} — summarize key risks, code smells, and improvements.", file_name),
                 );
                 self.ownstack_chat.send_message();
             }
             OwnStackCodeReview => {
-                let file_name = self.main_split.active_editor.get_untracked()
-                    .map(|ed| ed.doc().content.with_untracked(|c| {
-                        if let crate::doc::DocContent::File { path, .. } = c {
-                            path.to_string_lossy().to_string()
-                        } else {
-                            "the current file".to_string()
-                        }
-                    }))
-                    .unwrap_or_else(|| "the current file".to_string());
-                self.show_panel(PanelKind::OwnStackChat);
+                let file_name = self.active_file_name();
+                self.open_chat_hub();
                 self.ownstack_chat.input.set(
                     format!("Review {} for bugs, security issues, and code quality.", file_name),
                 );
                 self.ownstack_chat.send_message();
             }
             OwnStackFixBuild => {
-                self.show_panel(PanelKind::OwnStackChat);
+                self.open_chat_hub();
                 self.ownstack_chat.input.set(
                     "Fix the current build errors — run the build, analyze failures, and propose patches.".to_string(),
                 );
@@ -1416,6 +1400,9 @@ impl WindowTabData {
             }
             OwnStackClearChat => {
                 self.ownstack_chat.clear_history();
+                self.ownstack_chat.hub_tab.set(
+                    crate::ownstack_chat::OwnStackHubTab::Chat,
+                );
             }
             ToggleTerminalFocus => {
                 self.toggle_panel_focus(PanelKind::Terminal);
@@ -3274,6 +3261,29 @@ impl WindowTabData {
     fn hide_panel(&self, kind: PanelKind) {
         self.panel.hide_panel(&kind);
         self.common.focus.set(Focus::Workbench);
+    }
+
+    fn active_file_name(&self) -> String {
+        self.main_split
+            .active_editor
+            .get_untracked()
+            .map(|ed| {
+                ed.doc().content.with_untracked(|c| {
+                    if let crate::doc::DocContent::File { path, .. } = c {
+                        path.to_string_lossy().to_string()
+                    } else {
+                        "the current file".to_string()
+                    }
+                })
+            })
+            .unwrap_or_else(|| "the current file".to_string())
+    }
+
+    fn open_chat_hub(&self) {
+        self.show_panel(PanelKind::OwnStackChat);
+        self.ownstack_chat
+            .hub_tab
+            .set(crate::ownstack_chat::OwnStackHubTab::Chat);
     }
 
     pub fn show_panel(&self, kind: PanelKind) {
