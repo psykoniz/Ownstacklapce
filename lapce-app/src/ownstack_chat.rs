@@ -9,8 +9,8 @@ use floem::{
     peniko::Color,
     style::CursorStyle,
     views::{
-        container, dyn_stack, h_stack, label, scroll, stack, text, text_input,
-        v_stack,
+        container, dyn_container, dyn_stack, h_stack, label, scroll, stack, text,
+        text_input, v_stack,
     },
 };
 use lapce_rpc::ownstack::{AgentModeState, OwnStackRpc};
@@ -18,7 +18,9 @@ use lsp_types::DiagnosticSeverity;
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
+use crate::command::InternalCommand;
 use crate::window_tab::CommonData;
+use std::path::PathBuf;
 
 /// A single message in the AI chat
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -553,28 +555,9 @@ pub fn ownstack_chat_panel(
             .border_color(config.color(LapceColor::LAPCE_BORDER))
     });
 
-    // ── MCP sub-view ─────────────────────────────────────────────────────
-    let mcp_view = {
-        let wtd = window_tab_data.clone();
-        container(crate::ownstack_mcp::mcp_panel(wtd, position))
-            .style(move |s| {
-                s.size_full()
-                    .apply_if(hub_tab.get() != OwnStackHubTab::Tools, |s| s.hide())
-            })
-    };
-
-    // ── Audit sub-view ───────────────────────────────────────────────────
-    let audit_view = {
-        let wtd = window_tab_data.clone();
-        container(crate::ownstack_audit::audit_panel(wtd, position))
-            .style(move |s| {
-                s.size_full()
-                    .apply_if(hub_tab.get() != OwnStackHubTab::Audit, |s| s.hide())
-            })
-    };
-
-    // ── Chat sub-view ────────────────────────────────────────────────────
-    let chat_view = {
+    // ── Chat sub-view (built on demand by the hub switcher) ──────────────
+    fn ownstack_chat_view(window_tab_data: Rc<WindowTabData>) -> impl View {
+    let chat_data = window_tab_data.ownstack_chat.clone();
     let config = window_tab_data.common.config;
     let input = chat_data.input;
     let diagnostics = window_tab_data.main_split.diagnostics;
@@ -1042,29 +1025,19 @@ pub fn ownstack_chat_panel(
                     .style(|s| s.width_full().padding_bottom(8.0))
                 },
                 // ── Bridge disconnected warning ──────────────────────────
+                // The proxy reconnects automatically, so this banner is purely
+                // informational and disappears on its own once the bridge is
+                // back. No action button (it would be a dead affordance).
                 {
                     let chat_data_dc = chat_data.clone();
-                    let chat_data_retry = chat_data.clone();
                     h_stack((
-                        label(|| "Agent bridge disconnected")
+                        label(|| "\u{26A0}").style(|s| {
+                            s.margin_right(6.0)
+                                .font_size(11.0)
+                                .color(crate::ownstack_theme::STATE_WARN)
+                        }),
+                        label(|| "Agent bridge disconnected — reconnecting automatically\u{2026}")
                             .style(|s| s.flex_grow(1.0).font_size(11.0).color(crate::ownstack_theme::STATE_WARN)),
-                        label(|| "Retry")
-                            .on_click_stop(move |_| {
-                                chat_data_retry.add_system_message(
-                                    "Reconnection requested — the bridge will retry automatically.".to_string(),
-                                );
-                            })
-                            .style(|s| {
-                                s.padding_horiz(8.0)
-                                    .padding_vert(3.0)
-                                    .border_radius(4.0)
-                                    .background(crate::ownstack_theme::CTA_BG)
-                                    .color(crate::ownstack_theme::CTA_TEXT)
-                                    .font_size(10.0)
-                                    .font_weight(Weight::SEMIBOLD)
-                                    .cursor(CursorStyle::Pointer)
-                                    .hover(|s| s.background(crate::ownstack_theme::CTA_BG_HOVER))
-                            }),
                     ))
                     .style(move |s| {
                         let connected = chat_data_dc.bridge_connected.get();
@@ -1209,21 +1182,38 @@ pub fn ownstack_chat_panel(
                 .border_color(config.color(LapceColor::LAPCE_BORDER).multiply_alpha(0.5))
         }),
     ))
-    .style(move |s| {
-        s.size_full()
-            .flex_col()
-            .apply_if(hub_tab.get() != OwnStackHubTab::Chat, |s| s.hide())
-    })
-    }; // end chat_view
-
-    // ── Compose hub ──────────────────────────────────────────────────────
-    v_stack((
-        hub_bar,
-        chat_view,
-        mcp_view,
-        audit_view,
-    ))
     .style(|s| s.size_full().flex_col())
+    } // end ownstack_chat_view
+
+    // ── Compose hub: only the active sub-view is mounted ─────────────────
+    // Using dyn_container (rather than hiding all three) avoids wasted
+    // reactivity in the inactive panels and keeps hidden inputs out of the
+    // focus/tab order.
+    let wtd = window_tab_data.clone();
+    let content = dyn_container(
+        move || hub_tab.get(),
+        move |tab| match tab {
+            OwnStackHubTab::Chat => {
+                ownstack_chat_view(wtd.clone()).into_any()
+            }
+            OwnStackHubTab::Tools => {
+                container(crate::ownstack_mcp::mcp_panel(wtd.clone(), position))
+                    .style(|s| s.size_full())
+                    .into_any()
+            }
+            OwnStackHubTab::Audit => {
+                container(crate::ownstack_audit::audit_panel(
+                    wtd.clone(),
+                    position,
+                ))
+                .style(|s| s.size_full())
+                .into_any()
+            }
+        },
+    )
+    .style(|s| s.size_full());
+
+    v_stack((hub_bar, content)).style(|s| s.size_full().flex_col())
 }
 
 fn summarize_output_entry(msg: &ChatMessage) -> String {
@@ -1356,7 +1346,8 @@ fn message_view(
 
     let tool_block = if let Some(tool_res) = &msg.tool_result {
         let diff_block = if let Some(target) = &msg.diff_target {
-            let _chat_for_click = chat_data.clone();
+            let chat_for_click = chat_data.clone();
+            let target_for_click = target.clone();
             let target_clone = target.clone();
             h_stack((
                 h_stack((
@@ -1381,7 +1372,13 @@ fn message_view(
                             })
                     })
                     .on_click_stop(move |_| {
-                        // Can be hooked up later
+                        // Open the changed file's diff view so the user can
+                        // review what the agent modified.
+                        chat_for_click.common.internal_command.send(
+                            InternalCommand::OpenFileChanges {
+                                path: PathBuf::from(&target_for_click),
+                            },
+                        );
                     }),
             ))
             .style(|s| {
