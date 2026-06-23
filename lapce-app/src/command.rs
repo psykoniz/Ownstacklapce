@@ -482,6 +482,18 @@ pub enum LapceWorkbenchCommand {
     #[strum(serialize = "ownstack.clear_chat")]
     OwnStackClearChat,
 
+    #[strum(message = "OwnStack: Index Workspace (Semantic Search)")]
+    #[strum(serialize = "ownstack.index_workspace")]
+    OwnStackIndexWorkspace,
+
+    #[strum(message = "OwnStack: Toggle AI Autocomplete")]
+    #[strum(serialize = "ownstack.toggle_autocomplete")]
+    OwnStackToggleAutocomplete,
+
+    #[strum(message = "OwnStack: Toggle Web Preview")]
+    #[strum(serialize = "ownstack.toggle_web_preview")]
+    OwnStackToggleWebPreview,
+
     // Focus toggle commands
     #[strum(message = "Toggle Terminal Focus")]
     #[strum(serialize = "toggle_terminal_focus")]

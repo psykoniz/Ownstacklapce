@@ -193,6 +193,7 @@ pub struct WindowTabData {
     pub ownstack_audit: crate::ownstack_audit::OwnStackAuditData,
     pub ownstack_status: crate::ownstack_status::OwnStackStatusData,
     pub ownstack_mcp: crate::ownstack_mcp::OwnStackMcpData,
+    pub web_preview: crate::ownstack_preview::WebPreviewData,
     pub inline_edit: crate::ownstack_inline_edit::InlineEditData,
     pub policy_prompt_seq: RwSignal<u64>,
     pub layout_rect: RwSignal<Rect>,
@@ -579,6 +580,7 @@ impl WindowTabData {
             common.clone(),
             workspace.path.clone(),
         );
+        let web_preview = crate::ownstack_preview::WebPreviewData::new(cx);
 
         let window_tab_data = Self {
             scope: cx,
@@ -607,6 +609,7 @@ impl WindowTabData {
             ownstack_audit,
             ownstack_status,
             ownstack_mcp,
+            web_preview,
             inline_edit,
             policy_prompt_seq: cx.create_rw_signal(0),
             layout_rect: cx.create_rw_signal(Rect::ZERO),
@@ -1419,6 +1422,29 @@ impl WindowTabData {
                 self.ownstack_chat.hub_tab.set(
                     crate::ownstack_chat::OwnStackHubTab::Chat,
                 );
+            }
+            OwnStackIndexWorkspace => {
+                self.common.fim.indexing.set(true);
+                self.common
+                    .proxy
+                    .ownstack(lapce_rpc::ownstack::OwnStackRpc::IndexWorkspace);
+            }
+            OwnStackToggleAutocomplete => {
+                let enabled = self.common.fim.enabled.get_untracked();
+                self.common.fim.enabled.set(!enabled);
+                self.show_message(
+                    "OwnStack",
+                    &ShowMessageParams {
+                        typ: MessageType::INFO,
+                        message: format!(
+                            "AI autocomplete {}",
+                            if enabled { "disabled" } else { "enabled" }
+                        ),
+                    },
+                );
+            }
+            OwnStackToggleWebPreview => {
+                self.toggle_panel_visual(PanelKind::OwnStackWebPreview);
             }
             ToggleTerminalFocus => {
                 self.toggle_panel_focus(PanelKind::Terminal);
@@ -3265,7 +3291,8 @@ impl WindowTabData {
             | PanelKind::References
             | PanelKind::Implementation
             | PanelKind::OwnStackMcp
-            | PanelKind::OwnStackAudit => {
+            | PanelKind::OwnStackAudit
+            | PanelKind::OwnStackWebPreview => {
                 // Some panels don't accept focus (yet). Fall back to visibility check
                 // in those cases.
                 self.panel.is_panel_visible(&kind)

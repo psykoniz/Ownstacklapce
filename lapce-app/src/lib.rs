@@ -32,6 +32,7 @@ pub mod ownstack_fim;
 pub mod ownstack_inline_edit;
 pub mod ownstack_onboarding;
 pub mod ownstack_palette;
+pub mod ownstack_preview;
 pub mod ownstack_status;
 pub mod ownstack_theme;
 pub mod palette;

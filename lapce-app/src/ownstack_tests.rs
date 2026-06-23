@@ -65,6 +65,7 @@ mod tests {
             focus: cx.create_rw_signal(Focus::Workbench),
             completion: cx.create_rw_signal(CompletionData::new(cx, config_read)),
             inline_completion: cx.create_rw_signal(InlineCompletionData::new(cx)),
+            fim: crate::ownstack_fim::FimClientData::new(cx),
             hover: HoverData::new(cx),
             register: cx.create_rw_signal(Default::default()),
             find: crate::find::Find::new(cx),

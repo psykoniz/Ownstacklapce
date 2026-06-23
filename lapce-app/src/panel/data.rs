@@ -44,7 +44,11 @@ pub fn default_panel_order() -> PanelOrder {
     );
     order.insert(
         PanelPosition::RightTop,
-        im::vector![PanelKind::DocumentSymbol, PanelKind::OwnStackChat],
+        im::vector![
+            PanelKind::DocumentSymbol,
+            PanelKind::OwnStackChat,
+            PanelKind::OwnStackWebPreview
+        ],
     );
 
     order

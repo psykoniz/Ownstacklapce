@@ -536,6 +536,13 @@ fn panel_view(
                     )
                     .into_any()
                 }
+                PanelKind::OwnStackWebPreview => {
+                    crate::ownstack_preview::web_preview_panel(
+                        window_tab_data.clone(),
+                        position,
+                    )
+                    .into_any()
+                }
             };
             view.style(|s| s.size_pct(100.0, 100.0))
         },
@@ -595,6 +602,7 @@ fn panel_picker(
                 PanelKind::OwnStackChat => "OwnStack AI Hub (Ctrl+Shift+A)",
                 PanelKind::OwnStackMcp => "MCP Servers",
                 PanelKind::OwnStackAudit => "Audit Log (Ctrl+Shift+U)",
+                PanelKind::OwnStackWebPreview => "Web Preview (Ctrl+Shift+W)",
             };
             let icon = p.svg_name();
             let is_active = {
