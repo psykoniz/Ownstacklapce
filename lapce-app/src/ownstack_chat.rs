@@ -275,8 +275,31 @@ impl OwnStackChatData {
         self.is_loading.set(true);
         self.streaming_content.set(String::new());
 
+        // Expand @-mentions (@file:, @folder:, @workspace) into pinned context.
+        // The user's visible message keeps the original text; only the prompt
+        // sent to the agent is enriched.
+        let expanded = {
+            use crate::ownstack_mentions as men;
+            let mentions = men::parse_mentions(&prompt);
+            if mentions.is_empty() {
+                prompt.clone()
+            } else {
+                let root = &self.common.workspace.path;
+                let root = root.clone().unwrap_or_default();
+                let sections: Vec<String> = mentions
+                    .iter()
+                    .map(|m| match m {
+                        men::Mention::File(p) => men::resolve_file(&root, p),
+                        men::Mention::Folder(p) => men::resolve_folder(&root, p),
+                        men::Mention::Workspace => men::resolve_workspace(&root),
+                    })
+                    .collect();
+                men::build_prompt(&prompt, &sections)
+            }
+        };
+
         // Send via RPC
-        let message = OwnStackRpc::AiPrompt { prompt };
+        let message = OwnStackRpc::AiPrompt { prompt: expanded };
         self.common.proxy.ownstack(message);
         tracing::info!("OwnStack Chat: AiPrompt sent");
     }

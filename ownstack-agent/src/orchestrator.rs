@@ -441,6 +441,19 @@ impl AgentOrchestrator {
         self.mode
     }
 
+    /// Build (or incrementally update) the semantic index that powers RAG.
+    /// Returns the number of indexed chunks. Safe to call repeatedly.
+    pub async fn build_index(&mut self) -> Result<usize, String> {
+        self.index.init().await?;
+        self.index.index_workspace().await?;
+        Ok(self.index.chunk_count())
+    }
+
+    /// Current number of chunks in the semantic index.
+    pub fn index_chunk_count(&self) -> usize {
+        self.index.chunk_count()
+    }
+
     pub fn budget_snapshot(&self) -> RuntimeBudgetSnapshot {
         RuntimeBudgetSnapshot {
             tokens: self.context.estimated_tokens() as u64,

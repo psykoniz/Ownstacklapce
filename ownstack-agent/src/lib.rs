@@ -10,6 +10,7 @@
 //! - Artifact extraction from LLM responses
 //! - Structured telemetry and tracing
 
+pub mod acp;
 pub mod artifact_manager;
 pub mod context;
 pub mod context_builder;

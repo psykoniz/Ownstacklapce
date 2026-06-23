@@ -1446,6 +1446,15 @@ impl WindowTabData {
             OwnStackToggleWebPreview => {
                 self.toggle_panel_visual(PanelKind::OwnStackWebPreview);
             }
+            OwnStackCommitMessage => {
+                self.open_chat_hub();
+                self.ownstack_chat.input.set(
+                    "Generate a concise Conventional Commits message for the \
+current staged/unstaged git diff. Inspect the diff first, then output only \
+the commit message.".to_string(),
+                );
+                self.ownstack_chat.send_message();
+            }
             ToggleTerminalFocus => {
                 self.toggle_panel_focus(PanelKind::Terminal);
             }

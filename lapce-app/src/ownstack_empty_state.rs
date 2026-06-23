@@ -190,7 +190,9 @@ pub fn chat_empty_state() -> impl View {
         v_stack((
             shortcut_tip("Ctrl+Shift+A", "Toggle this panel"),
             shortcut_tip("Ctrl+K", "Inline AI edit in editor"),
-            shortcut_tip("Ctrl+L", "Toggle AI chat focus"),
+            shortcut_tip("@file:path", "Pin a file as context"),
+            shortcut_tip("@workspace", "Add the file tree as context"),
+            shortcut_tip("Tab", "Accept AI autocomplete suggestion"),
             shortcut_tip("Ask / Plan / Auto", "Switch AI modes above"),
         ))
         .style(|s| {

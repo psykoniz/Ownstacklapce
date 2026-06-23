@@ -494,6 +494,10 @@ pub enum LapceWorkbenchCommand {
     #[strum(serialize = "ownstack.toggle_web_preview")]
     OwnStackToggleWebPreview,
 
+    #[strum(message = "OwnStack: Generate Commit Message")]
+    #[strum(serialize = "ownstack.commit_message")]
+    OwnStackCommitMessage,
+
     // Focus toggle commands
     #[strum(message = "Toggle Terminal Focus")]
     #[strum(serialize = "toggle_terminal_focus")]

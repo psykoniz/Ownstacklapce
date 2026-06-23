@@ -83,6 +83,9 @@ default        = ["updater", "vendored-fonts"]
 portable       = ["lapce-core/portable"]
 updater        = []
 vendored-fonts = []
+# Embedded web preview via a system webview (requires WebKitGTK on Linux).
+# Off by default so the standard build has no extra system dependencies.
+web-preview    = []
 
 [dev-dependencies]
 criterion = "0.5"

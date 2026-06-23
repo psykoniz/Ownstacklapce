@@ -29,6 +29,7 @@ pub mod ownstack_audit;
 pub mod ownstack_chat;
 pub mod ownstack_empty_state;
 pub mod ownstack_fim;
+pub mod ownstack_mentions;
 pub mod ownstack_inline_edit;
 pub mod ownstack_onboarding;
 pub mod ownstack_palette;
