@@ -8,7 +8,7 @@ use floem::View;
 use floem::peniko::Color;
 use floem::style::CursorStyle;
 use floem::text::Weight;
-use floem::views::{Decorators, label, v_stack};
+use floem::views::{Decorators, h_stack, label, v_stack};
 
 use crate::command::LapceWorkbenchCommand;
 use crate::listener::Listener;
@@ -99,6 +99,28 @@ pub fn empty_editor_placeholder(
     .style(|s| s.size_full().items_center().justify_center().flex_col())
 }
 
+fn shortcut_tip(key: &'static str, desc: &'static str) -> impl View {
+    h_stack((
+        label(move || key).style(|s| {
+            s.font_size(10.0)
+                .font_weight(Weight::BOLD)
+                .color(BRAND_ACCENT)
+                .padding_horiz(6.0)
+                .padding_vert(2.0)
+                .background(BRAND_ACCENT.multiply_alpha(0.10))
+                .border_radius(4.0)
+                .selectable(false)
+                .min_width(90.0)
+        }),
+        label(move || desc).style(|s| {
+            s.font_size(11.0)
+                .color(HINT_COLOR)
+                .selectable(false)
+        }),
+    ))
+    .style(|s| s.items_center().gap(8.0))
+}
+
 // ── Chat panel empty state ───────────────────────────────────────────────────
 
 /// Shown in the AI Chat sidebar when no messages exist yet.
@@ -162,6 +184,23 @@ pub fn chat_empty_state() -> impl View {
                 .font_size(12.0)
                 .font_weight(Weight::SEMIBOLD)
                 .selectable(false)
+                .margin_bottom(20.0)
+        }),
+        // Quick-start tips
+        v_stack((
+            shortcut_tip("Ctrl+Shift+A", "Toggle this panel"),
+            shortcut_tip("Ctrl+K", "Inline AI edit in editor"),
+            shortcut_tip("Ctrl+L", "Toggle AI chat focus"),
+            shortcut_tip("Ask / Plan / Auto", "Switch AI modes above"),
+        ))
+        .style(|s| {
+            s.gap(6.0)
+                .padding(12.0)
+                .border(1.0)
+                .border_radius(8.0)
+                .border_color(BRAND_ACCENT.multiply_alpha(0.10))
+                .background(BRAND_ACCENT.multiply_alpha(0.02))
+                .max_width(280.0)
         }),
     ))
     .style(|s| {

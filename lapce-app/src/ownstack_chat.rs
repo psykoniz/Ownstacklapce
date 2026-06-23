@@ -820,8 +820,8 @@ pub fn ownstack_chat_panel(
                         .style(move |s| {
                             let is_active =
                                 monitor_tab_output.get() == ChatMonitorTab::Output;
-                            s.padding_horiz(8.0)
-                                .padding_vert(4.0)
+                            s.padding_horiz(10.0)
+                                .padding_vert(5.0)
                                 .border(1.0)
                                 .border_radius(6.0)
                                 .border_color(
@@ -830,14 +830,14 @@ pub fn ownstack_chat_panel(
                                 .background(if is_active {
                                     crate::ownstack_theme::ACCENT.multiply_alpha(0.16)
                                 } else {
-                                    Color::from_rgba8(0, 0, 0, 0)
+                                    Color::TRANSPARENT
                                 })
                                 .color(if is_active {
                                     crate::ownstack_theme::ACCENT_BRIGHT
                                 } else {
                                     config.get().color(LapceColor::STATUS_FOREGROUND)
                                 })
-                                .font_size(10.0)
+                                .font_size(11.0)
                                 .font_weight(if is_active { Weight::BOLD } else { Weight::NORMAL })
                                 .cursor(CursorStyle::Pointer)
                                 .hover(|s| s.background(crate::ownstack_theme::SURFACE_HOVER))
@@ -849,8 +849,8 @@ pub fn ownstack_chat_panel(
                         .style(move |s| {
                             let is_active = monitor_tab_problems.get()
                                 == ChatMonitorTab::Problems;
-                            s.padding_horiz(8.0)
-                                .padding_vert(4.0)
+                            s.padding_horiz(10.0)
+                                .padding_vert(5.0)
                                 .border(1.0)
                                 .border_radius(6.0)
                                 .border_color(
@@ -859,14 +859,14 @@ pub fn ownstack_chat_panel(
                                 .background(if is_active {
                                     crate::ownstack_theme::STATE_WARN.multiply_alpha(0.16)
                                 } else {
-                                    Color::from_rgba8(0, 0, 0, 0)
+                                    Color::TRANSPARENT
                                 })
                                 .color(if is_active {
                                     crate::ownstack_theme::STATE_WARN
                                 } else {
                                     config.get().color(LapceColor::STATUS_FOREGROUND)
                                 })
-                                .font_size(10.0)
+                                .font_size(11.0)
                                 .font_weight(if is_active { Weight::BOLD } else { Weight::NORMAL })
                                 .cursor(CursorStyle::Pointer)
                                 .hover(|s| s.background(crate::ownstack_theme::SURFACE_HOVER))
