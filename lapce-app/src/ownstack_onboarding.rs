@@ -68,7 +68,7 @@ pub struct OnboardingData {
 impl OnboardingData {
     pub fn new(cx: Scope) -> Self {
         let state = load_state_file().unwrap_or_default();
-        eprintln!(
+        tracing::debug!(
             "[OwnStack] Onboarding state: completed={}, path={:?}",
             state.completed,
             state_file_path(),
