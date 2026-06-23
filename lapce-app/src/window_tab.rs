@@ -136,6 +136,8 @@ pub struct CommonData {
     pub keypress: RwSignal<KeyPressData>,
     pub completion: RwSignal<CompletionData>,
     pub inline_completion: RwSignal<InlineCompletionData>,
+    /// AI inline autocompletion (Fill-in-the-Middle) client state.
+    pub fim: crate::ownstack_fim::FimClientData,
     pub hover: HoverData,
     pub register: RwSignal<Register>,
     pub find: Find,
@@ -350,6 +352,7 @@ impl WindowTabData {
         let focus = cx.create_rw_signal(Focus::Workbench);
         let completion = cx.create_rw_signal(CompletionData::new(cx, config));
         let inline_completion = cx.create_rw_signal(InlineCompletionData::new(cx));
+        let fim = crate::ownstack_fim::FimClientData::new(cx);
         let hover = HoverData::new(cx);
 
         let register = cx.create_rw_signal(Register::default());
@@ -378,6 +381,7 @@ impl WindowTabData {
             focus,
             completion,
             inline_completion,
+            fim,
             hover,
             register,
             find,
@@ -2246,6 +2250,48 @@ impl WindowTabData {
         }
     }
 
+    /// Apply an AI Fill-in-the-Middle completion to the active editor as ghost
+    /// text, but only if it is still the latest request and the cursor has not
+    /// moved since the request was issued.
+    fn apply_fim_completion(&self, id: u64, completion: &str) {
+        let Some(pending) = self.common.fim.take_if_current(id) else {
+            return;
+        };
+        let Some(editor) = self.main_split.active_editor.get_untracked() else {
+            return;
+        };
+        let doc = editor.doc();
+        // Path must still match the file the request was issued for.
+        let path_matches = doc
+            .content
+            .with_untracked(|c| c.path().cloned())
+            .map(|p| p == pending.path)
+            .unwrap_or(false);
+        if !path_matches {
+            return;
+        }
+        // Cursor must not have moved.
+        let offset = editor.cursor().with_untracked(|c| c.offset());
+        if offset != pending.offset {
+            return;
+        }
+
+        let item = crate::inline_completion::InlineCompletionItem {
+            insert_text: completion.to_string(),
+            filter_text: None,
+            range: Some(offset..offset),
+            command: None,
+            insert_text_format: Some(lsp_types::InsertTextFormat::PLAIN_TEXT),
+        };
+        let mut items = im::Vector::new();
+        items.push_back(item);
+        let path = pending.path.clone();
+        self.common.inline_completion.update(|c| {
+            c.set_items(items, offset, path);
+            c.update_doc(&doc, offset);
+        });
+    }
+
     fn handle_core_notification(&self, rpc: &CoreNotification) {
         let cx = self.scope;
         match rpc {
@@ -2746,6 +2792,16 @@ impl WindowTabData {
                                     .to_string(),
                             },
                         );
+                    }
+                    OwnStackRpc::FimResponse { id, completion } => {
+                        self.apply_fim_completion(id, &completion);
+                    }
+                    OwnStackRpc::IndexStatus {
+                        indexing,
+                        chunk_count,
+                    } => {
+                        self.common.fim.indexing.set(indexing);
+                        self.common.fim.chunk_count.set(chunk_count);
                     }
                     _ => {
                         tracing::debug!("Unhandled RPC: {:?}", message);

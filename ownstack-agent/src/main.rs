@@ -141,6 +141,44 @@ fn send_ui_delta(delta: UiStateDelta) {
     send_rpc_notification(OwnStackRpc::UiStateDelta { delta });
 }
 
+/// Build the Fill-in-the-Middle completion engine from environment.
+///
+/// Defaults to a local Ollama code model. If `OWNSTACK_FIM_BACKEND=openrouter`
+/// and an OpenRouter key is present, the network backend is used instead so
+/// users without a local GPU still get completions.
+fn build_fim_engine() -> ownstack_agent::fim::FimEngine {
+    use ownstack_agent::fim::{FimBackend, FimConfig, FimEngine};
+
+    let backend_pref = std::env::var("OWNSTACK_FIM_BACKEND")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if backend_pref == "openrouter" {
+        if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+            let model = std::env::var("OWNSTACK_FIM_MODEL")
+                .unwrap_or_else(|_| "deepseek/deepseek-coder".to_string());
+            return FimEngine::new(FimConfig {
+                backend: FimBackend::OpenRouter,
+                model,
+                base_url: "https://openrouter.ai/api/v1".to_string(),
+                api_key: key,
+                ..Default::default()
+            });
+        }
+    }
+
+    let base_url = std::env::var("OLLAMA_HOST")
+        .unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let model = std::env::var("OWNSTACK_FIM_MODEL")
+        .unwrap_or_else(|_| "qwen2.5-coder:1.5b".to_string());
+    FimEngine::new(FimConfig {
+        backend: FimBackend::Ollama,
+        model,
+        base_url,
+        ..Default::default()
+    })
+}
+
 fn send_budget_context_updates(
     budget: RuntimeBudgetSnapshot,
     context: RuntimeContextSnapshot,
@@ -543,6 +581,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let work_tx_reader = work_tx.clone();
         let approval_for_reader = approval_manager.clone();
 
+        // Fill-in-the-Middle engine for inline autocompletion. Handled outside
+        // the serial work queue so chat never blocks completions and vice versa.
+        let fim_engine = Arc::new(build_fim_engine());
+        // Tracks the most recent FIM request id so stale completions (the user
+        // kept typing) are discarded instead of flashing outdated ghost text.
+        let latest_fim_id = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        // Semantic index for codebase RAG, shared across indexing + retrieval.
+        let semantic_index = Arc::new(tokio::sync::Mutex::new(
+            ownstack_agent::index::SemanticIndex::new(workspace.clone()),
+        ));
+
+        let fim_for_reader = fim_engine.clone();
+        let latest_fim_for_reader = latest_fim_id.clone();
+        let index_for_reader = semantic_index.clone();
+
         tokio::spawn(async move {
             let mut reader = BufReader::new(tokio::io::stdin());
             info!("Agent RPC stdin loop started");
@@ -570,6 +623,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 OwnStackRpc::KillSwitch => {
                                     info!("Kill switch received — shutting down.");
                                     std::process::exit(0);
+                                }
+                                OwnStackRpc::FimRequest {
+                                    id,
+                                    prefix,
+                                    suffix,
+                                    ..
+                                } => {
+                                    // Latency-critical: handle concurrently and
+                                    // drop stale results so the editor only ever
+                                    // sees ghost text for the latest keystroke.
+                                    latest_fim_for_reader.store(
+                                        id,
+                                        std::sync::atomic::Ordering::SeqCst,
+                                    );
+                                    let engine = fim_for_reader.clone();
+                                    let latest = latest_fim_for_reader.clone();
+                                    tokio::spawn(async move {
+                                        match engine.complete(&prefix, &suffix).await
+                                        {
+                                            Ok(completion) => {
+                                                let still_latest = latest.load(
+                                                    std::sync::atomic::Ordering::SeqCst,
+                                                ) == id;
+                                                if still_latest
+                                                    && !completion.is_empty()
+                                                {
+                                                    send_rpc_notification(
+                                                        OwnStackRpc::FimResponse {
+                                                            id,
+                                                            completion,
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                            Err(e) => {
+                                                debug!("FIM completion failed: {e}");
+                                            }
+                                        }
+                                    });
+                                }
+                                OwnStackRpc::IndexWorkspace => {
+                                    let index = index_for_reader.clone();
+                                    tokio::spawn(async move {
+                                        send_rpc_notification(
+                                            OwnStackRpc::IndexStatus {
+                                                indexing: true,
+                                                chunk_count: 0,
+                                            },
+                                        );
+                                        let mut guard = index.lock().await;
+                                        if let Err(e) = guard.init().await {
+                                            debug!("Index init skipped: {e}");
+                                        }
+                                        let _ = guard.index_workspace().await;
+                                        let count = guard.chunk_count() as u64;
+                                        send_rpc_notification(
+                                            OwnStackRpc::IndexStatus {
+                                                indexing: false,
+                                                chunk_count: count,
+                                            },
+                                        );
+                                    });
                                 }
                                 OwnStackRpc::AiPrompt { .. }
                                 | OwnStackRpc::ToolExec { .. }
@@ -610,6 +725,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         orchestrator.budget_snapshot(),
                         orchestrator.context_snapshot(),
                     );
+                    // RAG: enrich the prompt with semantically relevant code
+                    // from the workspace index. No-op (silent) when the index
+                    // is empty or uninitialised, so chat still works without it.
+                    let prompt = {
+                        let guard = semantic_index.lock().await;
+                        match guard.retrieve_context(&prompt, 5, 4000).await {
+                            Some(ctx) => format!("{ctx}\n\n{prompt}"),
+                            None => prompt,
+                        }
+                    };
                     let result = orchestrator
                         .stream_process(
                             &prompt,
