@@ -465,7 +465,7 @@ pub fn mcp_panel(
                 v_stack((
                     h_stack((
                         h_stack((
-                            label(|| String::new()).style(move |s| {
+                            label(String::new).style(move |s| {
                                 s.width(8.0)
                                     .height(8.0)
                                     .border_radius(99.0)

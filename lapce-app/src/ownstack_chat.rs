@@ -985,7 +985,7 @@ pub fn ownstack_chat_panel(
                                 .padding_bottom(4.0)
                         }),
                         stack((
-                            label(|| String::new()).style(move |s| {
+                            label(String::new).style(move |s| {
                                 let config = config.get();
                                 s.width_full()
                                     .height(4.0)
@@ -998,7 +998,7 @@ pub fn ownstack_chat_panel(
                                             .multiply_alpha(0.9),
                                     )
                             }),
-                            label(|| String::new()).style(move |s| {
+                            label(String::new).style(move |s| {
                                 let current = context_fill.context_current.get();
                                 let max = context_fill.context_max.get();
                                 let ratio = if max == 0 {
@@ -1325,7 +1325,7 @@ fn message_view(
 
     let header = if !is_user {
         h_stack((
-            label(|| String::new()).style(move |s| {
+            label(String::new).style(move |s| {
                 s.width(6.0)
                     .height(6.0)
                     .border_radius(99.0)

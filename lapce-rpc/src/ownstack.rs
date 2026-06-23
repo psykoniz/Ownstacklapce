@@ -96,6 +96,7 @@ pub struct UiStateDelta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "params")]
+#[allow(clippy::large_enum_variant)]
 pub enum OwnStackRpc {
     AiPrompt {
         prompt: String,
