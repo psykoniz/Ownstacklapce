@@ -382,26 +382,33 @@ impl OwnStackChatData {
         });
 
         std::thread::spawn(move || {
-            // Expensive operations moved to background thread
-            let diff = if let Some(patch) = extract_structured_patch(&content) {
+            let patches = extract_all_patches(&content);
+            let diff = if !patches.is_empty() {
                 if let Some(workspace_path) = workspace_root {
-                    let path = std::path::Path::new(&patch.path);
-                    if is_safe_workspace_relative_path(path) {
-                        let full_path = workspace_path.join(path);
-                        // Blocking I/O
-                        let old_content =
-                            std::fs::read_to_string(&full_path).unwrap_or_default();
-                        // Expensive LCS
-                        Some(render_unified_diff(
-                            &patch.path,
-                            &old_content,
-                            &patch.new_content,
-                        ))
+                    let mut all_diffs = Vec::new();
+                    for patch in &patches {
+                        let path = std::path::Path::new(&patch.path);
+                        if is_safe_workspace_relative_path(path) {
+                            let full_path = workspace_path.join(path);
+                            let old_content =
+                                std::fs::read_to_string(&full_path)
+                                    .unwrap_or_default();
+                            all_diffs.push(render_unified_diff(
+                                &patch.path,
+                                &old_content,
+                                &patch.new_content,
+                            ));
+                        } else {
+                            all_diffs.push(format!(
+                                "Rejected patch path outside workspace: {}",
+                                patch.path
+                            ));
+                        }
+                    }
+                    if all_diffs.is_empty() {
+                        None
                     } else {
-                        Some(format!(
-                            "Rejected patch path outside workspace: {}",
-                            patch.path
-                        ))
+                        Some(all_diffs.join("\n"))
                     }
                 } else {
                     None
@@ -1048,19 +1055,37 @@ pub fn ownstack_chat_panel(
                     .style(|s| s.width_full().padding_bottom(8.0))
                 },
                 // ── Bridge disconnected warning ──────────────────────────
-                // The proxy reconnects automatically, so this banner is purely
-                // informational and disappears on its own once the bridge is
-                // back. No action button (it would be a dead affordance).
                 {
                     let chat_data_dc = chat_data.clone();
+                    let chat_data_retry = chat_data.clone();
                     h_stack((
                         label(|| "\u{26A0}").style(|s| {
                             s.margin_right(6.0)
                                 .font_size(11.0)
                                 .color(crate::ownstack_theme::STATE_WARN)
                         }),
-                        label(|| "Agent bridge disconnected — reconnecting automatically\u{2026}")
+                        label(|| "Agent bridge disconnected")
                             .style(|s| s.flex_grow(1.0).font_size(11.0).color(crate::ownstack_theme::STATE_WARN)),
+                        label(|| "Retry")
+                            .on_click_stop(move |_| {
+                                chat_data_retry.common.proxy.ownstack(OwnStackRpc::UiSnapshotRequest);
+                            })
+                            .style(|s| {
+                                s.padding_horiz(12.0)
+                                    .padding_vert(4.0)
+                                    .background(crate::ownstack_theme::CTA_BG)
+                                    .border(1.0)
+                                    .border_color(crate::ownstack_theme::CTA_BORDER)
+                                    .border_radius(4.0)
+                                    .color(crate::ownstack_theme::CTA_TEXT)
+                                    .font_size(11.0)
+                                    .font_weight(Weight::SEMIBOLD)
+                                    .cursor(CursorStyle::Pointer)
+                                    .hover(|s| {
+                                        s.background(crate::ownstack_theme::CTA_BG_HOVER)
+                                            .border_color(crate::ownstack_theme::CTA_BORDER_HOVER)
+                                    })
+                            }),
                     ))
                     .style(move |s| {
                         let connected = chat_data_dc.bridge_connected.get();
@@ -1692,7 +1717,14 @@ fn extract_code_block(content: &str) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn extract_structured_patch(content: &str) -> Option<PatchSuggestion> {
+    let patches = extract_all_patches(content);
+    patches.into_iter().next()
+}
+
+fn extract_all_patches(content: &str) -> Vec<PatchSuggestion> {
+    let mut patches = Vec::new();
     let mut in_patch_block = false;
     let mut pending_path: Option<String> = None;
     let mut body = String::new();
@@ -1703,6 +1735,7 @@ fn extract_structured_patch(content: &str) -> Option<PatchSuggestion> {
         if !in_patch_block {
             if let Some(rest) = trimmed.strip_prefix("```ownstack_patch") {
                 in_patch_block = true;
+                body.clear();
                 let inline_path = rest
                     .trim()
                     .strip_prefix("path=")
@@ -1714,7 +1747,17 @@ fn extract_structured_patch(content: &str) -> Option<PatchSuggestion> {
         }
 
         if trimmed.starts_with("```") {
-            break;
+            if let Some(path) = pending_path.take() {
+                if !body.trim().is_empty() {
+                    patches.push(PatchSuggestion {
+                        path,
+                        new_content: body.clone(),
+                    });
+                }
+            }
+            in_patch_block = false;
+            body.clear();
+            continue;
         }
 
         if pending_path.is_none() {
@@ -1731,15 +1774,7 @@ fn extract_structured_patch(content: &str) -> Option<PatchSuggestion> {
         body.push('\n');
     }
 
-    let path = pending_path?;
-    if body.trim().is_empty() {
-        return None;
-    }
-
-    Some(PatchSuggestion {
-        path,
-        new_content: body,
-    })
+    patches
 }
 
 fn is_safe_workspace_relative_path(path: &std::path::Path) -> bool {
