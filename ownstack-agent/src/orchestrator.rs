@@ -779,9 +779,15 @@ impl AgentOrchestrator {
         let project_rules = self.memory.to_system_prompt();
 
         // Phase 11: RepoMap Injection
+        // Budget the repomap to ~5 % of the context window (in chars ≈ tokens×4)
+        // so large repos don't blow up providers with payload-size limits.
+        let ctx_max = self.context.max_tokens();
+        let repomap_char_budget = (ctx_max * 4 / 20).clamp(2000, 12000);
+        let repomap_line_cap = (ctx_max / 640).clamp(30, 200);
         let repomap_context = {
             self.repomap.scan();
-            self.repomap.to_prompt_text(200)
+            self.repomap
+                .to_prompt_text_budget(repomap_line_cap, repomap_char_budget)
         };
 
         // Phase 11: Semantic Retrieval

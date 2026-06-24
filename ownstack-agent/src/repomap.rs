@@ -443,8 +443,24 @@ impl RepoMap {
     /// Generate a compact text summary for LLM prompt injection.
     ///
     /// Format: `path/to/file.rs:42  fn  function_name → [called1, called2]`
+    ///
+    /// `max_lines` caps the number of symbol lines emitted.
+    /// `max_chars` caps total output length — whichever limit is hit first
+    /// stops emission. This prevents oversized system prompts that trigger
+    /// 503s on providers with payload size limits.
     pub fn to_prompt_text(&self, max_lines: usize) -> String {
+        self.to_prompt_text_budget(max_lines, Self::DEFAULT_MAX_CHARS)
+    }
+
+    const DEFAULT_MAX_CHARS: usize = 6000;
+
+    pub fn to_prompt_text_budget(
+        &self,
+        max_lines: usize,
+        max_chars: usize,
+    ) -> String {
         let mut lines = Vec::new();
+        let mut total_chars: usize = 0;
 
         for sym in &self.symbols {
             let relative =
@@ -456,22 +472,25 @@ impl RepoMap {
                 format!(" → [{}]", sym.calls.join(", "))
             };
 
-            lines.push(format!(
+            let line = format!(
                 "{}:{}  {}  {}{}",
                 relative.display(),
                 sym.line,
                 sym.kind,
                 sym.name,
                 calls_str
-            ));
+            );
 
-            if lines.len() >= max_lines {
+            total_chars += line.len() + 1;
+            if total_chars > max_chars || lines.len() >= max_lines {
                 lines.push(format!(
                     "... ({} more symbols)",
-                    self.symbols.len() - max_lines
+                    self.symbols.len() - lines.len()
                 ));
                 break;
             }
+
+            lines.push(line);
         }
 
         if lines.is_empty() {
@@ -697,5 +716,49 @@ fn compute(n: i32) -> i32 { n * 2 }
         assert!(graph
             .get("main")
             .map_or(false, |calls| calls.contains(&"helper".to_string())));
+    }
+
+    #[test]
+    fn char_budget_caps_output() {
+        let dir = tempdir().unwrap();
+        let mut src = String::new();
+        for i in 0..100 {
+            src.push_str(&format!("pub fn function_number_{}() {{}}\n", i));
+        }
+        fs::write(dir.path().join("big.rs"), &src).unwrap();
+
+        let mut map = RepoMap::new(dir.path().to_path_buf());
+        map.scan();
+        assert!(map.symbols().len() >= 100);
+
+        let uncapped = map.to_prompt_text_budget(200, 100_000);
+        let capped = map.to_prompt_text_budget(200, 500);
+
+        assert!(capped.len() < uncapped.len());
+        assert!(capped.len() <= 600);
+        assert!(capped.contains("more symbols"));
+    }
+
+    #[test]
+    fn default_to_prompt_text_respects_char_limit() {
+        let dir = tempdir().unwrap();
+        let mut src = String::new();
+        for i in 0..500 {
+            src.push_str(&format!(
+                "pub fn very_long_function_name_number_{}() {{}}\n",
+                i
+            ));
+        }
+        fs::write(dir.path().join("huge.rs"), &src).unwrap();
+
+        let mut map = RepoMap::new(dir.path().to_path_buf());
+        map.scan();
+
+        let txt = map.to_prompt_text(500);
+        assert!(
+            txt.len() <= RepoMap::DEFAULT_MAX_CHARS + 200,
+            "default to_prompt_text should stay near the char budget, got {} chars",
+            txt.len()
+        );
     }
 }
