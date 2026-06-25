@@ -446,7 +446,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ownstack_agent::toolkits::specialists::PMToolkit::new(workspace.clone()),
     ));
     orchestrator.register_toolkit(Arc::new(
-        ownstack_agent::toolkits::specialists::QAToolkit,
+        ownstack_agent::toolkits::specialists::QAToolkit::new(workspace.clone()),
     ));
     orchestrator.register_toolkit(Arc::new(
         ownstack_agent::toolkits::specialists::SecurityToolkit,

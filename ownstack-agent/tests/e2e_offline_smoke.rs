@@ -60,9 +60,7 @@ async fn agent_boots_and_registers_toolkits() {
         ownstack_agent::toolkits::extra::ExtraToolkit::default(),
     ));
     orchestrator.register_toolkit(Arc::new(
-        ownstack_agent::toolkits::browser::BrowserToolkit::new(
-            tmp.path().to_path_buf(),
-        ),
+        ownstack_agent::toolkits::browser::BrowserToolkit,
     ));
     orchestrator.register_toolkit(Arc::new(
         ownstack_agent::toolkits::time_machine::TimeMachineToolkit::new(
