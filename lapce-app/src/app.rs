@@ -13,7 +13,7 @@ use std::{
     },
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use floem::{
     IntoView, View,
@@ -128,8 +128,9 @@ struct Cli {
 
     /// Enable E2E testing mode: starts a JSON-RPC control server on localhost,
     /// uses isolated config directory, disables animations, fixed window size.
-    /// Also enabled by env OWNSTACK_E2E=1.
-    #[clap(long, action, env = "OWNSTACK_E2E")]
+    /// Also enabled by env OWNSTACK_E2E=1 (handled manually so values like "1"
+    /// are accepted, not just clap's bool literals "true"/"false").
+    #[clap(long, action)]
     e2e: bool,
 
     /// Port for the E2E control server (default: 0 = random).
@@ -1333,7 +1334,9 @@ fn editor_tab_content(
                     )
                     .into_any()
                 } else {
-                    crate::ownstack_empty_state::empty_editor_placeholder()
+                    crate::ownstack_empty_state::empty_editor_placeholder(
+                            window_tab_data.common.workbench_command,
+                        )
                         .into_any()
                 }
             }
@@ -1993,8 +1996,10 @@ fn split_list(
                         )
                         .into_any()
                     } else {
-                        crate::ownstack_empty_state::empty_editor_placeholder()
-                            .into_any()
+                        crate::ownstack_empty_state::empty_editor_placeholder(
+                            window_tab_data.common.workbench_command,
+                        )
+                        .into_any()
                     }
                 }
                 SplitContent::Split(split_id) => {
@@ -2009,8 +2014,10 @@ fn split_list(
                         )
                         .into_any()
                     } else {
-                        crate::ownstack_empty_state::empty_editor_placeholder()
-                            .into_any()
+                        crate::ownstack_empty_state::empty_editor_placeholder(
+                            window_tab_data.common.workbench_command,
+                        )
+                        .into_any()
                     }
                 }
             };
@@ -3365,6 +3372,7 @@ fn inline_edit(window_tab_data: Rc<WindowTabData>) -> impl View {
             TextInputBuilder::new()
                 .is_focused(move || active.get())
                 .build_editor(editor)
+                .placeholder(|| "Describe your edit\u{2026}".to_string())
                 .style(|s| s.width(320.0)),
         )
         .style(move |s| {
@@ -3862,7 +3870,15 @@ pub fn launch() {
     }
 
     // In E2E mode, treat as if --wait was passed (no fork).
-    let is_e2e = cli.e2e;
+    // Accept the OWNSTACK_E2E env var with truthy values ("1"/"true") since
+    // clap's bool parser rejects "1" when the flag is env-backed.
+    let is_e2e = cli.e2e
+        || std::env::var("OWNSTACK_E2E")
+            .map(|v| {
+                let v = v.trim();
+                v == "1" || v.eq_ignore_ascii_case("true")
+            })
+            .unwrap_or(false);
     let e2e_port = cli.e2e_port;
     let window_size = cli.window_size.clone();
     let grammar_dir = cli.grammar_dir.clone();
@@ -3912,8 +3928,9 @@ pub fn launch() {
     }
 
     // If the cli is not requesting a new window, and we're not developing a plugin, we try to open
-    // in the existing Lapce process
-    if !cli.new {
+    // in the existing Lapce process. In E2E mode we must always start a fresh
+    // instance with its own control server, so never delegate to a running one.
+    if !cli.new && !is_e2e {
         match get_socket() {
             Ok(socket) => {
                 if let Err(e) = try_open_in_existing_process(socket, &cli.paths) {
@@ -3953,7 +3970,9 @@ pub fn launch() {
     let plugin_paths = Arc::new(cli.plugin_path);
 
     let (tx, rx) = channel();
-    let mut watcher = notify::recommended_watcher(ConfigWatcher::new(tx)).unwrap();
+    let mut watcher = notify::recommended_watcher(ConfigWatcher::new(tx))
+        .context("Failed to spawn file watcher")
+        .unwrap();
     if let Some(path) = LapceConfig::settings_file() {
         if let Err(err) = watcher.watch(&path, notify::RecursiveMode::Recursive) {
             tracing::error!("{:?}", err);

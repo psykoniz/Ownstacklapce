@@ -28,6 +28,10 @@ pub struct ChunkMetadata {
     pub start_line: usize,
     pub end_line: usize,
     pub content: String,
+    /// Best-effort symbol label (e.g. `fn parse`), when the chunk corresponds
+    /// to a single definition. Older indexes without this field default to None.
+    #[serde(default)]
+    pub symbol: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -239,17 +243,27 @@ impl SemanticIndex {
 
             let content = std::fs::read_to_string(&file)
                 .map_err(|e| format!("Read failed for {:?}: {}", file, e))?;
-            let lines_per_chunk = 20;
-            let total_lines = content.lines().count();
-            let chunks = self.chunk_text(&content, lines_per_chunk);
+            // Symbol-aware chunking: split at definition boundaries so each
+            // chunk is a coherent unit (fn / struct / class / …).
+            let chunks = crate::semantic_chunk::chunk_source(&content);
 
-            for (i, chunk) in chunks.into_iter().enumerate() {
-                let embedding = self.generate_embedding(&chunk)?;
+            for chunk in chunks {
+                // Embed the symbol label alongside the body so a query like
+                // "where is parse_args" matches even on the signature line.
+                let embed_input = match &chunk.symbol {
+                    Some(sym) => format!("{sym}\n{}", chunk.content),
+                    None => chunk.content.clone(),
+                };
+                // BERT position embeddings cap at 512 tokens (~2000 chars).
+                // Truncate the embedding input (metadata keeps full content).
+                let embed_input = truncate_chars(&embed_input, 2000);
+                let embedding = self.generate_embedding(&embed_input)?;
                 let meta = ChunkMetadata {
                     path: rel_path.clone(),
-                    start_line: i * lines_per_chunk + 1,
-                    end_line: ((i + 1) * lines_per_chunk).min(total_lines),
-                    content: chunk,
+                    start_line: chunk.start_line,
+                    end_line: chunk.end_line,
+                    content: chunk.content,
+                    symbol: chunk.symbol,
                 };
                 new_metadata.push(meta);
                 new_embeddings.push(embedding);
@@ -468,13 +482,49 @@ impl SemanticIndex {
         Ok(())
     }
 
-    fn chunk_text(&self, text: &str, lines_per_chunk: usize) -> Vec<String> {
-        let lines: Vec<&str> = text.lines().collect();
-        lines
-            .chunks(lines_per_chunk)
-            .map(|chunk| chunk.join("\n"))
-            .collect()
+    /// Retrieve the most relevant chunks for `query` and render them as a
+    /// Markdown context block ready to prepend to an LLM prompt. Returns `None`
+    /// when the index is empty or uninitialised, so callers can fall back to
+    /// plain prompting silently.
+    pub async fn retrieve_context(
+        &self,
+        query: &str,
+        limit: usize,
+        budget_tokens: usize,
+    ) -> Option<String> {
+        let results = self.search(query, limit).await.ok()?;
+        if results.is_empty() {
+            return None;
+        }
+        let mut builder = crate::context_builder::ContextBuilder::new(budget_tokens);
+        let n = results.len();
+        for (rank, meta) in results.into_iter().enumerate() {
+            // Earlier results score higher (search returns best-first).
+            let score = (n - rank) as f32;
+            builder.add_code(
+                &meta.path,
+                meta.start_line,
+                meta.end_line,
+                meta.symbol.as_deref(),
+                &meta.content,
+                score,
+            );
+        }
+        builder.render()
     }
+
+    /// Number of indexed chunks currently held in memory.
+    pub fn chunk_count(&self) -> usize {
+        self.metadata.read().map(|m| m.len()).unwrap_or(0)
+    }
+}
+
+/// Truncate a string to at most `max` characters on a char boundary.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    s.chars().take(max).collect()
 }
 
 fn file_fingerprint_from_bytes(

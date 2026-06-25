@@ -99,7 +99,24 @@ pub(super) fn panic_hook() {
 
         #[cfg(windows)]
         error_modal("Error", &info.to_string());
+
+        #[cfg(unix)]
+        error_notification(&info.to_string());
     }))
+}
+
+#[cfg(unix)]
+fn error_notification(msg: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .args([
+            "--app-name=dev.lapce.lapce",
+            "--category=error",
+            "-w",
+            "-n",
+            "OwnStack IDE crashed",
+            msg,
+        ])
+        .spawn();
 }
 
 #[cfg(windows)]

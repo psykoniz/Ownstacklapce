@@ -37,6 +37,11 @@ struct Args {
     #[arg(short, long)]
     mcp: bool,
 
+    /// Run as an Agent Client Protocol (ACP) server over stdio, so ACP-capable
+    /// editors (Zed, etc.) can drive the OwnStack agent natively.
+    #[arg(long)]
+    acp: bool,
+
     #[arg(short, long)]
     workspace: Option<PathBuf>,
 }
@@ -141,6 +146,44 @@ fn send_ui_delta(delta: UiStateDelta) {
     send_rpc_notification(OwnStackRpc::UiStateDelta { delta });
 }
 
+/// Build the Fill-in-the-Middle completion engine from environment.
+///
+/// Defaults to a local Ollama code model. If `OWNSTACK_FIM_BACKEND=openrouter`
+/// and an OpenRouter key is present, the network backend is used instead so
+/// users without a local GPU still get completions.
+fn build_fim_engine() -> ownstack_agent::fim::FimEngine {
+    use ownstack_agent::fim::{FimBackend, FimConfig, FimEngine};
+
+    let backend_pref = std::env::var("OWNSTACK_FIM_BACKEND")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if backend_pref == "openrouter" {
+        if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+            let model = std::env::var("OWNSTACK_FIM_MODEL")
+                .unwrap_or_else(|_| "deepseek/deepseek-coder".to_string());
+            return FimEngine::new(FimConfig {
+                backend: FimBackend::OpenRouter,
+                model,
+                base_url: "https://openrouter.ai/api/v1".to_string(),
+                api_key: key,
+                ..Default::default()
+            });
+        }
+    }
+
+    let base_url = std::env::var("OLLAMA_HOST")
+        .unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let model = std::env::var("OWNSTACK_FIM_MODEL")
+        .unwrap_or_else(|_| "qwen2.5-coder:1.5b".to_string());
+    FimEngine::new(FimConfig {
+        backend: FimBackend::Ollama,
+        model,
+        base_url,
+        ..Default::default()
+    })
+}
+
 fn send_budget_context_updates(
     budget: RuntimeBudgetSnapshot,
     context: RuntimeContextSnapshot,
@@ -177,6 +220,87 @@ fn send_budget_context_updates(
         tool_event: None,
         alert: None,
     });
+}
+
+/// Write one JSON-RPC message line to stdout (ACP transport).
+fn acp_write(value: &serde_json::Value) {
+    let line = value.to_string() + "\n";
+    let _ = std::io::Write::write_all(&mut std::io::stdout(), line.as_bytes());
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+}
+
+/// Run the agent as an ACP server over stdio. Editors speak JSON-RPC 2.0; each
+/// `session/prompt` is streamed through the orchestrator and reported back as
+/// `session/update` notifications followed by the prompt's final response.
+async fn run_acp_stdio(
+    mut orchestrator: AgentOrchestrator,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ownstack_agent::acp::{self, Dispatch};
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut reader = BufReader::new(tokio::io::stdin());
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(e) => {
+                error!("ACP stdin read error: {e}");
+                break;
+            }
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match acp::dispatch_line(trimmed) {
+            Dispatch::Reply(resp) => {
+                if let Ok(v) = serde_json::to_value(&resp) {
+                    acp_write(&v);
+                }
+            }
+            Dispatch::Prompt { id, session, text } => {
+                // Stream the agent's response as ACP session/update notifications.
+                let result = orchestrator
+                    .stream_process(
+                        &text,
+                        |chunk| {
+                            if let Some(delta) = chunk.delta_content {
+                                acp_write(&serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "method": "session/update",
+                                    "params": {
+                                        "sessionId": session,
+                                        "update": {
+                                            "type": "agent_message_chunk",
+                                            "text": delta,
+                                        }
+                                    }
+                                }));
+                            }
+                        },
+                        |_mission| {},
+                        |_budget, _context| {},
+                    )
+                    .await;
+
+                let final_resp = match result {
+                    Ok(_) => acp::JsonRpcResponse::ok(
+                        id,
+                        serde_json::json!({ "stopReason": "end_turn" }),
+                    ),
+                    Err(e) => acp::JsonRpcResponse::err(id, -32000, e.to_string()),
+                };
+                if let Ok(v) = serde_json::to_value(&final_resp) {
+                    acp_write(&v);
+                }
+            }
+            Dispatch::Notify(_) | Dispatch::Ignore => {}
+        }
+    }
+    Ok(())
 }
 
 fn emit_runtime_state(state: &RuntimeUiState) {
@@ -502,6 +626,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warn!("InfraSense: {}", warning);
     }
 
+    if args.acp {
+        info!("Starting in ACP (Agent Client Protocol) mode");
+        return run_acp_stdio(orchestrator).await;
+    }
+
     if args.mcp {
         info!("Starting in MCP Server mode");
         let mut mcp_server =
@@ -543,6 +672,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let work_tx_reader = work_tx.clone();
         let approval_for_reader = approval_manager.clone();
 
+        // Fill-in-the-Middle engine for inline autocompletion. Handled outside
+        // the serial work queue so chat never blocks completions and vice versa.
+        let fim_engine = Arc::new(build_fim_engine());
+        // Tracks the most recent FIM request id so stale completions (the user
+        // kept typing) are discarded instead of flashing outdated ghost text.
+        let latest_fim_id = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        let fim_for_reader = fim_engine.clone();
+        let latest_fim_for_reader = latest_fim_id.clone();
+
         tokio::spawn(async move {
             let mut reader = BufReader::new(tokio::io::stdin());
             info!("Agent RPC stdin loop started");
@@ -571,7 +710,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     info!("Kill switch received — shutting down.");
                                     std::process::exit(0);
                                 }
-                                OwnStackRpc::AiPrompt { .. }
+                                OwnStackRpc::FimRequest {
+                                    id,
+                                    prefix,
+                                    suffix,
+                                    ..
+                                } => {
+                                    // Latency-critical: handle concurrently and
+                                    // drop stale results so the editor only ever
+                                    // sees ghost text for the latest keystroke.
+                                    latest_fim_for_reader.store(
+                                        id,
+                                        std::sync::atomic::Ordering::SeqCst,
+                                    );
+                                    let engine = fim_for_reader.clone();
+                                    let latest = latest_fim_for_reader.clone();
+                                    tokio::spawn(async move {
+                                        match engine.complete(&prefix, &suffix).await
+                                        {
+                                            Ok(completion) => {
+                                                let still_latest = latest.load(
+                                                    std::sync::atomic::Ordering::SeqCst,
+                                                ) == id;
+                                                if still_latest
+                                                    && !completion.is_empty()
+                                                {
+                                                    send_rpc_notification(
+                                                        OwnStackRpc::FimResponse {
+                                                            id,
+                                                            completion,
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                            Err(e) => {
+                                                debug!("FIM completion failed: {e}");
+                                            }
+                                        }
+                                    });
+                                }
+                                OwnStackRpc::IndexWorkspace
+                                | OwnStackRpc::AiPrompt { .. }
                                 | OwnStackRpc::ToolExec { .. }
                                 | OwnStackRpc::SetAgentMode { .. }
                                 | OwnStackRpc::SuggestionDecision { .. }
@@ -603,6 +782,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         while let Some(rpc) = work_rx.recv().await {
             match rpc {
+                OwnStackRpc::IndexWorkspace => {
+                    send_rpc_notification(OwnStackRpc::IndexStatus {
+                        indexing: true,
+                        chunk_count: orchestrator.index_chunk_count() as u64,
+                    });
+                    match orchestrator.build_index().await {
+                        Ok(count) => {
+                            info!("Workspace indexed: {count} chunks");
+                            send_rpc_notification(OwnStackRpc::IndexStatus {
+                                indexing: false,
+                                chunk_count: count as u64,
+                            });
+                        }
+                        Err(e) => {
+                            warn!("Indexing failed: {e}");
+                            send_rpc_notification(OwnStackRpc::IndexStatus {
+                                indexing: false,
+                                chunk_count: 0,
+                            });
+                        }
+                    }
+                }
                 OwnStackRpc::AiPrompt { prompt } => {
                     runtime_state.run_state = AgentRunState::Running;
                     emit_runtime_state(&runtime_state);
@@ -610,6 +811,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         orchestrator.budget_snapshot(),
                         orchestrator.context_snapshot(),
                     );
+                    // RAG enrichment happens inside the orchestrator
+                    // (`stream_process` searches its semantic index), so no
+                    // manual injection is needed here.
                     let result = orchestrator
                         .stream_process(
                             &prompt,

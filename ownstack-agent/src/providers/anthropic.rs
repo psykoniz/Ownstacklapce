@@ -15,6 +15,7 @@ use crate::secret_store;
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const ANTHROPIC_BETA_PROMPT_CACHING: &str = "prompt-caching-2024-07-31";
 
 /// Anthropic Claude API provider
 pub struct AnthropicProvider {
@@ -54,9 +55,24 @@ struct AnthropicRequest {
     max_tokens: u32,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    system: Option<Vec<AnthropicSystemBlock>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<AnthropicTool>>,
+}
+
+#[derive(Serialize)]
+struct AnthropicSystemBlock {
+    #[serde(rename = "type")]
+    type_: String,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<CacheControl>,
+}
+
+#[derive(Serialize, Clone)]
+struct CacheControl {
+    #[serde(rename = "type")]
+    type_: String,
 }
 
 #[derive(Serialize)]
@@ -106,6 +122,8 @@ struct AnthropicTool {
     name: String,
     description: String,
     input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<CacheControl>,
 }
 
 #[derive(Deserialize)]
@@ -132,6 +150,10 @@ enum AnthropicResponseContent {
 struct AnthropicUsage {
     input_tokens: u32,
     output_tokens: u32,
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: u32,
 }
 
 #[async_trait]
@@ -142,11 +164,21 @@ impl LlmProvider for AnthropicProvider {
         tools: Option<Vec<ToolDefinition>>,
         options: ProviderOptions,
     ) -> Result<LlmResponse, ProviderError> {
-        // Extract system message
-        let system_msg = messages
+        let ephemeral = CacheControl {
+            type_: "ephemeral".to_string(),
+        };
+
+        // Extract system message with cache_control
+        let system_blocks = messages
             .iter()
             .find(|m| m.role == Role::System)
-            .map(|m| m.get_text());
+            .map(|m| {
+                vec![AnthropicSystemBlock {
+                    type_: "text".to_string(),
+                    text: m.get_text(),
+                    cache_control: Some(ephemeral.clone()),
+                }]
+            });
 
         // Convert messages (excluding system)
         let api_messages: Vec<AnthropicMessage> = messages
@@ -156,8 +188,6 @@ impl LlmProvider for AnthropicProvider {
                 let role = match m.role {
                     Role::User | Role::Tool => "user",
                     Role::Assistant => "assistant",
-                    // System is filtered out above; fall back to "user" rather
-                    // than panicking if that invariant ever changes.
                     Role::System => "user",
                 };
 
@@ -204,11 +234,18 @@ impl LlmProvider for AnthropicProvider {
             .collect();
 
         let api_tools = tools.map(|t| {
+            let len = t.len();
             t.into_iter()
-                .map(|tool| AnthropicTool {
+                .enumerate()
+                .map(|(i, tool)| AnthropicTool {
                     name: tool.name,
                     description: tool.description,
                     input_schema: tool.parameters,
+                    cache_control: if i == len - 1 {
+                        Some(ephemeral.clone())
+                    } else {
+                        None
+                    },
                 })
                 .collect()
         });
@@ -217,7 +254,7 @@ impl LlmProvider for AnthropicProvider {
             model: options.model.unwrap_or_else(|| self.config.model.clone()),
             max_tokens: self.config.max_tokens,
             messages: api_messages,
-            system: system_msg,
+            system: system_blocks,
             tools: api_tools,
         };
 
@@ -231,6 +268,7 @@ impl LlmProvider for AnthropicProvider {
                     .post(ANTHROPIC_API_URL)
                     .header("x-api-key", &self.config.api_key)
                     .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header("anthropic-beta", ANTHROPIC_BETA_PROMPT_CACHING)
                     .header("content-type", "application/json")
                     .json(&request),
             )
@@ -265,6 +303,16 @@ impl LlmProvider for AnthropicProvider {
             Some("max_tokens") => FinishReason::Length,
             _ => FinishReason::Stop,
         };
+
+        if api_response.usage.cache_read_input_tokens > 0
+            || api_response.usage.cache_creation_input_tokens > 0
+        {
+            debug!(
+                "Anthropic cache: read={} created={}",
+                api_response.usage.cache_read_input_tokens,
+                api_response.usage.cache_creation_input_tokens,
+            );
+        }
 
         let usage = TokenUsage {
             prompt_tokens: api_response.usage.input_tokens,
@@ -301,11 +349,20 @@ impl LlmProvider for AnthropicProvider {
     ) -> Result<crate::provider::StreamResult, ProviderError> {
         use crate::provider::{FinishReason, StreamChunk, ToolCallDelta};
 
-        // Extract system message
-        let system_msg = messages
+        let ephemeral = CacheControl {
+            type_: "ephemeral".to_string(),
+        };
+
+        let system_blocks = messages
             .iter()
             .find(|m| m.role == Role::System)
-            .map(|m| m.get_text());
+            .map(|m| {
+                vec![AnthropicSystemBlock {
+                    type_: "text".to_string(),
+                    text: m.get_text(),
+                    cache_control: Some(ephemeral.clone()),
+                }]
+            });
 
         let api_messages: Vec<AnthropicMessage> = messages
             .into_iter()
@@ -314,8 +371,6 @@ impl LlmProvider for AnthropicProvider {
                 let role = match m.role {
                     Role::User | Role::Tool => "user",
                     Role::Assistant => "assistant",
-                    // System is filtered out above; fall back to "user" rather
-                    // than panicking if that invariant ever changes.
                     Role::System => "user",
                 };
                 let content = if m.role == Role::Tool {
@@ -336,11 +391,18 @@ impl LlmProvider for AnthropicProvider {
             .collect();
 
         let api_tools = tools.map(|t| {
+            let len = t.len();
             t.into_iter()
-                .map(|tool| AnthropicTool {
+                .enumerate()
+                .map(|(i, tool)| AnthropicTool {
                     name: tool.name,
                     description: tool.description,
                     input_schema: tool.parameters,
+                    cache_control: if i == len - 1 {
+                        Some(ephemeral.clone())
+                    } else {
+                        None
+                    },
                 })
                 .collect()
         });
@@ -349,7 +411,7 @@ impl LlmProvider for AnthropicProvider {
             model: options.model.unwrap_or_else(|| self.config.model.clone()),
             max_tokens: self.config.max_tokens,
             messages: api_messages,
-            system: system_msg,
+            system: system_blocks,
             tools: api_tools,
         })
         .map_err(|e| ProviderError::SerializationError(e.to_string()))?;
@@ -374,6 +436,7 @@ impl LlmProvider for AnthropicProvider {
                     .post(ANTHROPIC_API_URL)
                     .header("x-api-key", &self.config.api_key)
                     .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header("anthropic-beta", ANTHROPIC_BETA_PROMPT_CACHING)
                     .header("content-type", "application/json")
                     .json(&body),
             )

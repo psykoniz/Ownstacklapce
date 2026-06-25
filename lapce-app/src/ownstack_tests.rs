@@ -65,6 +65,7 @@ mod tests {
             focus: cx.create_rw_signal(Focus::Workbench),
             completion: cx.create_rw_signal(CompletionData::new(cx, config_read)),
             inline_completion: cx.create_rw_signal(InlineCompletionData::new(cx)),
+            fim: crate::ownstack_fim::FimClientData::new(cx),
             hover: HoverData::new(cx),
             register: cx.create_rw_signal(Default::default()),
             find: crate::find::Find::new(cx),
@@ -95,6 +96,7 @@ mod tests {
 
     #[test]
     fn test_chat_message_sending() {
+        unsafe { std::env::set_var("OPENROUTER_API_KEY", "test-dummy-key") };
         let (_cx, chat_data) = setup_test_data();
 
         chat_data.bridge_connected.set(true);

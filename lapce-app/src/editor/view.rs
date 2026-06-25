@@ -1346,7 +1346,9 @@ pub fn editor_container_view(
             // OwnStack: empty editor overlay when scratch/local doc has no content
             {
                 let doc_overlay = doc;
-                crate::ownstack_empty_state::empty_editor_placeholder().style(
+                crate::ownstack_empty_state::empty_editor_placeholder(
+                    window_tab_data.common.workbench_command,
+                ).style(
                     move |s| {
                         let doc_data = doc_overlay.get();
                         let content = doc_data.content.get();

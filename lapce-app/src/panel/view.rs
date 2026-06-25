@@ -422,8 +422,17 @@ pub fn panel_container_view(
             PanelContainerPosition::Right => s.right,
         });
         let is_maximized = panel.panel_bottom_maximized(true);
+        let is_shown = panel.is_container_shown(&position, true);
         let config = config.get();
-        s.apply_if(!panel.is_container_shown(&position, true), |s| s.hide())
+        // For the right side, always show the icon strip (picker) even when the
+        // panel content is hidden. For left/bottom, hide the whole container.
+        let has_right_panels = position == PanelContainerPosition::Right
+            && panel.panels.with(|p| {
+                p.get(&PanelPosition::RightTop)
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+            });
+        s.apply_if(!is_shown && !has_right_panels, |s| s.hide())
             .apply_if(position == PanelContainerPosition::Bottom, |s| {
                 s.width_pct(100.0)
                     .apply_if(!is_maximized, |s| {
@@ -438,8 +447,10 @@ pub fn panel_container_view(
                     .background(config.color(LapceColor::PANEL_BACKGROUND))
             })
             .apply_if(position == PanelContainerPosition::Right, |s| {
+                // When content is hidden, shrink to just the icon picker width
+                let w = if is_shown { size as f32 } else { 30.0 };
                 s.border_left(1.0)
-                    .width(size as f32)
+                    .width(w)
                     .height_pct(100.0)
                     .background(config.color(LapceColor::PANEL_BACKGROUND))
             })
@@ -525,6 +536,13 @@ fn panel_view(
                     )
                     .into_any()
                 }
+                PanelKind::OwnStackWebPreview => {
+                    crate::ownstack_preview::web_preview_panel(
+                        window_tab_data.clone(),
+                        position,
+                    )
+                    .into_any()
+                }
             };
             view.style(|s| s.size_pct(100.0, 100.0))
         },
@@ -581,9 +599,10 @@ fn panel_picker(
                 PanelKind::DocumentSymbol => "Document Symbol",
                 PanelKind::References => "References",
                 PanelKind::Implementation => "Implementation",
-                PanelKind::OwnStackChat => "OwnStack AI (Ctrl+Shift+A)",
+                PanelKind::OwnStackChat => "OwnStack AI Hub (Ctrl+Shift+A)",
                 PanelKind::OwnStackMcp => "MCP Servers",
                 PanelKind::OwnStackAudit => "Audit Log (Ctrl+Shift+U)",
+                PanelKind::OwnStackWebPreview => "Web Preview (Ctrl+Shift+W)",
             };
             let icon = p.svg_name();
             let is_active = {

@@ -156,8 +156,14 @@ impl OpenAiCompatibleProvider {
         });
         let has_tools = api_tools.as_ref().map_or(false, |t| !t.is_empty());
 
+        let effective_model = options
+            .model
+            .as_deref()
+            .filter(|m| !m.contains('/'))
+            .map(String::from)
+            .unwrap_or_else(|| self.config.model.clone());
         let request = ChatRequest {
-            model: options.model.clone().unwrap_or_else(|| self.config.model.clone()),
+            model: effective_model,
             messages: api_messages,
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
@@ -232,8 +238,14 @@ impl OpenAiCompatibleProvider {
                 .collect::<Vec<_>>()
         });
 
+        let effective_model = options
+            .model
+            .as_deref()
+            .filter(|m| !m.contains('/'))
+            .map(String::from)
+            .unwrap_or_else(|| self.config.model.clone());
         let mut body = serde_json::json!({
-            "model": options.model.clone().unwrap_or_else(|| self.config.model.clone()),
+            "model": effective_model,
             "input": input,
             "max_output_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
@@ -273,13 +285,18 @@ impl LlmProvider for OpenAiCompatibleProvider {
         options: ProviderOptions,
     ) -> Result<LlmResponse, ProviderError> {
         let wire = Wire::from_u8(self.effective_wire.load(Ordering::Relaxed));
+        let tool_count = tools.as_ref().map_or(0, |t| t.len());
+        let msg_chars: usize = messages.iter().map(|m| m.content.len()).sum();
         debug!(
-            "OpenAI-compatible: complete via {} ({})",
+            "OpenAI-compatible: complete via {} ({}) — {} messages ({} chars), {} tools",
             match wire {
                 Wire::Chat => "chat",
                 Wire::Responses => "responses",
             },
-            self.base_url
+            self.base_url,
+            messages.len(),
+            msg_chars,
+            tool_count,
         );
 
         match self.complete_with_wire(wire, &messages, &tools, &options).await {

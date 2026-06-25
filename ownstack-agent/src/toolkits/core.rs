@@ -408,6 +408,69 @@ impl CoreToolkit {
 
         Ok(tool_result)
     }
+
+    async fn suggest_command(
+        &self,
+        command: &str,
+        explanation: &str,
+    ) -> Result<ToolResult, ToolkitError> {
+        let start = Instant::now();
+
+        // suggest_command always requires user approval
+        if let Some(approval) = self.approval.as_ref() {
+            let approved = approval
+                .request(
+                    command.to_string(),
+                    format!("Suggested command:\n$ {command}\n\n{explanation}"),
+                    None,
+                )
+                .await;
+            if !approved {
+                self.audit(
+                    "suggest_command",
+                    command,
+                    PolicyDecision::Ask,
+                    "core.suggest_command",
+                    false,
+                    start.elapsed().as_millis() as u64,
+                    Vec::new(),
+                );
+                return Ok(ToolResult::success(format!(
+                    "Command suggested but declined by user:\n$ {command}\n{explanation}"
+                )));
+            }
+        } else {
+            self.audit(
+                "suggest_command",
+                command,
+                PolicyDecision::Ask,
+                "core.suggest_command",
+                false,
+                start.elapsed().as_millis() as u64,
+                Vec::new(),
+            );
+            return Ok(ToolResult::success(format!(
+                "Suggested command (no approval channel):\n$ {command}\n{explanation}"
+            )));
+        }
+
+        let sandbox = ProcessSandbox;
+        let result = sandbox
+            .exec(command, &self.workspace, SandboxLevel::Standard)
+            .await;
+
+        self.audit(
+            "suggest_command",
+            command,
+            PolicyDecision::Ask,
+            "core.suggest_command",
+            result.success,
+            start.elapsed().as_millis() as u64,
+            Vec::new(),
+        );
+
+        Ok(result)
+    }
 }
 
 fn search_workspace(
@@ -604,6 +667,12 @@ struct SearchArgs {
 }
 
 #[derive(Deserialize)]
+struct SuggestCommandArgs {
+    command: String,
+    explanation: String,
+}
+
+#[derive(Deserialize)]
 struct EditArgs {
     path: String,
     old_text: String,
@@ -700,6 +769,24 @@ impl Toolkit for CoreToolkit {
                     "required": ["pattern"]
                 }),
             },
+            ToolDef {
+                name: "suggest_command".to_string(),
+                description: "Suggest a shell command for the user to review and approve before execution. Use this instead of exec when the command has side effects the user should verify first (installs, deployments, destructive operations).".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The shell command to suggest"
+                        },
+                        "explanation": {
+                            "type": "string",
+                            "description": "Brief explanation of what the command does and why"
+                        }
+                    },
+                    "required": ["command", "explanation"]
+                }),
+            },
         ]
     }
 
@@ -735,6 +822,12 @@ impl Toolkit for CoreToolkit {
                     .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
                 self.search_files(&parsed.pattern).await
             }
+            "suggest_command" => {
+                let parsed: SuggestCommandArgs = serde_json::from_value(args)
+                    .map_err(|e| ToolkitError::InvalidArguments(e.to_string()))?;
+                self.suggest_command(&parsed.command, &parsed.explanation)
+                    .await
+            }
             _ => Err(ToolkitError::ToolNotFound(tool_name.to_string())),
         }
     }
@@ -751,7 +844,7 @@ mod tests {
         let tk =
             CoreToolkit::new(dir.path().to_path_buf(), "test".to_string(), None);
         assert_eq!(tk.name(), "core");
-        assert_eq!(tk.tools().len(), 5);
+        assert_eq!(tk.tools().len(), 6);
     }
 
     #[tokio::test]
@@ -766,6 +859,7 @@ mod tests {
         assert!(names.contains(&"write".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"search".to_string()));
+        assert!(names.contains(&"suggest_command".to_string()));
     }
 
     #[tokio::test]

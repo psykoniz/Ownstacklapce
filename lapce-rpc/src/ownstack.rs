@@ -96,9 +96,30 @@ pub struct UiStateDelta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "params")]
+#[allow(clippy::large_enum_variant)]
 pub enum OwnStackRpc {
     AiPrompt {
         prompt: String,
+    },
+    /// Request a Fill-in-the-Middle completion at the cursor. `id` correlates
+    /// the asynchronous `FimResponse`; the editor ignores stale ids.
+    FimRequest {
+        id: u64,
+        prefix: String,
+        suffix: String,
+        language: String,
+    },
+    /// Completion result for a prior `FimRequest`. `completion` may be empty.
+    FimResponse {
+        id: u64,
+        completion: String,
+    },
+    /// Ask the agent to (re)index the workspace for semantic search.
+    IndexWorkspace,
+    /// Status update emitted during/after indexing.
+    IndexStatus {
+        indexing: bool,
+        chunk_count: u64,
     },
     SetAgentMode {
         mode: AgentModeState,

@@ -10,8 +10,11 @@
 //! - Artifact extraction from LLM responses
 //! - Structured telemetry and tracing
 
+pub mod acp;
 pub mod artifact_manager;
 pub mod context;
+pub mod context_builder;
+pub mod fim;
 pub mod index;
 pub mod infra_sense;
 pub mod lsp;
@@ -25,6 +28,7 @@ pub mod provider;
 pub mod providers;
 pub mod repomap;
 pub mod resilience;
+pub mod semantic_chunk;
 pub mod routing;
 pub mod secret_store;
 pub mod telemetry;
@@ -32,6 +36,8 @@ pub mod toolkits;
 
 pub use artifact_manager::ArtifactManager;
 pub use context::ContextManager;
+pub use context_builder::ContextBuilder;
+pub use fim::{FimBackend, FimConfig, FimEngine};
 pub use infra_sense::InfraSense;
 pub use mcp_server::McpServer;
 pub use mission::{

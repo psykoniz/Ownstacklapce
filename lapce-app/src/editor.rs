@@ -1615,6 +1615,8 @@ impl EditorData {
         self.common.inline_completion.update(|c| {
             c.cancel();
         });
+        // Drop any in-flight FIM request so a late response is ignored.
+        self.common.fim.clear();
 
         self.doc().clear_inline_completion();
     }
@@ -1683,7 +1685,7 @@ impl EditorData {
         inline_completion.update(|c| c.status = InlineCompletionStatus::Started);
 
         self.common.proxy.get_inline_completions(
-            path,
+            path.clone(),
             position,
             trigger_kind,
             move |res| {
@@ -1700,6 +1702,44 @@ impl EditorData {
                     };
                     send(items);
                 }
+            },
+        );
+
+        // AI Fill-in-the-Middle: in parallel with the LSP request, ask the
+        // agent for a model-generated completion. The async FimResponse is
+        // handled in `window_tab::handle_core_notification` and only applied if
+        // it is still the latest request and the cursor has not moved.
+        self.request_fim_completion(&path, offset);
+    }
+
+    /// Send a Fill-in-the-Middle completion request to the OwnStack agent.
+    fn request_fim_completion(&self, path: &std::path::Path, offset: usize) {
+        let fim = &self.common.fim;
+        if !fim.enabled.get_untracked() {
+            return;
+        }
+        // Slice a bounded window directly from the rope (avoids copying large
+        // buffers). 2000 chars of prefix, 1000 of suffix around the cursor.
+        let (prefix, suffix) = self.doc().buffer.with_untracked(|buffer| {
+            let len = buffer.len();
+            let offset = offset.min(len);
+            let prefix_start = offset.saturating_sub(2000);
+            let suffix_end = (offset + 1000).min(len);
+            let prefix = buffer.slice_to_cow(prefix_start..offset).to_string();
+            let suffix = buffer.slice_to_cow(offset..suffix_end).to_string();
+            (prefix, suffix)
+        });
+        if prefix.trim().is_empty() {
+            return;
+        }
+        let id = fim.begin_request(path.to_path_buf(), offset);
+        let language = crate::ownstack_fim::language_of_path(path);
+        self.common.proxy.ownstack(
+            lapce_rpc::ownstack::OwnStackRpc::FimRequest {
+                id,
+                prefix,
+                suffix,
+                language,
             },
         );
     }

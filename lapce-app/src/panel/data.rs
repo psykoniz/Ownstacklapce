@@ -40,12 +40,15 @@ pub fn default_panel_order() -> PanelOrder {
             PanelKind::CallHierarchy,
             PanelKind::References,
             PanelKind::Implementation,
-            PanelKind::OwnStackMcp,
         ],
     );
     order.insert(
         PanelPosition::RightTop,
-        im::vector![PanelKind::DocumentSymbol, PanelKind::OwnStackChat],
+        im::vector![
+            PanelKind::DocumentSymbol,
+            PanelKind::OwnStackChat,
+            PanelKind::OwnStackWebPreview
+        ],
     );
 
     order
@@ -140,8 +143,8 @@ impl PanelData {
         styles.insert(
             PanelPosition::RightTop,
             PanelStyle {
-                active: 0,
-                shown: false,
+                active: 1,
+                shown: true,
                 maximized: false,
             },
         );
@@ -159,7 +162,7 @@ impl PanelData {
             left_split: 0.5,
             bottom: 300.0,
             bottom_split: 0.5,
-            right: 300.0,
+            right: 340.0,
             right_split: 0.5,
         });
         let sections = cx.create_rw_signal(

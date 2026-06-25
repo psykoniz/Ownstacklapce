@@ -505,6 +505,19 @@ impl AgentOrchestrator {
         self.mode
     }
 
+    /// Build (or incrementally update) the semantic index that powers RAG.
+    /// Returns the number of indexed chunks. Safe to call repeatedly.
+    pub async fn build_index(&mut self) -> Result<usize, String> {
+        self.index.init().await?;
+        self.index.index_workspace().await?;
+        Ok(self.index.chunk_count())
+    }
+
+    /// Current number of chunks in the semantic index.
+    pub fn index_chunk_count(&self) -> usize {
+        self.index.chunk_count()
+    }
+
     pub fn budget_snapshot(&self) -> RuntimeBudgetSnapshot {
         RuntimeBudgetSnapshot {
             tokens: self.context.estimated_tokens() as u64,
@@ -830,9 +843,15 @@ impl AgentOrchestrator {
         let project_rules = self.memory.to_system_prompt();
 
         // Phase 11: RepoMap Injection
+        // Budget the repomap to ~5 % of the context window (in chars ≈ tokens×4)
+        // so large repos don't blow up providers with payload-size limits.
+        let ctx_max = self.context.max_tokens();
+        let repomap_char_budget = (ctx_max * 4 / 20).clamp(2000, 12000);
+        let repomap_line_cap = (ctx_max / 640).clamp(30, 200);
         let repomap_context = {
             self.repomap.scan();
-            self.repomap.to_prompt_text(200)
+            self.repomap
+                .to_prompt_text_budget(repomap_line_cap, repomap_char_budget)
         };
 
         // Phase 11: Semantic Retrieval

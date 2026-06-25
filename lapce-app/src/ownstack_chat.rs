@@ -9,8 +9,8 @@ use floem::{
     peniko::Color,
     style::CursorStyle,
     views::{
-        container, dyn_stack, h_stack, label, scroll, stack, text, text_input,
-        v_stack,
+        container, dyn_container, dyn_stack, h_stack, label, scroll, stack, text,
+        text_input, v_stack,
     },
 };
 use lapce_rpc::ownstack::{AgentModeState, OwnStackRpc};
@@ -18,7 +18,9 @@ use lsp_types::DiagnosticSeverity;
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
+use crate::command::InternalCommand;
 use crate::window_tab::CommonData;
+use std::path::PathBuf;
 
 /// A single message in the AI chat
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,13 +76,15 @@ pub struct OwnStackChatData {
     /// Content currently being streamed from the agent
     pub streaming_content: RwSignal<String>,
     /// Current mission being executed
+    #[allow(clippy::type_complexity)]
     pub current_mission: RwSignal<Option<(String, Vec<(String, String)>)>>,
     /// Context-window usage telemetry.
     pub context_current: RwSignal<u64>,
     pub context_max: RwSignal<u64>,
     /// Whether the agent bridge is connected.
     pub bridge_connected: RwSignal<bool>,
-    #[allow(dead_code)]
+    /// Active hub sub-tab (Chat / Tools / Audit).
+    pub hub_tab: RwSignal<OwnStackHubTab>,
     common: CommonData,
     db: Arc<crate::db::LapceDb>,
 }
@@ -97,6 +101,13 @@ pub enum AgentMode {
 enum ChatMonitorTab {
     Output,
     Problems,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnStackHubTab {
+    Chat,
+    Tools,
+    Audit,
 }
 
 impl std::fmt::Display for AgentMode {
@@ -138,8 +149,8 @@ impl AgentMode {
     pub fn color(&self) -> Color {
         match self {
             AgentMode::Ask => crate::ownstack_theme::ACCENT,
-            AgentMode::Auto => Color::from_rgb8(255, 179, 71), // Amber
-            AgentMode::Plan => Color::from_rgb8(155, 89, 182), // Violet
+            AgentMode::Auto => crate::ownstack_theme::MODE_AUTO,
+            AgentMode::Plan => crate::ownstack_theme::MODE_PLAN,
         }
     }
 
@@ -171,6 +182,7 @@ impl OwnStackChatData {
             context_current: create_rw_signal(0),
             context_max: create_rw_signal(0),
             bridge_connected: create_rw_signal(false),
+            hub_tab: create_rw_signal(OwnStackHubTab::Chat),
             common,
             db,
         }
@@ -263,8 +275,31 @@ impl OwnStackChatData {
         self.is_loading.set(true);
         self.streaming_content.set(String::new());
 
+        // Expand @-mentions (@file:, @folder:, @workspace) into pinned context.
+        // The user's visible message keeps the original text; only the prompt
+        // sent to the agent is enriched.
+        let expanded = {
+            use crate::ownstack_mentions as men;
+            let mentions = men::parse_mentions(&prompt);
+            if mentions.is_empty() {
+                prompt.clone()
+            } else {
+                let root = &self.common.workspace.path;
+                let root = root.clone().unwrap_or_default();
+                let sections: Vec<String> = mentions
+                    .iter()
+                    .map(|m| match m {
+                        men::Mention::File(p) => men::resolve_file(&root, p),
+                        men::Mention::Folder(p) => men::resolve_folder(&root, p),
+                        men::Mention::Workspace => men::resolve_workspace(&root),
+                    })
+                    .collect();
+                men::build_prompt(&prompt, &sections)
+            }
+        };
+
         // Send via RPC
-        let message = OwnStackRpc::AiPrompt { prompt };
+        let message = OwnStackRpc::AiPrompt { prompt: expanded };
         self.common.proxy.ownstack(message);
         tracing::info!("OwnStack Chat: AiPrompt sent");
     }
@@ -347,26 +382,33 @@ impl OwnStackChatData {
         });
 
         std::thread::spawn(move || {
-            // Expensive operations moved to background thread
-            let diff = if let Some(patch) = extract_structured_patch(&content) {
+            let patches = extract_all_patches(&content);
+            let diff = if !patches.is_empty() {
                 if let Some(workspace_path) = workspace_root {
-                    let path = std::path::Path::new(&patch.path);
-                    if is_safe_workspace_relative_path(path) {
-                        let full_path = workspace_path.join(path);
-                        // Blocking I/O
-                        let old_content =
-                            std::fs::read_to_string(&full_path).unwrap_or_default();
-                        // Expensive LCS
-                        Some(render_unified_diff(
-                            &patch.path,
-                            &old_content,
-                            &patch.new_content,
-                        ))
+                    let mut all_diffs = Vec::new();
+                    for patch in &patches {
+                        let path = std::path::Path::new(&patch.path);
+                        if is_safe_workspace_relative_path(path) {
+                            let full_path = workspace_path.join(path);
+                            let old_content =
+                                std::fs::read_to_string(&full_path)
+                                    .unwrap_or_default();
+                            all_diffs.push(render_unified_diff(
+                                &patch.path,
+                                &old_content,
+                                &patch.new_content,
+                            ));
+                        } else {
+                            all_diffs.push(format!(
+                                "Rejected patch path outside workspace: {}",
+                                patch.path
+                            ));
+                        }
+                    }
+                    if all_diffs.is_empty() {
+                        None
                     } else {
-                        Some(format!(
-                            "Rejected patch path outside workspace: {}",
-                            patch.path
-                        ))
+                        Some(all_diffs.join("\n"))
                     }
                 } else {
                     None
@@ -490,8 +532,61 @@ impl OwnStackChatData {
 
 pub fn ownstack_chat_panel(
     window_tab_data: Rc<WindowTabData>,
-    _position: PanelPosition,
+    position: PanelPosition,
 ) -> impl View {
+    let chat_data = window_tab_data.ownstack_chat.clone();
+    let hub_tab = chat_data.hub_tab;
+    let config_hub = window_tab_data.common.config;
+
+    // ── Hub tab bar ──────────────────────────────────────────────────────
+    fn hub_tab_segment(
+        hub_tab: RwSignal<OwnStackHubTab>,
+        tab: OwnStackHubTab,
+    ) -> impl View {
+        let lbl = match tab {
+            OwnStackHubTab::Chat  => "Chat",
+            OwnStackHubTab::Tools => "Tools",
+            OwnStackHubTab::Audit => "Audit",
+        };
+        label(move || lbl)
+            .style(move |s| {
+                let active = hub_tab.get() == tab;
+                let base = s
+                    .padding_horiz(12.0)
+                    .padding_vert(5.0)
+                    .font_size(11.0)
+                    .font_weight(Weight::BOLD)
+                    .cursor(CursorStyle::Pointer)
+                    .border_radius(4.0);
+                if active {
+                    base.background(crate::ownstack_theme::ACCENT.multiply_alpha(0.20))
+                        .color(crate::ownstack_theme::ACCENT_BRIGHT)
+                } else {
+                    base.color(crate::ownstack_theme::TEXT_DIM)
+                        .hover(|s| s.background(crate::ownstack_theme::SURFACE_HOVER))
+                }
+            })
+            .on_click_stop(move |_| hub_tab.set(tab))
+    }
+
+    let hub_bar = h_stack((
+        hub_tab_segment(hub_tab, OwnStackHubTab::Chat),
+        hub_tab_segment(hub_tab, OwnStackHubTab::Tools),
+        hub_tab_segment(hub_tab, OwnStackHubTab::Audit),
+    ))
+    .style(move |s| {
+        let config = config_hub.get();
+        s.width_full()
+            .items_center()
+            .gap(2.0)
+            .padding_horiz(10.0)
+            .padding_vert(6.0)
+            .border_bottom(1.0)
+            .border_color(config.color(LapceColor::LAPCE_BORDER))
+    });
+
+    // ── Chat sub-view (built on demand by the hub switcher) ──────────────
+    fn ownstack_chat_view(window_tab_data: Rc<WindowTabData>) -> impl View {
     let chat_data = window_tab_data.ownstack_chat.clone();
     let config = window_tab_data.common.config;
     let input = chat_data.input;
@@ -510,7 +605,7 @@ pub fn ownstack_chat_panel(
         // ── Header ───────────────────────────────────────────────────────
         h_stack((
             // Title
-            text("OwnStack AI Chat")
+            text("OwnStack AI")
                 .style(|s| s.font_weight(Weight::BOLD).font_size(13.0)),
             // Right-side controls
             h_stack((
@@ -595,9 +690,6 @@ pub fn ownstack_chat_panel(
         scroll(
             v_stack((
                 // Empty state — shown when there are no messages yet
-                label(|| "")
-                    .style(|s| s.hide()) // placeholder, real empty state below
-                    .into_any(),
                 crate::ownstack_empty_state::chat_empty_state()
                     .style(move |s| {
                         let has_messages = !chat_data.messages.get().is_empty()
@@ -649,15 +741,15 @@ pub fn ownstack_chat_panel(
                                                 .as_str()
                                             {
                                                 "inprogress" => {
-                                                    Color::from_rgb8(120, 180, 255)
+                                                    crate::ownstack_theme::STEP_ACTIVE
                                                 }
                                                 "completed" | "done" => {
-                                                    Color::from_rgb8(120, 220, 140)
+                                                    crate::ownstack_theme::STEP_DONE
                                                 }
                                                 "failed" => {
-                                                    Color::from_rgb8(255, 120, 120)
+                                                    crate::ownstack_theme::STEP_FAILED
                                                 }
-                                                _ => Color::from_rgb8(180, 180, 180),
+                                                _ => crate::ownstack_theme::STEP_PENDING,
                                             };
                                             s.width(20.0).color(color)
                                         }),
@@ -680,9 +772,7 @@ pub fn ownstack_chat_panel(
                                         .multiply_alpha(0.6),
                                 )
                                 .box_shadow_blur(10.0)
-                                .box_shadow_color(Color::from_rgba8(
-                                    100, 150, 255, 30,
-                                ))
+                                .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.12))
                         })
                     },
                 ),
@@ -728,6 +818,24 @@ pub fn ownstack_chat_panel(
                         }
                     },
                 ),
+                // "Thinking" indicator — visible before first streaming token arrives
+                {
+                    let chat_data = chat_data.clone();
+                    label(move || "AI is thinking\u{2026}")
+                        .style(move |s| {
+                            let visible = chat_data.is_loading.get()
+                                && chat_data.streaming_content.get().is_empty();
+                            s.apply_if(!visible, |s| s.hide())
+                                .padding(14.0)
+                                .border_radius(12.0)
+                                .background(crate::ownstack_theme::SURFACE_0)
+                                .border(1.0)
+                                .border_color(crate::ownstack_theme::BORDER)
+                                .color(crate::ownstack_theme::TEXT_DIM)
+                                .font_size(12.0)
+                                .font_style(floem::text::Style::Italic)
+                        })
+                },
             ))
             .style(|s| s.width_full().padding(12.0).gap(20.0)),
         )
@@ -735,15 +843,15 @@ pub fn ownstack_chat_panel(
         container(
             v_stack((
                 h_stack((
-                    label(|| "OUTPUT".to_string())
+                    label(|| "Output".to_string())
                         .on_click_stop(move |_| {
                             monitor_tab_output.set(ChatMonitorTab::Output);
                         })
                         .style(move |s| {
                             let is_active =
                                 monitor_tab_output.get() == ChatMonitorTab::Output;
-                            s.padding_horiz(8.0)
-                                .padding_vert(4.0)
+                            s.padding_horiz(10.0)
+                                .padding_vert(5.0)
                                 .border(1.0)
                                 .border_radius(6.0)
                                 .border_color(
@@ -752,25 +860,27 @@ pub fn ownstack_chat_panel(
                                 .background(if is_active {
                                     crate::ownstack_theme::ACCENT.multiply_alpha(0.16)
                                 } else {
-                                    Color::from_rgba8(0, 0, 0, 0)
+                                    Color::TRANSPARENT
                                 })
                                 .color(if is_active {
                                     crate::ownstack_theme::ACCENT_BRIGHT
                                 } else {
                                     config.get().color(LapceColor::STATUS_FOREGROUND)
                                 })
-                                .font_size(10.0)
+                                .font_size(11.0)
+                                .font_weight(if is_active { Weight::BOLD } else { Weight::NORMAL })
                                 .cursor(CursorStyle::Pointer)
+                                .hover(|s| s.background(crate::ownstack_theme::SURFACE_HOVER))
                         }),
-                    label(|| "PROBLEMS".to_string())
+                    label(|| "Problems".to_string())
                         .on_click_stop(move |_| {
                             monitor_tab_problems.set(ChatMonitorTab::Problems);
                         })
                         .style(move |s| {
                             let is_active = monitor_tab_problems.get()
                                 == ChatMonitorTab::Problems;
-                            s.padding_horiz(8.0)
-                                .padding_vert(4.0)
+                            s.padding_horiz(10.0)
+                                .padding_vert(5.0)
                                 .border(1.0)
                                 .border_radius(6.0)
                                 .border_color(
@@ -779,15 +889,17 @@ pub fn ownstack_chat_panel(
                                 .background(if is_active {
                                     crate::ownstack_theme::STATE_WARN.multiply_alpha(0.16)
                                 } else {
-                                    Color::from_rgba8(0, 0, 0, 0)
+                                    Color::TRANSPARENT
                                 })
                                 .color(if is_active {
                                     crate::ownstack_theme::STATE_WARN
                                 } else {
                                     config.get().color(LapceColor::STATUS_FOREGROUND)
                                 })
-                                .font_size(10.0)
+                                .font_size(11.0)
+                                .font_weight(if is_active { Weight::BOLD } else { Weight::NORMAL })
                                 .cursor(CursorStyle::Pointer)
+                                .hover(|s| s.background(crate::ownstack_theme::SURFACE_HOVER))
                         }),
                 ))
                 .style(|s| s.width_full().items_center().gap(8.0)),
@@ -891,9 +1003,9 @@ pub fn ownstack_chat_panel(
                             let current = context_label.context_current.get();
                             let max = context_label.context_max.get();
                             if max == 0 {
-                                "Context window: n/a".to_string()
+                                "Context: waiting for connection".to_string()
                             } else {
-                                format!("Context window: {current}/{max}")
+                                format!("Context: {current}/{max} tokens used")
                             }
                         })
                         .style(move |s| {
@@ -903,7 +1015,7 @@ pub fn ownstack_chat_panel(
                                 .padding_bottom(4.0)
                         }),
                         stack((
-                            label(|| "".to_string()).style(move |s| {
+                            label(String::new).style(move |s| {
                                 let config = config.get();
                                 s.width_full()
                                     .height(4.0)
@@ -916,7 +1028,7 @@ pub fn ownstack_chat_panel(
                                             .multiply_alpha(0.9),
                                     )
                             }),
-                            label(|| "".to_string()).style(move |s| {
+                            label(String::new).style(move |s| {
                                 let current = context_fill.context_current.get();
                                 let max = context_fill.context_max.get();
                                 let ratio = if max == 0 {
@@ -943,24 +1055,52 @@ pub fn ownstack_chat_panel(
                     .style(|s| s.width_full().padding_bottom(8.0))
                 },
                 // ── Bridge disconnected warning ──────────────────────────
-                label(|| "Agent bridge disconnected — messages cannot be sent")
-                    .style({
-                        let chat_data = chat_data.clone();
-                        move |s| {
-                            let connected = chat_data.bridge_connected.get();
-                            s.width_full()
-                                .padding_horiz(10.0)
-                                .padding_vert(6.0)
+                {
+                    let chat_data_dc = chat_data.clone();
+                    let chat_data_retry = chat_data.clone();
+                    h_stack((
+                        label(|| "\u{26A0}").style(|s| {
+                            s.margin_right(6.0)
                                 .font_size(11.0)
                                 .color(crate::ownstack_theme::STATE_WARN)
-                                .background(crate::ownstack_theme::STATE_WARN.multiply_alpha(0.08))
-                                .border_radius(6.0)
-                                .margin_bottom(6.0)
-                                .apply_if(connected, |s| s.hide())
-                        }
-                    }),
+                        }),
+                        label(|| "Agent bridge disconnected")
+                            .style(|s| s.flex_grow(1.0).font_size(11.0).color(crate::ownstack_theme::STATE_WARN)),
+                        label(|| "Retry")
+                            .on_click_stop(move |_| {
+                                chat_data_retry.common.proxy.ownstack(OwnStackRpc::UiSnapshotRequest);
+                            })
+                            .style(|s| {
+                                s.padding_horiz(12.0)
+                                    .padding_vert(4.0)
+                                    .background(crate::ownstack_theme::CTA_BG)
+                                    .border(1.0)
+                                    .border_color(crate::ownstack_theme::CTA_BORDER)
+                                    .border_radius(4.0)
+                                    .color(crate::ownstack_theme::CTA_TEXT)
+                                    .font_size(11.0)
+                                    .font_weight(Weight::SEMIBOLD)
+                                    .cursor(CursorStyle::Pointer)
+                                    .hover(|s| {
+                                        s.background(crate::ownstack_theme::CTA_BG_HOVER)
+                                            .border_color(crate::ownstack_theme::CTA_BORDER_HOVER)
+                                    })
+                            }),
+                    ))
+                    .style(move |s| {
+                        let connected = chat_data_dc.bridge_connected.get();
+                        s.width_full()
+                            .items_center()
+                            .padding_horiz(10.0)
+                            .padding_vert(6.0)
+                            .background(crate::ownstack_theme::STATE_WARN.multiply_alpha(0.08))
+                            .border_radius(6.0)
+                            .margin_bottom(6.0)
+                            .apply_if(connected, |s| s.hide())
+                    })
+                },
                 h_stack((
-                    label(|| "Ctx")
+                    label(|| "+ Context")
                         .style(move |s| {
                             let config = config.get();
                             s.padding(6.0)
@@ -969,9 +1109,7 @@ pub fn ownstack_chat_panel(
                                 .cursor(floem::style::CursorStyle::Pointer)
                                 .color(config.color(LapceColor::EDITOR_DIM))
                                 .hover(|s| {
-                                    s.background(Color::from_rgba8(
-                                        100, 150, 255, 40,
-                                    ))
+                                    s.background(crate::ownstack_theme::ACCENT.multiply_alpha(0.16))
                                     .color(crate::ownstack_theme::ACCENT)
                                 })
                         })
@@ -1002,9 +1140,7 @@ pub fn ownstack_chat_panel(
                                 .active(|s| {
                                     s.border_color(crate::ownstack_theme::ACCENT_BRIGHT)
                                         .box_shadow_blur(5.0)
-                                        .box_shadow_color(Color::from_rgba8(
-                                            100, 200, 255, 100,
-                                        ))
+                                        .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.39))
                                 })
                         })
                         .on_event_stop(floem::event::EventListener::KeyDown, {
@@ -1078,6 +1214,7 @@ pub fn ownstack_chat_panel(
         }),
         // ── Shortcut hints bar ──────────────────────────────────────
         h_stack((
+            shortcut_hint("Enter", "Send"),
             shortcut_hint("Cmd/Ctrl+K", "Inline Edit"),
             shortcut_hint("Cmd/Ctrl+L", "Toggle Chat"),
             shortcut_hint("Cmd/Ctrl+Shift+P", "AI Palette"),
@@ -1094,6 +1231,37 @@ pub fn ownstack_chat_panel(
         }),
     ))
     .style(|s| s.size_full().flex_col())
+    } // end ownstack_chat_view
+
+    // ── Compose hub: only the active sub-view is mounted ─────────────────
+    // Using dyn_container (rather than hiding all three) avoids wasted
+    // reactivity in the inactive panels and keeps hidden inputs out of the
+    // focus/tab order.
+    let wtd = window_tab_data.clone();
+    let content = dyn_container(
+        move || hub_tab.get(),
+        move |tab| match tab {
+            OwnStackHubTab::Chat => {
+                ownstack_chat_view(wtd.clone()).into_any()
+            }
+            OwnStackHubTab::Tools => {
+                container(crate::ownstack_mcp::mcp_panel(wtd.clone(), position))
+                    .style(|s| s.size_full())
+                    .into_any()
+            }
+            OwnStackHubTab::Audit => {
+                container(crate::ownstack_audit::audit_panel(
+                    wtd.clone(),
+                    position,
+                ))
+                .style(|s| s.size_full())
+                .into_any()
+            }
+        },
+    )
+    .style(|s| s.size_full());
+
+    v_stack((hub_bar, content)).style(|s| s.size_full().flex_col())
 }
 
 fn summarize_output_entry(msg: &ChatMessage) -> String {
@@ -1205,7 +1373,7 @@ fn message_view(
 
     let header = if !is_user {
         h_stack((
-            label(|| "".to_string()).style(move |s| {
+            label(String::new).style(move |s| {
                 s.width(6.0)
                     .height(6.0)
                     .border_radius(99.0)
@@ -1226,7 +1394,8 @@ fn message_view(
 
     let tool_block = if let Some(tool_res) = &msg.tool_result {
         let diff_block = if let Some(target) = &msg.diff_target {
-            let _chat_for_click = chat_data.clone();
+            let chat_for_click = chat_data.clone();
+            let target_for_click = target.clone();
             let target_clone = target.clone();
             h_stack((
                 h_stack((
@@ -1251,7 +1420,13 @@ fn message_view(
                             })
                     })
                     .on_click_stop(move |_| {
-                        // Can be hooked up later
+                        // Open the changed file's diff view so the user can
+                        // review what the agent modified.
+                        chat_for_click.common.internal_command.send(
+                            InternalCommand::OpenFileChanges {
+                                path: PathBuf::from(&target_for_click),
+                            },
+                        );
                     }),
             ))
             .style(|s| {
@@ -1379,18 +1554,18 @@ fn diff_view(
             move |line| {
                 let (bg_color, text_color) = if line.starts_with('+') {
                     (
-                        Some(Color::from_rgba8(0, 255, 0, 30)),
-                        Some(Color::from_rgb8(100, 255, 100)),
+                        Some(crate::ownstack_theme::DIFF_ADD_BG),
+                        Some(crate::ownstack_theme::DIFF_ADD_TEXT),
                     )
                 } else if line.starts_with('-') {
                     (
-                        Some(Color::from_rgba8(255, 0, 0, 30)),
-                        Some(Color::from_rgb8(255, 100, 100)),
+                        Some(crate::ownstack_theme::DIFF_REMOVE_BG),
+                        Some(crate::ownstack_theme::DIFF_REMOVE_TEXT),
                     )
                 } else if line.starts_with("@@") {
                     (
-                        Some(Color::from_rgba8(0, 0, 255, 30)),
-                        Some(Color::from_rgb8(100, 100, 255)),
+                        Some(crate::ownstack_theme::DIFF_HUNK_BG),
+                        Some(crate::ownstack_theme::DIFF_HUNK_TEXT),
                     )
                 } else {
                     (None, None)
@@ -1542,7 +1717,14 @@ fn extract_code_block(content: &str) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn extract_structured_patch(content: &str) -> Option<PatchSuggestion> {
+    let patches = extract_all_patches(content);
+    patches.into_iter().next()
+}
+
+fn extract_all_patches(content: &str) -> Vec<PatchSuggestion> {
+    let mut patches = Vec::new();
     let mut in_patch_block = false;
     let mut pending_path: Option<String> = None;
     let mut body = String::new();
@@ -1553,6 +1735,7 @@ fn extract_structured_patch(content: &str) -> Option<PatchSuggestion> {
         if !in_patch_block {
             if let Some(rest) = trimmed.strip_prefix("```ownstack_patch") {
                 in_patch_block = true;
+                body.clear();
                 let inline_path = rest
                     .trim()
                     .strip_prefix("path=")
@@ -1564,7 +1747,17 @@ fn extract_structured_patch(content: &str) -> Option<PatchSuggestion> {
         }
 
         if trimmed.starts_with("```") {
-            break;
+            if let Some(path) = pending_path.take() {
+                if !body.trim().is_empty() {
+                    patches.push(PatchSuggestion {
+                        path,
+                        new_content: body.clone(),
+                    });
+                }
+            }
+            in_patch_block = false;
+            body.clear();
+            continue;
         }
 
         if pending_path.is_none() {
@@ -1581,15 +1774,7 @@ fn extract_structured_patch(content: &str) -> Option<PatchSuggestion> {
         body.push('\n');
     }
 
-    let path = pending_path?;
-    if body.trim().is_empty() {
-        return None;
-    }
-
-    Some(PatchSuggestion {
-        path,
-        new_content: body,
-    })
+    patches
 }
 
 fn is_safe_workspace_relative_path(path: &std::path::Path) -> bool {

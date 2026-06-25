@@ -136,6 +136,8 @@ pub struct CommonData {
     pub keypress: RwSignal<KeyPressData>,
     pub completion: RwSignal<CompletionData>,
     pub inline_completion: RwSignal<InlineCompletionData>,
+    /// AI inline autocompletion (Fill-in-the-Middle) client state.
+    pub fim: crate::ownstack_fim::FimClientData,
     pub hover: HoverData,
     pub register: RwSignal<Register>,
     pub find: Find,
@@ -191,6 +193,7 @@ pub struct WindowTabData {
     pub ownstack_audit: crate::ownstack_audit::OwnStackAuditData,
     pub ownstack_status: crate::ownstack_status::OwnStackStatusData,
     pub ownstack_mcp: crate::ownstack_mcp::OwnStackMcpData,
+    pub web_preview: crate::ownstack_preview::WebPreviewData,
     pub inline_edit: crate::ownstack_inline_edit::InlineEditData,
     pub policy_prompt_seq: RwSignal<u64>,
     pub layout_rect: RwSignal<Rect>,
@@ -350,6 +353,7 @@ impl WindowTabData {
         let focus = cx.create_rw_signal(Focus::Workbench);
         let completion = cx.create_rw_signal(CompletionData::new(cx, config));
         let inline_completion = cx.create_rw_signal(InlineCompletionData::new(cx));
+        let fim = crate::ownstack_fim::FimClientData::new(cx);
         let hover = HoverData::new(cx);
 
         let register = cx.create_rw_signal(Register::default());
@@ -378,6 +382,7 @@ impl WindowTabData {
             focus,
             completion,
             inline_completion,
+            fim,
             hover,
             register,
             find,
@@ -575,6 +580,7 @@ impl WindowTabData {
             common.clone(),
             workspace.path.clone(),
         );
+        let web_preview = crate::ownstack_preview::WebPreviewData::new(cx);
 
         let window_tab_data = Self {
             scope: cx,
@@ -603,6 +609,7 @@ impl WindowTabData {
             ownstack_audit,
             ownstack_status,
             ownstack_mcp,
+            web_preview,
             inline_edit,
             policy_prompt_seq: cx.create_rw_signal(0),
             layout_rect: cx.create_rw_signal(Rect::ZERO),
@@ -1374,6 +1381,79 @@ impl WindowTabData {
                     let offset = ed.cursor().with_untracked(|c| c.offset());
                     self.inline_edit.start(file_path, selected, offset);
                 }
+            }
+            OwnStackAnalyzeFile => {
+                self.open_chat_hub();
+                match self.active_file_name() {
+                    Some(file_name) => {
+                        self.ownstack_chat.input.set(
+                            format!("Analyze {} — summarize key risks, code smells, and improvements.", file_name),
+                        );
+                        self.ownstack_chat.send_message();
+                    }
+                    None => self.ownstack_chat.add_alert_message(
+                        "Open a file first, then run Analyze Active File.".to_string(),
+                    ),
+                }
+            }
+            OwnStackCodeReview => {
+                self.open_chat_hub();
+                match self.active_file_name() {
+                    Some(file_name) => {
+                        self.ownstack_chat.input.set(
+                            format!("Review {} for bugs, security issues, and code quality.", file_name),
+                        );
+                        self.ownstack_chat.send_message();
+                    }
+                    None => self.ownstack_chat.add_alert_message(
+                        "Open a file first, then run Code Review.".to_string(),
+                    ),
+                }
+            }
+            OwnStackFixBuild => {
+                self.open_chat_hub();
+                self.ownstack_chat.input.set(
+                    "Fix the current build errors — run the build, analyze failures, and propose patches.".to_string(),
+                );
+                self.ownstack_chat.send_message();
+            }
+            OwnStackClearChat => {
+                self.ownstack_chat.clear_history();
+                self.ownstack_chat.hub_tab.set(
+                    crate::ownstack_chat::OwnStackHubTab::Chat,
+                );
+            }
+            OwnStackIndexWorkspace => {
+                self.common.fim.indexing.set(true);
+                self.common
+                    .proxy
+                    .ownstack(lapce_rpc::ownstack::OwnStackRpc::IndexWorkspace);
+            }
+            OwnStackToggleAutocomplete => {
+                let enabled = self.common.fim.enabled.get_untracked();
+                self.common.fim.enabled.set(!enabled);
+                self.show_message(
+                    "OwnStack",
+                    &ShowMessageParams {
+                        typ: MessageType::INFO,
+                        message: format!(
+                            "AI autocomplete {}",
+                            if enabled { "disabled" } else { "enabled" }
+                        ),
+                    },
+                );
+            }
+            OwnStackToggleWebPreview => {
+                self.toggle_panel_visual(PanelKind::OwnStackWebPreview);
+            }
+            OwnStackCommitMessage => {
+                self.open_chat_hub();
+                self.ownstack_chat.input.set(
+                    "Generate a concise Conventional Commits message for the \
+current staged/unstaged git diff. Inspect the diff first, then output only \
+the commit message.".to_string(),
+                );
+                self.ownstack_chat.send_message();
             }
             ToggleTerminalFocus => {
                 self.toggle_panel_focus(PanelKind::Terminal);
@@ -2205,6 +2285,48 @@ impl WindowTabData {
         }
     }
 
+    /// Apply an AI Fill-in-the-Middle completion to the active editor as ghost
+    /// text, but only if it is still the latest request and the cursor has not
+    /// moved since the request was issued.
+    fn apply_fim_completion(&self, id: u64, completion: &str) {
+        let Some(pending) = self.common.fim.take_if_current(id) else {
+            return;
+        };
+        let Some(editor) = self.main_split.active_editor.get_untracked() else {
+            return;
+        };
+        let doc = editor.doc();
+        // Path must still match the file the request was issued for.
+        let path_matches = doc
+            .content
+            .with_untracked(|c| c.path().cloned())
+            .map(|p| p == pending.path)
+            .unwrap_or(false);
+        if !path_matches {
+            return;
+        }
+        // Cursor must not have moved.
+        let offset = editor.cursor().with_untracked(|c| c.offset());
+        if offset != pending.offset {
+            return;
+        }
+
+        let item = crate::inline_completion::InlineCompletionItem {
+            insert_text: completion.to_string(),
+            filter_text: None,
+            range: Some(offset..offset),
+            command: None,
+            insert_text_format: Some(lsp_types::InsertTextFormat::PLAIN_TEXT),
+        };
+        let mut items = im::Vector::new();
+        items.push_back(item);
+        let path = pending.path.clone();
+        self.common.inline_completion.update(|c| {
+            c.set_items(items, offset, path);
+            c.update_doc(&doc, offset);
+        });
+    }
+
     fn handle_core_notification(&self, rpc: &CoreNotification) {
         let cx = self.scope;
         match rpc {
@@ -2706,6 +2828,16 @@ impl WindowTabData {
                             },
                         );
                     }
+                    OwnStackRpc::FimResponse { id, completion } => {
+                        self.apply_fim_completion(id, &completion);
+                    }
+                    OwnStackRpc::IndexStatus {
+                        indexing,
+                        chunk_count,
+                    } => {
+                        self.common.fim.indexing.set(indexing);
+                        self.common.fim.chunk_count.set(chunk_count);
+                    }
                     _ => {
                         tracing::debug!("Unhandled RPC: {:?}", message);
                     }
@@ -3168,7 +3300,8 @@ impl WindowTabData {
             | PanelKind::References
             | PanelKind::Implementation
             | PanelKind::OwnStackMcp
-            | PanelKind::OwnStackAudit => {
+            | PanelKind::OwnStackAudit
+            | PanelKind::OwnStackWebPreview => {
                 // Some panels don't accept focus (yet). Fall back to visibility check
                 // in those cases.
                 self.panel.is_panel_visible(&kind)
@@ -3232,6 +3365,30 @@ impl WindowTabData {
     fn hide_panel(&self, kind: PanelKind) {
         self.panel.hide_panel(&kind);
         self.common.focus.set(Focus::Workbench);
+    }
+
+    /// Path of the active editor's file, or `None` when no real file is open
+    /// (e.g. scratch buffer, settings, or no editor at all).
+    fn active_file_name(&self) -> Option<String> {
+        self.main_split
+            .active_editor
+            .get_untracked()
+            .and_then(|ed| {
+                ed.doc().content.with_untracked(|c| {
+                    if let crate::doc::DocContent::File { path, .. } = c {
+                        Some(path.to_string_lossy().to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+    }
+
+    fn open_chat_hub(&self) {
+        self.show_panel(PanelKind::OwnStackChat);
+        self.ownstack_chat
+            .hub_tab
+            .set(crate::ownstack_chat::OwnStackHubTab::Chat);
     }
 
     pub fn show_panel(&self, kind: PanelKind) {
