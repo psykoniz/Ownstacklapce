@@ -30,8 +30,10 @@ temp_ownstack/
 .ownstack/audit.jsonl
 .ownstack/telemetry/
 .ownstack/multivers/
+.ownstack/doctor/
 **/.ownstack/telemetry/
 **/.ownstack/multivers/
+**/.ownstack/doctor/
 
 # Python / PyInstaller
 __pycache__/

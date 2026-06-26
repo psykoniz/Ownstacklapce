@@ -1466,7 +1466,10 @@ fn editor_tab_content(
                 plugin_info_view(plugin.clone(), id).into_any()
             }
             EditorTabChild::Welcome(_) => {
-                text("Welcome").into_any()
+                crate::ownstack_empty_state::empty_editor_placeholder(
+                    common.workbench_command,
+                )
+                .into_any()
             }
         };
         child.style(|s| s.size_full())
@@ -2100,14 +2103,28 @@ fn main_split(window_tab_data: Rc<WindowTabData>) -> impl View {
     let config = window_tab_data.main_split.common.config;
     let panel = window_tab_data.panel.clone();
     let plugin = window_tab_data.plugin.clone();
+    let workbench_command = window_tab_data.common.workbench_command;
     let dragging: RwSignal<Option<(RwSignal<usize>, EditorTabId)>> =
         create_rw_signal(None);
-    split_list(
-        root_split,
-        window_tab_data.clone(),
-        plugin.clone(),
-        dragging,
-    )
+    stack((
+        split_list(
+            root_split,
+            window_tab_data.clone(),
+            plugin.clone(),
+            dragging,
+        )
+        .style(|s| s.absolute().size_full()),
+        // OwnStack: empty-state placeholder shown when no editor tab is open
+        // (root split has no children) so the editor area is never blank.
+        crate::ownstack_empty_state::empty_editor_placeholder(workbench_command)
+            .style(move |s| {
+                let is_empty =
+                    root_split.with(|split| split.children.is_empty());
+                s.absolute()
+                    .size_full()
+                    .apply_if(!is_empty, |s| s.hide())
+            }),
+    ))
     .style(move |s| {
         let config = config.get();
         let is_hidden = panel.panel_bottom_maximized(true)

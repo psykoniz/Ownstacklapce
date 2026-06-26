@@ -532,9 +532,14 @@ def apply_fixes(issues):
             warn(f"  Skipping '{issue['issue']}' — no fix provided")
             continue
 
-        file_path = ROOT / issue["file"]
+        issue_file = issue.get("file")
+        if not issue_file:
+            warn(f"  Skipping '{issue['issue']}' — no file specified")
+            continue
+
+        file_path = ROOT / issue_file
         if not file_path.exists():
-            warn(f"  File not found: {issue['file']}")
+            warn(f"  File not found: {issue_file}")
             continue
 
         old_text = fix["old_text"]

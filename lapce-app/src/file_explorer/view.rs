@@ -188,7 +188,10 @@ fn file_node_text_view(
                             .padding_right(5.0)
                             .selectable(false)
                     }),
-                    label(move || path.to_string_lossy().to_string()).style(
+                    label(move || {
+                        let s = path.to_string_lossy().to_string();
+                        s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+                    }).style(
                         move |s| {
                             s.height(ui_line_height.get())
                                 .color(
