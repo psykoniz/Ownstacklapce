@@ -64,8 +64,19 @@
 3. **`SystemDrive`/`ProgramData`** ajoutés à l'env → plus de répertoires littéraux `%SystemDrive%`.
 Vérifié par `exec_probe.rs` (les redirections créent les fichiers) et re-test agent (T4 : échec→succès).
 
+## 3ᵉ vague — testée en réel (harness `realtest3.rs`)
+
+| Capacité | Note /100 | Constat |
+|----------|-----------|---------|
+| **FailureAnalyzer** (parsing erreurs) | **80** | Détecte et parse l'erreur compilateur (`SyntaxError`, fichier, ligne). Statique, rapide. |
+| **Healer** (auto-réparation) | **55** | Infra fonctionnelle (lance la commande, appelle le LLM pour des fixes), mais conservateur : `healed=false attempts=0` sur un « fichier manquant » (pas de fix shell sûr → comportement raisonnable). À retester sur un échec réparable (dépendance manquante). |
+| **ProjectMemory** (règles projet) | **85** | Charge `.ownstack/rules.md` correctement. Sync, fiable. Alimente les prompts. |
+| **RAG / SemanticIndex** | **40** | Embeddings BERT locaux (candle). `init` échoue **proprement** : `Model directory not found. Please run bootstrap.` → nécessite le téléchargement du modèle. Inutilisable out-of-the-box. |
+| **MCP client** | **88** | ✅ Round-trip complet : spawn serveur → `connect` → `tools/call` `echo` → `"hello-mcp"` (0.1s). Intégration solide. |
+| **Vision** (multi-modale) | **85** | ✅ gpt-5.5 via codex-everywhere décrit un screenshot avec exactitude (« dark-themed OwnStack editor… file explorer, chat panel, terminal »). |
+
 ## Capacités encore NON testées en runtime
-`VisionToolkit`, `MultiversToolkit`, `HealerToolkit`, MCP client (serveur externe requis), RAG/index, `ProjectMemory`, mode ACP.
+`MultiversToolkit` (A/B infra), `GitToolkit`, `LspToolkit`, `InfraSense`, mode ACP (stdio JSON-RPC).
 
 ## Réponse à « peut-il faire un projet en autonomie ? »
 **Oui pour les tâches centrées fichiers/code** (création multi-fichiers, édition, génération) — démontré en réel. **Avec réserves** sur les étapes nécessitant le shell (build/run/test via redirections ou enchaînements) tant que le wrap shell Windows n'est pas ajouté. Avec gpt-5.5 + la correction exec, l'autonomie bout-en-bout serait nettement plus fiable.
