@@ -385,7 +385,13 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         })
                     }
                 },
-            ),
+            )
+            // Chips wrap to multiple rows instead of overflowing the card.
+            .style(|s| {
+                s.width_full()
+                    .gap(6.0)
+                    .flex_wrap(floem::style::FlexWrap::Wrap)
+            }),
             // "No results" label — shown when query filters out everything
             label(move || {
                 let query = input.get();
@@ -412,11 +418,7 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                     .color(crate::ownstack_theme::TEXT_HINT)
             }),
         ))
-        .style(|s| {
-            s.width_full()
-                .gap(6.0)
-                .flex_wrap(floem::style::FlexWrap::Wrap)
-        }),
+        .style(|s| s.width_full().gap(6.0)),
         // Final Hint
         text("Tip: try '/plan' to switch agent to planning mode").style(|s| {
             s.font_size(10.0)
