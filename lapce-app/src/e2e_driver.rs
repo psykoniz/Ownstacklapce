@@ -23,7 +23,7 @@ use std::{
 };
 
 use crossbeam_channel::{Sender, bounded};
-use floem::reactive::{SignalGet, SignalWith};
+use floem::reactive::{SignalGet, SignalUpdate, SignalWith};
 use serde_json::{Value, json};
 
 use crate::{command::InternalCommand, doc::DocContent, window_tab::WindowTabData};
@@ -251,6 +251,8 @@ fn dispatch_method(method: &str, params: Value) -> Value {
         "redo" => cmd_redo(params),
         "find_replace" => cmd_find_replace(params),
         "run_command" => cmd_run_command(params),
+        "ai_prompt" => cmd_ai_prompt(params),
+        "get_chat" => cmd_get_chat(params),
         "get_state" => cmd_get_state(params),
         "get_diagnostics" => cmd_get_diagnostics(params),
         "get_editor_text" => cmd_get_editor_text(params),
@@ -416,6 +418,42 @@ fn cmd_find_replace(params: Value) -> Value {
         } else {
             json!({ "error": "no active editor" })
         }
+    })
+}
+
+fn cmd_ai_prompt(params: Value) -> Value {
+    let prompt = match params.get("prompt").and_then(Value::as_str) {
+        Some(p) => p.to_string(),
+        None => return json!({ "error": "missing 'prompt' param" }),
+    };
+    query_ui(move |tab| {
+        if !tab.ownstack_chat.bridge_connected.get_untracked() {
+            return json!({ "error": "agent bridge not connected" });
+        }
+        tab.ownstack_chat.input.set(prompt.clone());
+        tab.ownstack_chat.send_message();
+        json!({ "status": "ok" })
+    })
+}
+
+fn cmd_get_chat(_params: Value) -> Value {
+    query_ui(|tab| {
+        let msgs = tab.ownstack_chat.messages.get_untracked();
+        let arr: Vec<Value> = msgs
+            .iter()
+            .map(|m| {
+                json!({
+                    "role": format!("{:?}", m.role),
+                    "content": m.content,
+                    "is_error": m.is_error,
+                })
+            })
+            .collect();
+        json!({
+            "messages": arr,
+            "streaming": tab.ownstack_chat.streaming_content.get_untracked(),
+            "bridge_connected": tab.ownstack_chat.bridge_connected.get_untracked(),
+        })
     })
 }
 
