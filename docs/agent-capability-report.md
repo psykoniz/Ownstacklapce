@@ -109,3 +109,22 @@ Vision, Git, Multivers, LSP, ACP, InfraSense, ArtifactManager.
 
 ## Réponse à « peut-il faire un projet en autonomie ? »
 **Oui pour les tâches centrées fichiers/code** (création multi-fichiers, édition, génération) — démontré en réel. **Avec réserves** sur les étapes nécessitant le shell (build/run/test via redirections ou enchaînements) tant que le wrap shell Windows n'est pas ajouté. Avec gpt-5.5 + la correction exec, l'autonomie bout-en-bout serait nettement plus fiable.
+
+---
+
+## Mise à jour — Consolidation Syllabe (machine à états, LEARN, evals, RAG)
+Plan : porter la discipline d'autonomie de Syllabe dans l'agent Rust (cf. `~/.claude/plans/`).
+
+| Livré | État | Validation réelle (gpt-5.5) |
+|-------|------|------------------------------|
+| **Eval suite** (`examples/evals.rs`) | ✅ | 7/7 cas, score 100, rapports `.ownstack/evals/*.json` — baseline mesurable |
+| **ProjectRunner** machine à états (`src/project_runner.rs`) | ✅ | PLAN→IMPLEMENT→**TEST réel**→REPAIR(≤3)→REVIEW(≤2)→checkpoint ; a construit+testé un module Python (`python test_calc.py` exit 0), work-units + mission persistés |
+| **LEARN** + lessons (`project_memory.rs`) | ✅ | 2 runs : leçons curées → `.ownstack/lessons.md` → réinjectées au run suivant (boucle fermée) |
+| **RAG fallback** (`index.rs`) | ✅ | embedding feature-hashing quand pas de modèle BERT ; recherche pertinente (auth/math/db). **+ fix latent** `Hnsw::new` |
+
+**Grades révisés :**
+- **Boucle autonome 70 → ~82** : le `ProjectRunner` apporte le bornage + le gate par tests réels + persistance.
+- **RAG 40 → ~70** : utilisable out-of-the-box via le fallback (BERT optionnel pour la qualité).
+- **Nouveau : LEARN ~75** : boucle d'apprentissage inter-runs (n'existait pas).
+
+**Reste à faire** (clairement scopé) : `OverflowPolicy` (summarize/escalate/abort dans `check_budget`), amélioration ciblée du Healer, et le **câblage IDE du mode « Project »** (`AgentRunMode::Project` + toggle chat + 1 rebuild).
