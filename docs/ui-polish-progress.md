@@ -171,10 +171,15 @@ Rendre l'IDE OwnStack visuellement clean, beau et ergonomique en identifiant et 
 1. ✅ Classement complet des éléments UI ↔ fichiers (fait 2026-06-26)
 2. ✅ Fichier `nul` — déjà absent du workspace
 3. ✅ Disque libéré (suppression cache `target/debug/incremental`, +4.4 GB)
-4. 🔄 Rebuild en cours pour vérifier placeholder + overlay éditeur vide
-5. ⬜ Re-lancer le Doctor pour une capture **propre** (les `iteration_2..10` sont des états brouillons obsolètes)
-6. ⬜ Corriger : label racine File Explorer tronqué + carte SYSTEM du chat coupée à droite
-7. ⬜ Cercle bleu/gris bas-droite : **aucun élément UI ne fait ~500px** (pas de gradient/brush dans le code) → hypothèse confirmée d'artefact compositeur Windows / wallpaper. Vérifier sur capture fraîche si le cercle bouge avec la fenêtre.
+4. ✅ Éditeur vide → placeholder OwnStack (fix `main_split`, vérifié, committé `456655c4`)
+5. ✅ **Cercle bleu/gris bas-droite — CLOS** : chrome de fenêtre Windows (ombre/coin arrondi).
+   Visible uniquement en fenêtre flottante, pile au coin ; le bureau est visible juste à côté.
+   Aucun élément UI ne le produit (pas de gradient/brush). **Non corrigeable / non-bug.**
+6. ✅ **Label racine File Explorer** → `flex_shrink(0)` sur le nom + `flex_grow/min_width(0)/text_ellipsis()`
+   sur le chemin, dans un `stack().width_full()`. Le chemin s'ellipse (« … ») au lieu d'être coupé net.
+   (`file_explorer/view.rs`, rebuild en cours pour vérifier.)
+7. ⬜ Carte SYSTEM du chat : OK à largeur normale (défaut Floem = `Wrap`). Ne clippe qu'en panneau
+   très étroit. Laissé tel quel pour ne pas risquer le layout — à revoir si gênant.
 
 ### Note disque (issue critique Doctor)
 - C: à 99% (était 5.7 GB libre, → ~8-11 GB après nettoyage incrémental).

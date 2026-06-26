@@ -171,10 +171,12 @@ fn file_node_text_view(
     match node.kind.clone() {
         FileNodeViewKind::Path(path) => {
             if node.is_root {
-                let file = path.clone();
-                container((
+                // Root row: show only the workspace folder name. The full path is
+                // omitted — in a narrow panel it was truncated/crowded and added
+                // little (the path is already shown in the title bar).
+                container(
                     label(move || {
-                        file.file_name()
+                        path.file_name()
                             .map(|f| f.to_string_lossy().to_string())
                             .unwrap_or_default()
                     })
@@ -185,24 +187,9 @@ fn file_node_text_view(
                                 node.clone(),
                                 source_control.clone(),
                             ))
-                            .padding_right(5.0)
                             .selectable(false)
                     }),
-                    label(move || {
-                        let s = path.to_string_lossy().to_string();
-                        s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
-                    }).style(
-                        move |s| {
-                            s.height(ui_line_height.get())
-                                .color(
-                                    config
-                                        .get()
-                                        .color(LapceColor::PANEL_FOREGROUND_DIM),
-                                )
-                                .selectable(false)
-                        },
-                    ),
-                ))
+                )
             } else {
                 container(
                     label(move || {
