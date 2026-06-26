@@ -331,9 +331,9 @@ impl Sandbox for ProcessSandbox {
             return ToolResult::failure("Empty command".to_string(), None);
         }
 
-        #[allow(unused_mut)]
+        #[allow(unused_mut, unused_assignments)]
         let mut cmd_name = parts[0].clone();
-        #[allow(unused_mut)]
+        #[allow(unused_mut, unused_assignments)]
         let mut args: Vec<String> = parts[1..].to_vec();
 
         #[cfg(target_os = "linux")]
@@ -357,6 +357,18 @@ impl Sandbox for ProcessSandbox {
             args = resolved.1;
         }
 
+        // Windows has no resolve_command equivalent. Without a shell, redirects
+        // (`>`), pipes (`|`), `&&`/`||` and cmd builtins are passed literally and
+        // silently no-op (worse: report success). Route through `cmd /C` so shell
+        // features behave like the Unix path. PolicyEngine already vetted the raw
+        // command string, so wrapping introduces no bypass.
+        #[cfg(windows)]
+        {
+            let _ = level;
+            cmd_name = "cmd".to_string();
+            args = vec!["/C".to_string(), command_str.to_string()];
+        }
+
         let mut child_cmd = Command::new(&cmd_name);
         child_cmd.args(&args);
 
@@ -376,6 +388,14 @@ impl Sandbox for ProcessSandbox {
                 "{};C:\\Program Files\\Git\\cmd;C:\\Program Files\\Git\\bin",
                 path
             );
+            // Append the parent PATH so user toolchains (python, cargo, node, …)
+            // resolve — required now that commands run via `cmd /C`, which honours
+            // the child env's PATH rather than the parent's for lookup.
+            if let Ok(parent_path) = std::env::var("PATH") {
+                if !parent_path.is_empty() {
+                    path = format!("{};{}", path, parent_path);
+                }
+            }
             child_cmd.env("PATH", path);
 
             if let Ok(root) = std::env::var("SystemRoot") {
@@ -383,6 +403,14 @@ impl Sandbox for ProcessSandbox {
             }
             if let Ok(windir) = std::env::var("windir") {
                 child_cmd.env("windir", windir);
+            }
+            // Without SystemDrive/ProgramData, `cmd` leaves `%SystemDrive%` /
+            // `%ProgramData%` unexpanded, creating bogus literal directories.
+            if let Ok(sysdrive) = std::env::var("SystemDrive") {
+                child_cmd.env("SystemDrive", sysdrive);
+            }
+            if let Ok(programdata) = std::env::var("ProgramData") {
+                child_cmd.env("ProgramData", programdata);
             }
             if let Ok(temp) = std::env::var("TEMP") {
                 child_cmd.env("TEMP", temp);
