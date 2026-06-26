@@ -11,10 +11,16 @@ use tracing::{debug, info};
 
 const INDEX_SCHEMA_VERSION: u32 = 1;
 
+/// Embedding dimension. Matches all-MiniLM-L6-v2 (BERT) and the hashed fallback.
+const EMBED_DIM: usize = 384;
+
 pub struct SemanticIndex {
     workspace: PathBuf,
     model: Option<BertModel>,
     tokenizer: Option<Tokenizer>,
+    /// When no BERT model is present, embeddings fall back to deterministic
+    /// feature hashing so semantic search works out-of-the-box (no bootstrap).
+    use_hashed_fallback: bool,
     device: Device,
     index_store: Arc<RwLock<Option<Hnsw<'static, f32, DistCosine>>>>,
     metadata: Arc<RwLock<Vec<ChunkMetadata>>>,
@@ -56,6 +62,31 @@ impl Default for IndexManifest {
     }
 }
 
+/// Deterministic feature-hashing embedding used when no BERT model is present.
+/// Bag-of-words with signed hashing into `dim` buckets, L2-normalized — crude
+/// but gives meaningful cosine similarity for term-overlap retrieval.
+fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
+    let mut v = vec![0f32; dim];
+    for tok in text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.len() >= 2)
+    {
+        let mut hasher = Sha256::new();
+        hasher.update(tok.to_lowercase().as_bytes());
+        let d = hasher.finalize();
+        let idx = (u32::from_le_bytes([d[0], d[1], d[2], d[3]]) as usize) % dim;
+        let sign = if d[4] & 1 == 0 { 1.0 } else { -1.0 };
+        v[idx] += sign;
+    }
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in &mut v {
+            *x /= norm;
+        }
+    }
+    v
+}
+
 impl SemanticIndex {
     pub fn new(workspace: PathBuf) -> Self {
         let device = Device::Cpu;
@@ -63,6 +94,7 @@ impl SemanticIndex {
             workspace,
             model: None,
             tokenizer: None,
+            use_hashed_fallback: false,
             device,
             index_store: Arc::new(RwLock::new(None)),
             metadata: Arc::new(RwLock::new(Vec::new())),
@@ -72,15 +104,25 @@ impl SemanticIndex {
     }
 
     pub async fn init(&mut self) -> Result<(), String> {
-        if self.model.is_some() {
+        if self.model.is_some() || self.use_hashed_fallback {
             return Ok(());
         }
 
         let model_dir = self.workspace.join(".ownstack").join("models");
         if !model_dir.exists() {
-            return Err(
-                "Model directory not found. Please run bootstrap.".to_string()
-            );
+            // No BERT model: use the deterministic hashed-embedding fallback so
+            // semantic search is usable without a bootstrap download.
+            info!("SemanticIndex: no BERT model at {:?}; using hashed-embedding fallback", model_dir);
+            self.use_hashed_fallback = true;
+            if self.load().await.is_err() {
+                // First arg is max_nb_connection (<=256); the embedding dim is
+                // inferred from inserted vectors, not passed here.
+                let hnsw = Hnsw::new(24, 100000, 16, 200, DistCosine {});
+                if let Ok(mut lock) = self.index_store.write() {
+                    *lock = Some(hnsw);
+                }
+            }
+            return Ok(());
         }
 
         info!("Loading BERT model from {:?}", model_dir);
@@ -117,7 +159,7 @@ impl SemanticIndex {
                 "No existing index found or failed to load: {}. Initializing fresh.",
                 e
             );
-            let hnsw = Hnsw::new(384, 100000, 16, 200, DistCosine {});
+            let hnsw = Hnsw::new(24, 100000, 16, 200, DistCosine {});
             if let Ok(mut lock) = self.index_store.write() {
                 *lock = Some(hnsw);
             }
@@ -127,6 +169,9 @@ impl SemanticIndex {
     }
 
     pub fn generate_embedding(&self, text: &str) -> Result<Vec<f32>, String> {
+        if self.use_hashed_fallback {
+            return Ok(hashed_embedding(text, EMBED_DIM));
+        }
         let model = self.model.as_ref().ok_or("Model not loaded")?;
         let tokenizer = self.tokenizer.as_ref().ok_or("Tokenizer not loaded")?;
 
@@ -387,7 +432,7 @@ impl SemanticIndex {
         query: &str,
         limit: usize,
     ) -> Result<Vec<ChunkMetadata>, String> {
-        if self.model.is_none() {
+        if self.model.is_none() && !self.use_hashed_fallback {
             return Err("Index not initialized. Call init() first.".to_string());
         }
 
@@ -416,7 +461,7 @@ impl SemanticIndex {
     }
 
     fn rebuild_hnsw(&self) -> Result<(), String> {
-        let hnsw = Hnsw::new(384, 100000, 16, 200, DistCosine {});
+        let hnsw = Hnsw::new(24, 100000, 16, 200, DistCosine {});
 
         let embs = self
             .embeddings
