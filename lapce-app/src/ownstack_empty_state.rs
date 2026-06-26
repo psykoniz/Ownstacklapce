@@ -268,14 +268,12 @@ pub fn mcp_empty_state(searched_paths: String) -> impl View {
                     .margin_bottom(14.0)
             }),
         label(move || {
-            format!(
-                "Searched: {}",
-                if searched_paths.is_empty() {
-                    "(no workspace)"
-                } else {
-                    &searched_paths
-                }
-            )
+            if searched_paths.is_empty() {
+                "Searched: (no workspace)".to_string()
+            } else {
+                // Strip the Windows extended-path prefix (\\?\) from display.
+                format!("Searched: {}", searched_paths.replace(r"\\?\", ""))
+            }
         })
         .style(|s| {
             s.font_size(10.0)

@@ -182,7 +182,15 @@ impl OwnStackChatData {
             context_current: create_rw_signal(0),
             context_max: create_rw_signal(0),
             bridge_connected: create_rw_signal(false),
-            hub_tab: create_rw_signal(OwnStackHubTab::Chat),
+            // Default to Chat; OWNSTACK_DEFAULT_HUB_TAB lets tests open a
+            // specific sub-tab (tools/audit) for screenshots.
+            hub_tab: create_rw_signal(
+                match std::env::var("OWNSTACK_DEFAULT_HUB_TAB").as_deref() {
+                    Ok("tools") => OwnStackHubTab::Tools,
+                    Ok("audit") => OwnStackHubTab::Audit,
+                    _ => OwnStackHubTab::Chat,
+                },
+            ),
             common,
             db,
         }

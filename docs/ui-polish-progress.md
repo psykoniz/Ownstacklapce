@@ -13,16 +13,24 @@ Captures dans `.ownstack/doctor/` (gitignored) : `verify_rebuild.png`, `state_pa
 | Vue | Capture | Verdict |
 |-----|---------|---------|
 | Zone éditeur vide | verify_rebuild | ✅ placeholder OwnStack (fix `main_split`) |
+| Éditeur avec fichier | state_editor | ✅ onglet, breadcrumb, coloration syntaxique, gutter, Open Editors |
 | Racine File Explorer | crop_root | ✅ nom de dossier seul, propre |
 | Palette AI (`ownstack.toggle_palette`) | crop_palette | ✅ **fix** : chips wrappent dans le cadre (flex_wrap déplacé) |
-| Overlay Audit (`ownstack.toggle_audit`) | state_audit | ✅ en-tête + filtres + état vide, correct |
-| Onboarding (`OWNSTACK_FORCE_ONBOARDING=1`) | state_onboarding | ✅ modal + backdrop, badge Step x/5, dots, progress, Skip/Next — pro |
+| Palette commandes core (`palette.command`) | state_cmd_palette | ✅ liste lisible + raccourcis |
+| Settings (`open_settings`) | state_settings | ✅ nav Core/Editor/UI/Terminal, rebrandé OwnStack |
+| Overlay Audit (`ownstack.toggle_audit`) | state_audit | ✅ en-tête + filtres + état vide |
+| Hub → Tools/MCP (`OWNSTACK_DEFAULT_HUB_TAB=tools`) | state_hub_tools | ✅ empty-state + CTA — **fix** : préfixe `\\?\` retiré des chemins « Searched » |
+| Hub → Audit (`OWNSTACK_DEFAULT_HUB_TAB=audit`) | state_hub_audit | ✅ Audit Log + filtres + empty-state bouclier |
+| Onboarding (`OWNSTACK_FORCE_ONBOARDING=1`) | state_onboarding | ✅ modal + backdrop, badge Step x/5, dots, progress — pro |
 | Chat empty-state | (code) | ✅ icône, tips raccourcis, soigné |
-| MCP panel | (code) | ✅ en-tête + add/reload + état vide |
 | Carte SYSTEM (chat) | state_palette | OK à largeur normale (Floem wrap par défaut) |
 
-**Hook ajouté** : `OWNSTACK_FORCE_ONBOARDING=1` force l'affichage du wizard même en mode E2E
-(sinon l'onboarding est `mark_complete()` au démarrage E2E) — pour screenshots/tests.
+**Hooks de test ajoutés** (sans impact sur le comportement par défaut) :
+- `OWNSTACK_FORCE_ONBOARDING=1` — force le wizard même en E2E (sinon `mark_complete()` au démarrage E2E).
+- `OWNSTACK_DEFAULT_HUB_TAB=tools|audit` — ouvre le sous-onglet chat voulu au démarrage (pour screenshots).
+
+**Note** : les onglets hub (Chat/Tools/Audit) sont un état interne sans commande workbench ; capture
+fiable via le hook env (le clic souris simulé est trop fragile — la fenêtre sort plus large que demandé).
 
 ---
 
