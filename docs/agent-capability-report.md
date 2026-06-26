@@ -92,8 +92,20 @@ terminaisons forcées du parent (IDE) ont laissé jusqu'à **24 `ownstack-agent`
 (consommant plusieurs GB de RAM). À vérifier : la fermeture *normale* de l'IDE tue-t-elle bien
 l'arbre de process ? Sinon, ajouter un kill du child agent au shutdown (job object / process group).
 
-## Capacités encore NON testées en runtime
-`InfraSense` (détection d'infra).
+## 5ᵉ vague — testée en réel (harness `realtest5.rs`)
+
+| Capacité | Note /100 | Constat |
+|----------|-----------|---------|
+| **InfraSense** (métriques host) | **85** | Métriques réelles exactes : `RAM 65.5% (10564/16122MB) \| Disk 98.4% (448/455GB) \| CPUs 8`. `disk_critical=true` → génère le warning « ⚠️ Disk critical: 98.4% used » vu dans le panneau chat. |
+| **ArtifactManager** | **78** | Persiste les artifacts dans `.ownstack/artifacts/` (`code_hellopy.md`, `doc_readmemd.md`). Sync, fiable. |
+
+## Couverture finale
+**Testé en réel** : provider, orchestrateur (Ask/Plan/Auto/missions), outils core (exec/read/write/edit/search),
+RepoMap, spécialistes (Security/Reviewer), Browser, Healer, FailureAnalyzer, ProjectMemory, RAG/index, MCP client,
+Vision, Git, Multivers, LSP, ACP, InfraSense, ArtifactManager.
+**Non drivé** (interne/implicite) : `ResilientClient` (retry HTTP du provider), `McpServer::run_stdio` (boucle serveur),
+`ContextManager`/`ContextBuilder`, `ModelRouter` (testé implicitement), télémétrie, `semantic_chunk`.
+**Non testable avec ce provider** : FIM (Ollama/OpenRouter only).
 
 ## Réponse à « peut-il faire un projet en autonomie ? »
 **Oui pour les tâches centrées fichiers/code** (création multi-fichiers, édition, génération) — démontré en réel. **Avec réserves** sur les étapes nécessitant le shell (build/run/test via redirections ou enchaînements) tant que le wrap shell Windows n'est pas ajouté. Avec gpt-5.5 + la correction exec, l'autonomie bout-en-bout serait nettement plus fiable.
