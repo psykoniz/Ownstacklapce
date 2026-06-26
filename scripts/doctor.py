@@ -36,8 +36,11 @@ from pathlib import Path
 # ─── Configuration ───────────────────────────────────────────────────────────
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target" / "release" / "lapce"
-BINARY_DEBUG = ROOT / "target" / "debug" / "lapce"
+_ext = ".exe" if sys.platform == "win32" else ""
+_name = "ownstack-ide" if (ROOT / "target" / "debug" / f"ownstack-ide{_ext}").exists() or \
+    (ROOT / "target" / "release" / f"ownstack-ide{_ext}").exists() else "lapce"
+BINARY = ROOT / "target" / "release" / f"{_name}{_ext}"
+BINARY_DEBUG = ROOT / "target" / "debug" / f"{_name}{_ext}"
 SCREENSHOT_DIR = ROOT / ".ownstack" / "doctor"
 MAX_ITERATIONS = 10
 E2E_STARTUP_TIMEOUT = 60  # seconds
@@ -53,17 +56,24 @@ OPENAI_MODEL = os.environ.get("DOCTOR_MODEL", "gpt-4o")
 
 # ─── Color output ────────────────────────────────────────────────────────────
 
+def _safe_print(msg, file=None):
+    """Print with fallback for encoding errors on Windows."""
+    try:
+        print(msg, file=file)
+    except UnicodeEncodeError:
+        print(msg.encode("utf-8", errors="replace").decode("ascii", errors="replace"), file=file)
+
 def info(msg):
-    print(f"\033[1;34m[doctor]\033[0m {msg}")
+    _safe_print(f"\033[1;34m[doctor]\033[0m {msg}")
 
 def success(msg):
-    print(f"\033[1;32m[doctor]\033[0m {msg}")
+    _safe_print(f"\033[1;32m[doctor]\033[0m {msg}")
 
 def warn(msg):
-    print(f"\033[1;33m[doctor]\033[0m {msg}")
+    _safe_print(f"\033[1;33m[doctor]\033[0m {msg}")
 
 def error(msg):
-    print(f"\033[1;31m[doctor]\033[0m {msg}", file=sys.stderr)
+    _safe_print(f"\033[1;31m[doctor]\033[0m {msg}", file=sys.stderr)
 
 
 # ─── Build ───────────────────────────────────────────────────────────────────
@@ -77,17 +87,19 @@ def build_ide(release=False):
         f"cargo build {mode}".split(),
         cwd=ROOT,
         capture_output=True,
-        text=True,
-        timeout=600,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
     )
 
+    stderr = result.stderr or ""
     if result.returncode != 0:
         error("Build failed!")
         # Extract just the error lines
-        errors = [l for l in result.stderr.splitlines() if "error" in l.lower()]
-        for e in errors[:20]:
+        err_lines = [l for l in stderr.splitlines() if "error" in l.lower()]
+        for e in err_lines[:20]:
             error(f"  {e}")
-        return False, result.stderr
+        return False, stderr
 
     success("Build succeeded.")
     return True, ""
@@ -100,8 +112,9 @@ def run_tests():
         ["cargo", "test", "-p", "ownstack-agent", "--lib"],
         cwd=ROOT,
         capture_output=True,
-        text=True,
-        timeout=600,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
     )
 
     # Also run app tests
@@ -109,8 +122,9 @@ def run_tests():
         ["cargo", "test", "-p", "lapce-app", "--lib", "--", "ownstack"],
         cwd=ROOT,
         capture_output=True,
-        text=True,
-        timeout=600,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
     )
 
     agent_ok = result.returncode == 0
@@ -243,6 +257,27 @@ def launch_ide(workspace=None):
 
 # ─── Screenshot & Vision Analysis ────────────────────────────────────────────
 
+def _windows_screenshot(path):
+    """Capture a screenshot on Windows using PowerShell and .NET."""
+    ps_script = f"""
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+$gfx = [System.Drawing.Graphics]::FromImage($bmp)
+$gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+$bmp.Save('{str(path).replace(chr(92), chr(92)+chr(92))}', [System.Drawing.Imaging.ImageFormat]::Png)
+$gfx.Dispose()
+$bmp.Dispose()
+"""
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_script],
+        timeout=10,
+        capture_output=True,
+    )
+    return path.exists()
+
+
 def take_screenshot(controller, iteration):
     """Take a screenshot via E2E driver. Returns path or None."""
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -252,8 +287,16 @@ def take_screenshot(controller, iteration):
         success(f"Screenshot saved: {path}")
         return path
     else:
-        warn(f"Screenshot failed: {result}")
-        # Fallback: try scrot/import directly
+        warn(f"E2E screenshot failed: {result}")
+        # Fallback 1: Windows native screenshot
+        if sys.platform == "win32":
+            try:
+                if _windows_screenshot(path):
+                    success(f"Screenshot saved (Windows fallback): {path}")
+                    return path
+            except Exception as e:
+                warn(f"Windows screenshot failed: {e}")
+        # Fallback 2: scrot (Linux)
         try:
             subprocess.run(
                 ["scrot", str(path)],
@@ -350,8 +393,11 @@ Respond ONLY with valid JSON:
         "messages": messages,
     }).encode()
 
+    api_base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    api_url = f"{api_base.rstrip('/')}/v1/messages"
+
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        api_url,
         data=body,
         headers={
             "x-api-key": ANTHROPIC_API_KEY,
@@ -375,38 +421,68 @@ Respond ONLY with valid JSON:
 
 
 def analyze_with_openai(screenshot_path, state, diagnostics, context):
-    """Send screenshot + context to GPT-4V for analysis."""
+    """Send screenshot + context to OpenAI-compatible provider for analysis.
+    Supports both Responses API (/v1/responses) and Chat Completions (/v1/chat/completions).
+    """
     import urllib.request
 
     image_data = encode_image(screenshot_path)
+    api_base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    wire_api = os.environ.get("DOCTOR_WIRE_API", "responses")
 
-    body = json.dumps({
-        "model": OPENAI_MODEL,
-        "max_tokens": 4096,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{image_data}",
-                    },
-                },
-                {
-                    "type": "text",
-                    "text": f"""Analyze this OwnStack IDE screenshot for visual/UX/functional issues.
+    prompt_text = f"""Analyze this OwnStack IDE screenshot for visual/UX/functional issues.
 State: {json.dumps(state) if state else 'N/A'}
 Diagnostics: {json.dumps(diagnostics) if diagnostics else 'none'}
 Context: {context}
-Respond with JSON: {{"status":"healthy"|"issues_found","summary":"...","issues":[{{"issue":"...","severity":"...","file":"...","fix":{{"old_text":"...","new_text":"..."}}}}]}}""",
+Respond with JSON: {{"status":"healthy"|"issues_found","summary":"...","issues":[{{"issue":"...","severity":"...","file":"...","fix":{{"old_text":"...","new_text":"..."}}}}]}}"""
+
+    if wire_api == "responses":
+        # OpenAI Responses API format
+        body = json.dumps({
+            "model": OPENAI_MODEL,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:image/png;base64,{image_data}",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": prompt_text,
+                        },
+                    ],
                 },
             ],
-        }],
-    }).encode()
+        }).encode()
+        endpoint = f"{api_base.rstrip('/')}/responses"
+    else:
+        # Chat Completions API format
+        body = json.dumps({
+            "model": OPENAI_MODEL,
+            "max_tokens": 4096,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{image_data}",
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt_text,
+                    },
+                ],
+            }],
+        }).encode()
+        endpoint = f"{api_base.rstrip('/')}/chat/completions"
 
-    api_base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
     req = urllib.request.Request(
-        f"{api_base}/chat/completions",
+        endpoint,
         data=body,
         headers={
             "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -417,7 +493,16 @@ Respond with JSON: {{"status":"healthy"|"issues_found","summary":"...","issues":
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read())
-            text = data["choices"][0]["message"]["content"]
+            # Extract text from response based on wire format
+            if wire_api == "responses":
+                text = ""
+                for item in data.get("output", []):
+                    if item.get("type") == "message":
+                        for part in item.get("content", []):
+                            if part.get("type") == "output_text":
+                                text += part.get("text", "")
+            else:
+                text = data["choices"][0]["message"]["content"]
             json_match = re.search(r'\{[\s\S]*\}', text)
             if json_match:
                 return json.loads(json_match.group())
@@ -477,6 +562,7 @@ def apply_fixes(issues):
 
 def generate_report(iterations_log):
     """Generate a markdown report of the doctor session."""
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     report_path = SCREENSHOT_DIR / "report.md"
     lines = [
         "# OwnStack Doctor Report",
@@ -537,7 +623,13 @@ def doctor_loop():
 
     # Phase 1: Initial build + tests
     info("Phase 1: Build & Test")
-    build_ok, build_errors = build_ide(release=False)
+    skip_build = os.environ.get("DOCTOR_SKIP_BUILD", "")
+    binary = BINARY if BINARY.exists() else BINARY_DEBUG
+    if skip_build or binary.exists():
+        info("Binary already exists, skipping build.")
+        build_ok, build_errors = True, ""
+    else:
+        build_ok, build_errors = build_ide(release=False)
     if not build_ok:
         error("Initial build failed. Cannot proceed with visual testing.")
         error("Attempting to fix build errors with AI...")
@@ -715,8 +807,11 @@ Provide fixes as JSON:
             }],
         }).encode()
 
+        api_base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+        api_url = f"{api_base.rstrip('/')}/v1/messages"
+
         req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
+            api_url,
             data=body,
             headers={
                 "x-api-key": ANTHROPIC_API_KEY,
