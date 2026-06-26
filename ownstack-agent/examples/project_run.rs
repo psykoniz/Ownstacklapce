@@ -23,7 +23,7 @@ async fn main() {
         test_command: Some("python test_calc.py".to_string()),
         max_units: 5,
     };
-    let mut runner = ProjectRunner::new(orch, ws.clone(), cfg);
+    let mut runner = ProjectRunner::new(orch, provider.clone(), ws.clone(), cfg);
 
     let goal = "Build a tiny Python calculator: a module calc.py exposing add(a,b) and sub(a,b), \
                 and a test_calc.py that imports from calc and uses assert to verify add(2,3)==5 and sub(5,2)==3. \
@@ -46,6 +46,10 @@ async fn main() {
     let missions = ws.join(".ownstack").join("missions");
     let mcount = std::fs::read_dir(&missions).map(|d| d.count()).unwrap_or(0);
     println!("persisted mission records: {}", mcount);
+
+    let lessons = ws.join(".ownstack").join("lessons.md");
+    println!("\n=== LEARN: lessons.md ===");
+    println!("{}", std::fs::read_to_string(&lessons).unwrap_or_else(|_| "(none)".into()));
 
     println!("\n--- workspace files ---");
     for e in std::fs::read_dir(&ws).into_iter().flatten().flatten() {

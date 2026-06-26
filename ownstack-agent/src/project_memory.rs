@@ -443,11 +443,58 @@ impl ProjectMemory {
             parts.push(format!("## Custom Instructions\n\n{}", prompts));
         }
 
+        // Lessons curated from past runs (LEARN phase).
+        let lessons = self.load_lessons();
+        if !lessons.is_empty() {
+            let recent: Vec<String> =
+                lessons.iter().rev().take(12).rev().cloned().collect();
+            let body = recent
+                .iter()
+                .map(|l| format!("- {l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            parts.push(format!("## Lessons Learned (from past runs)\n\n{body}"));
+        }
+
         if parts.is_empty() {
             String::new()
         } else {
             format!("# Project Memory\n\n{}", parts.join("\n\n---\n\n"))
         }
+    }
+
+    /// Load curated lessons (bullet lines) from `.ownstack/lessons.md`.
+    pub fn load_lessons(&self) -> Vec<String> {
+        let path = self.workspace.join(".ownstack").join("lessons.md");
+        std::fs::read_to_string(&path)
+            .ok()
+            .map(|c| {
+                c.lines()
+                    .filter_map(|l| l.trim_start().strip_prefix("- ").map(str::to_string))
+                    .filter(|s| !s.trim().is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Append curated lessons from a run to `.ownstack/lessons.md`.
+    pub fn append_lessons(&self, run_id: &str, lessons: &[String]) {
+        let lessons: Vec<&String> =
+            lessons.iter().filter(|l| !l.trim().is_empty()).collect();
+        if lessons.is_empty() {
+            return;
+        }
+        let dir = self.workspace.join(".ownstack");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("lessons.md");
+        let mut out =
+            std::fs::read_to_string(&path).unwrap_or_else(|_| "# Lessons\n".to_string());
+        out.push_str(&format!("\n<!-- run {run_id} -->\n"));
+        for l in &lessons {
+            out.push_str(&format!("- {}\n", l.trim()));
+        }
+        let _ = std::fs::write(&path, out);
+        info!("ProjectMemory: appended {} lesson(s) for run {run_id}", lessons.len());
     }
 }
 

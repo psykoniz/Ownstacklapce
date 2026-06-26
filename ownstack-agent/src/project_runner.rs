@@ -15,8 +15,11 @@
 use crate::mission::manager::MissionManager;
 use crate::mission::models::MissionStatus;
 use crate::orchestrator::AgentOrchestrator;
+use crate::project_memory::ProjectMemory;
+use crate::provider::{LlmMessage, LlmProvider, ProviderOptions};
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +62,9 @@ impl Default for ProjectConfig {
 pub struct ProjectRunner {
     orchestrator: AgentOrchestrator,
     manager: MissionManager,
+    memory: ProjectMemory,
+    /// Pure-completion provider for the LEARN curator (no tools).
+    curator: Arc<dyn LlmProvider + Send + Sync>,
     workspace: PathBuf,
     config: ProjectConfig,
 }
@@ -66,11 +72,13 @@ pub struct ProjectRunner {
 impl ProjectRunner {
     pub fn new(
         orchestrator: AgentOrchestrator,
+        curator: Arc<dyn LlmProvider + Send + Sync>,
         workspace: PathBuf,
         config: ProjectConfig,
     ) -> Self {
         let manager = MissionManager::new(&workspace);
-        Self { orchestrator, manager, workspace, config }
+        let memory = ProjectMemory::new(workspace.clone());
+        Self { orchestrator, manager, memory, curator, workspace, config }
     }
 
     /// Borrow the manager (e.g. to subscribe to events for UI streaming).
@@ -101,6 +109,12 @@ impl ProjectRunner {
         self.persist_work_units(goal, &units);
         self.manager.update_status(&mission_id, MissionStatus::Running, &format!("{} work units", units.len()));
 
+        // Project memory (rules + lessons from past runs) — prepended to IMPLEMENT.
+        let mem_prefix = self.memory.to_system_prompt();
+        if !mem_prefix.is_empty() {
+            self.manager.add_log(&mission_id, "injected project memory + lessons into context");
+        }
+
         // ── Per work-unit loop ──────────────────────────────────────────────
         let mut outcomes = Vec::new();
         let n = units.len();
@@ -109,9 +123,14 @@ impl ProjectRunner {
             self.manager.add_log(&mission_id, &format!("[unit {}/{}] {}", i + 1, n, desc));
 
             // IMPLEMENT
+            let implement_prompt = if mem_prefix.is_empty() {
+                format!("Work unit {}/{}: {desc}\nImplement it now using your tools.", i + 1, n)
+            } else {
+                format!("{mem_prefix}\n\n---\nWork unit {}/{}: {desc}\nImplement it now using your tools.", i + 1, n)
+            };
             let mut last_output = self
                 .orchestrator
-                .process(&format!("Work unit {}/{}: {desc}\nImplement it now using your tools.", i + 1, n))
+                .process(&implement_prompt)
                 .await
                 .unwrap_or_default();
 
@@ -172,6 +191,13 @@ impl ProjectRunner {
             outcomes.push(uo);
         }
 
+        // ── LEARN ───────────────────────────────────────────────────────────
+        let lessons = self.learn(goal, &outcomes).await;
+        if !lessons.is_empty() {
+            self.memory.append_lessons(&mission_id, &lessons);
+            self.manager.add_log(&mission_id, &format!("LEARN: curated {} lesson(s)", lessons.len()));
+        }
+
         let success = !outcomes.is_empty()
             && outcomes.iter().all(|u| u.approved && u.tests_passed != Some(false));
         let final_status = if success { MissionStatus::Completed } else { MissionStatus::NeedsReview };
@@ -179,6 +205,38 @@ impl ProjectRunner {
         info!("ProjectRunner: '{mission_id}' success={success} units={}", outcomes.len());
 
         ProjectOutcome { mission_id, goal: goal.to_string(), units: outcomes, success }
+    }
+
+    /// LEARN phase: ask the curator model to distill durable lessons from the run.
+    async fn learn(&self, goal: &str, outcomes: &[UnitOutcome]) -> Vec<String> {
+        let summary = outcomes
+            .iter()
+            .enumerate()
+            .map(|(i, u)| {
+                format!(
+                    "unit {}: tests_passed={:?} repairs={} reviews={} approved={} — {}",
+                    i + 1, u.tests_passed, u.repair_attempts, u.review_cycles, u.approved, clip(&u.description, 80)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sys = "You are a memory curator. From a software project run, extract 1-3 short, \
+                   durable, reusable lessons that would help future similar projects (about \
+                   approach, pitfalls, or what worked). Output ONLY a plain list, one lesson per \
+                   line prefixed with '- '. No preamble, no numbering.";
+        let user = format!("Goal: {goal}\n\nOutcome:\n{summary}");
+        let messages = vec![LlmMessage::system(sys), LlmMessage::user(user)];
+        match self.curator.complete(messages, None, ProviderOptions::default()).await {
+            Ok(resp) => resp
+                .content
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|l| l.trim_start().strip_prefix("- ").map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .take(3)
+                .collect(),
+            Err(_) => Vec::new(),
+        }
     }
 
     fn persist_work_units(&self, goal: &str, units: &[String]) {
