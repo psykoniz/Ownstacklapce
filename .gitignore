@@ -31,9 +31,11 @@ temp_ownstack/
 .ownstack/telemetry/
 .ownstack/multivers/
 .ownstack/doctor/
+.ownstack/evals/
 **/.ownstack/telemetry/
 **/.ownstack/multivers/
 **/.ownstack/doctor/
+**/.ownstack/evals/
 
 # Python / PyInstaller
 __pycache__/
