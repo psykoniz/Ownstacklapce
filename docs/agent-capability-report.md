@@ -75,8 +75,25 @@ Vérifié par `exec_probe.rs` (les redirections créent les fichiers) et re-test
 | **MCP client** | **88** | ✅ Round-trip complet : spawn serveur → `connect` → `tools/call` `echo` → `"hello-mcp"` (0.1s). Intégration solide. |
 | **Vision** (multi-modale) | **85** | ✅ gpt-5.5 via codex-everywhere décrit un screenshot avec exactitude (« dark-themed OwnStack editor… file explorer, chat panel, terminal »). |
 
+## 4ᵉ vague — testée en réel (harness `realtest4.rs`)
+
+| Capacité | Note /100 | Constat |
+|----------|-----------|---------|
+| **Git** (status/diff) | **85** | `git_status` correct (`M app.py`). Opérations git fiables via sandbox. |
+| **Git suggest_commit_message** | **85** | gpt-5.5 génère un message conventionnel exact à partir du diff : « Add subtraction helper function » (3.7s). |
+| **Multivers** (A/B infra) | **72** | `fork_and_run` exécute des variantes, score et désigne un `winner`. Le 2ᵉ variant n'est pas remonté dans `results` (à creuser). |
+| **LSP** (rust-analyzer) | **72** | ✅ `lsp_auto_connect` → « Connected to LSP server: rust-analyzer ». Diagnostics nécessitent un `textDocument/didOpen` préalable ; le client ne se ferme pas proprement (backtrace « client exited without proper shutdown »). |
+
+| **ACP** (stdio JSON-RPC) | **85** | Round-trip complet : `initialize` (capabilities: modes ask/auto/plan, image, streaming, tools), `session/new`, `session/prompt` « 6×7 » → streamé « 42 » via `session/update` → `stopReason: end_turn`. Éditeurs externes (Zed, …) peuvent piloter l'agent. |
+
+## Observation infra — processus agent orphelins
+Lancer l'IDE spawn un process enfant `ownstack-agent` (bridge). Lors des tests, des
+terminaisons forcées du parent (IDE) ont laissé jusqu'à **24 `ownstack-agent` orphelins**
+(consommant plusieurs GB de RAM). À vérifier : la fermeture *normale* de l'IDE tue-t-elle bien
+l'arbre de process ? Sinon, ajouter un kill du child agent au shutdown (job object / process group).
+
 ## Capacités encore NON testées en runtime
-`MultiversToolkit` (A/B infra), `GitToolkit`, `LspToolkit`, `InfraSense`, mode ACP (stdio JSON-RPC).
+`InfraSense` (détection d'infra).
 
 ## Réponse à « peut-il faire un projet en autonomie ? »
 **Oui pour les tâches centrées fichiers/code** (création multi-fichiers, édition, génération) — démontré en réel. **Avec réserves** sur les étapes nécessitant le shell (build/run/test via redirections ou enchaînements) tant que le wrap shell Windows n'est pas ajouté. Avec gpt-5.5 + la correction exec, l'autonomie bout-en-bout serait nettement plus fiable.
