@@ -5,6 +5,27 @@ Rendre l'IDE OwnStack visuellement clean, beau et ergonomique en identifiant et 
 
 ---
 
+## Revue panneau par panneau (sweep « continue sur tout », 2026-06-26)
+Chaque vue capturée via le driver E2E (`scripts/doctor.py` + commandes workbench).
+Captures dans `.ownstack/doctor/` (gitignored) : `verify_rebuild.png`, `state_palette.png`,
+`state_audit.png`, `state_onboarding.png`, crops `crop_*.png`.
+
+| Vue | Capture | Verdict |
+|-----|---------|---------|
+| Zone éditeur vide | verify_rebuild | ✅ placeholder OwnStack (fix `main_split`) |
+| Racine File Explorer | crop_root | ✅ nom de dossier seul, propre |
+| Palette AI (`ownstack.toggle_palette`) | crop_palette | ✅ **fix** : chips wrappent dans le cadre (flex_wrap déplacé) |
+| Overlay Audit (`ownstack.toggle_audit`) | state_audit | ✅ en-tête + filtres + état vide, correct |
+| Onboarding (`OWNSTACK_FORCE_ONBOARDING=1`) | state_onboarding | ✅ modal + backdrop, badge Step x/5, dots, progress, Skip/Next — pro |
+| Chat empty-state | (code) | ✅ icône, tips raccourcis, soigné |
+| MCP panel | (code) | ✅ en-tête + add/reload + état vide |
+| Carte SYSTEM (chat) | state_palette | OK à largeur normale (Floem wrap par défaut) |
+
+**Hook ajouté** : `OWNSTACK_FORCE_ONBOARDING=1` force l'affichage du wizard même en mode E2E
+(sinon l'onboarding est `mark_complete()` au démarrage E2E) — pour screenshots/tests.
+
+---
+
 ## Corrections appliquées
 
 ### 1. Welcome Tab Placeholder (FAIT)

@@ -4043,8 +4043,9 @@ pub fn launch() {
         cli_window_size,
     };
 
-    // First-launch onboarding (OwnStack specific) — skip in E2E mode.
-    if is_e2e {
+    // First-launch onboarding (OwnStack specific) — skipped in E2E mode unless
+    // OWNSTACK_FORCE_ONBOARDING is set (lets tests screenshot the wizard).
+    if is_e2e && std::env::var("OWNSTACK_FORCE_ONBOARDING").is_err() {
         app_data.onboarding.mark_complete();
     } else {
         app_data.onboarding.start();
