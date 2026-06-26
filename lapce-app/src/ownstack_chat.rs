@@ -95,6 +95,7 @@ pub enum AgentMode {
     Ask,
     Auto,
     Plan,
+    Project,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +117,7 @@ impl std::fmt::Display for AgentMode {
             AgentMode::Ask => write!(f, "Ask"),
             AgentMode::Auto => write!(f, "Auto"),
             AgentMode::Plan => write!(f, "Plan"),
+            AgentMode::Project => write!(f, "Project"),
         }
     }
 }
@@ -125,6 +127,7 @@ impl AgentMode {
         match value.to_ascii_lowercase().as_str() {
             "auto" => Self::Auto,
             "plan" => Self::Plan,
+            "project" => Self::Project,
             _ => Self::Ask,
         }
     }
@@ -134,6 +137,7 @@ impl AgentMode {
             AgentModeState::Ask => Self::Ask,
             AgentModeState::Auto => Self::Auto,
             AgentModeState::Plan => Self::Plan,
+            AgentModeState::Project => Self::Project,
         }
     }
 
@@ -142,6 +146,7 @@ impl AgentMode {
             AgentMode::Ask => AgentModeState::Ask,
             AgentMode::Auto => AgentModeState::Auto,
             AgentMode::Plan => AgentModeState::Plan,
+            AgentMode::Project => AgentModeState::Project,
         }
     }
 
@@ -151,6 +156,7 @@ impl AgentMode {
             AgentMode::Ask => crate::ownstack_theme::ACCENT,
             AgentMode::Auto => crate::ownstack_theme::MODE_AUTO,
             AgentMode::Plan => crate::ownstack_theme::MODE_PLAN,
+            AgentMode::Project => crate::ownstack_theme::MODE_AUTO,
         }
     }
 
@@ -160,6 +166,7 @@ impl AgentMode {
             AgentMode::Ask => "💬 Ask",
             AgentMode::Auto => "⚡ Auto",
             AgentMode::Plan => "🗺 Plan",
+            AgentMode::Project => "🏗 Project",
         }
     }
 }
@@ -521,13 +528,14 @@ impl OwnStackChatData {
         });
     }
 
-    /// Cycle through agent modes: Ask → Auto → Plan → Ask
+    /// Cycle through agent modes: Ask → Auto → Plan → Project → Ask
     pub fn cycle_mode(&self) {
         let current = self.agent_mode.get_untracked();
         let next = match current {
             AgentMode::Ask => AgentMode::Auto,
             AgentMode::Auto => AgentMode::Plan,
-            AgentMode::Plan => AgentMode::Ask,
+            AgentMode::Plan => AgentMode::Project,
+            AgentMode::Project => AgentMode::Ask,
         };
         self.set_mode(next);
     }
@@ -624,6 +632,7 @@ pub fn ownstack_chat_panel(
                             AgentMode::Ask  => "Ask",
                             AgentMode::Plan => "Plan",
                             AgentMode::Auto => "Auto",
+                            AgentMode::Project => "Project",
                         };
                         let mc = mode.color();
                         let target = mode.clone();
@@ -654,6 +663,7 @@ pub fn ownstack_chat_panel(
                         mode_segment(chat_data.clone(), AgentMode::Ask),
                         mode_segment(chat_data.clone(), AgentMode::Plan),
                         mode_segment(chat_data.clone(), AgentMode::Auto),
+                        mode_segment(chat_data.clone(), AgentMode::Project),
                     ))
                     .style(|s| {
                         s.items_center()

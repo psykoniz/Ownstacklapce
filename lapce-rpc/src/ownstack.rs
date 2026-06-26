@@ -6,6 +6,8 @@ pub enum AgentModeState {
     Ask,
     Auto,
     Plan,
+    /// Structured project build: bounded plan → implement → critique-review.
+    Project,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

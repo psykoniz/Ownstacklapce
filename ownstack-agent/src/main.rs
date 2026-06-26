@@ -124,6 +124,7 @@ impl RuntimeUiState {
         {
             Some("auto") => AgentModeState::Auto,
             Some("plan") => AgentModeState::Plan,
+            Some("project") => AgentModeState::Project,
             _ => AgentModeState::Ask,
         };
 
@@ -139,6 +140,7 @@ fn runtime_mode_from_rpc(mode: &AgentModeState) -> AgentRunMode {
         AgentModeState::Ask => AgentRunMode::Ask,
         AgentModeState::Auto => AgentRunMode::Auto,
         AgentModeState::Plan => AgentRunMode::Plan,
+        AgentModeState::Project => AgentRunMode::Project,
     }
 }
 
@@ -814,6 +816,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // RAG enrichment happens inside the orchestrator
                     // (`stream_process` searches its semantic index), so no
                     // manual injection is needed here.
+                    if matches!(runtime_state.mode, AgentModeState::Project) {
+                        // Project mode: bounded plan → implement → critique-review
+                        // build. Reports the structured final result as one chunk.
+                        let r = orchestrator.execute_mission(&prompt).await;
+                        let text = match &r {
+                            Ok(t) => t.clone(),
+                            Err(e) => format!("Project run failed: {e}"),
+                        };
+                        send_rpc_notification(OwnStackRpc::AiStreamChunk {
+                            content_delta: Some(text),
+                            tool_call_delta: None,
+                            finish_reason: Some("stop".to_string()),
+                        });
+                        match r {
+                            Ok(_) => runtime_state.run_state = AgentRunState::Idle,
+                            Err(e) => {
+                                error!("Project run error: {}", e);
+                                runtime_state.run_state = AgentRunState::Error;
+                            }
+                        }
+                        emit_runtime_state(&runtime_state);
+                        send_budget_context_updates(
+                            orchestrator.budget_snapshot(),
+                            orchestrator.context_snapshot(),
+                        );
+                    } else {
                     let result = orchestrator
                         .stream_process(
                             &prompt,
@@ -915,6 +943,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             orchestrator.budget_snapshot(),
                             orchestrator.context_snapshot(),
                         );
+                    }
                     }
                 }
                 OwnStackRpc::SetAgentMode { mode } => {

@@ -422,6 +422,9 @@ pub fn status(
                                     crate::ownstack_chat::AgentMode::Plan => {
                                         config.color(LapceColor::LAPCE_WARN)
                                     }
+                                    crate::ownstack_chat::AgentMode::Project => {
+                                        config.color(LapceColor::SOURCE_CONTROL_ADDED)
+                                    }
                                 };
 
                                 s.padding_horiz(8.0)

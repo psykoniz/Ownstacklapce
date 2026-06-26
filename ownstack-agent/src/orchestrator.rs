@@ -265,6 +265,8 @@ pub enum AgentRunMode {
     Ask,
     Auto,
     Plan,
+    /// Structured project build: bounded plan → implement → critique-review.
+    Project,
 }
 
 impl AgentRunMode {
@@ -272,6 +274,7 @@ impl AgentRunMode {
         match value.to_ascii_lowercase().as_str() {
             "auto" => Self::Auto,
             "plan" => Self::Plan,
+            "project" => Self::Project,
             _ => Self::Ask,
         }
     }

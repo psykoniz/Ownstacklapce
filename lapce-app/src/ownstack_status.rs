@@ -233,6 +233,7 @@ fn mode_label(mode: &AgentMode) -> &'static str {
         AgentMode::Ask => "Ask",
         AgentMode::Auto => "Auto",
         AgentMode::Plan => "Plan",
+        AgentMode::Project => "Project",
     }
 }
 
