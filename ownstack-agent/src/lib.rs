@@ -24,6 +24,7 @@ pub mod orchestrator;
 pub mod plugins;
 pub mod policy_approval;
 pub mod project_memory;
+pub mod project_runner;
 pub mod provider;
 pub mod providers;
 pub mod repomap;
