@@ -817,25 +817,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // (`stream_process` searches its semantic index), so no
                     // manual injection is needed here.
                     if matches!(runtime_state.mode, AgentModeState::Project) {
-                        // Project mode: bounded plan → implement → critique-review
-                        // build. Reports the structured final result as one chunk.
-                        let r = orchestrator.execute_mission(&prompt).await;
-                        let text = match &r {
-                            Ok(t) => t.clone(),
-                            Err(e) => format!("Project run failed: {e}"),
-                        };
+                        // Project mode: the bounded SDLC state machine
+                        // (PLAN → IMPLEMENT → TEST⇄REPAIR → REVIEW → LEARN) with
+                        // work-unit persistence. Runs on its own orchestrator so
+                        // the chat session's context is untouched.
+                        let mut porch = AgentOrchestrator::new(
+                            provider.clone(),
+                            workspace.clone(),
+                            128_000,
+                            &format!("{session_id}-project"),
+                        );
+                        porch.register_toolkit(core_toolkit.clone());
+                        porch.set_mode(AgentRunMode::Auto);
+                        let mut runner =
+                            ownstack_agent::project_runner::ProjectRunner::new(
+                                porch,
+                                provider.clone(),
+                                workspace.clone(),
+                                ownstack_agent::project_runner::ProjectConfig::default(),
+                            );
+                        let outcome = runner.run(&prompt).await;
+                        let units = outcome
+                            .units
+                            .iter()
+                            .enumerate()
+                            .map(|(i, u)| {
+                                format!(
+                                    "  • unit {}: tests={:?} repairs={} reviews={} approved={}",
+                                    i + 1, u.tests_passed, u.repair_attempts, u.review_cycles, u.approved
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let text = format!(
+                            "Project build {} — {} work-unit(s). Work-units persisted to .ownstack/, lessons to .ownstack/lessons.md.\n{}",
+                            if outcome.success { "completed" } else { "finished (needs review)" },
+                            outcome.units.len(),
+                            units,
+                        );
                         send_rpc_notification(OwnStackRpc::AiStreamChunk {
                             content_delta: Some(text),
                             tool_call_delta: None,
                             finish_reason: Some("stop".to_string()),
                         });
-                        match r {
-                            Ok(_) => runtime_state.run_state = AgentRunState::Idle,
-                            Err(e) => {
-                                error!("Project run error: {}", e);
-                                runtime_state.run_state = AgentRunState::Error;
-                            }
-                        }
+                        runtime_state.run_state = AgentRunState::Idle;
                         emit_runtime_state(&runtime_state);
                         send_budget_context_updates(
                             orchestrator.budget_snapshot(),

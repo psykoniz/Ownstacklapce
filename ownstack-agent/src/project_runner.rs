@@ -64,7 +64,8 @@ pub struct ProjectRunner {
     manager: MissionManager,
     memory: ProjectMemory,
     /// Pure-completion provider for the LEARN curator (no tools).
-    curator: Arc<dyn LlmProvider + Send + Sync>,
+    /// `LlmProvider: Send + Sync`, so the bare trait object is already thread-safe.
+    curator: Arc<dyn LlmProvider>,
     workspace: PathBuf,
     config: ProjectConfig,
 }
@@ -72,7 +73,7 @@ pub struct ProjectRunner {
 impl ProjectRunner {
     pub fn new(
         orchestrator: AgentOrchestrator,
-        curator: Arc<dyn LlmProvider + Send + Sync>,
+        curator: Arc<dyn LlmProvider>,
         workspace: PathBuf,
         config: ProjectConfig,
     ) -> Self {
