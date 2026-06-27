@@ -3965,7 +3965,8 @@ pub fn launch() {
     crate::update::cleanup();
 
     if let Err(err) = lapce_proxy::register_lapce_path() {
-        tracing::error!("{:?}", err);
+        // Non-fatal: only affects shell `lapce` integration. Don't shout on startup.
+        tracing::debug!("register_lapce_path skipped: {:?}", err);
     }
     let db = match LapceDb::new() {
         Ok(db) => Arc::new(db),

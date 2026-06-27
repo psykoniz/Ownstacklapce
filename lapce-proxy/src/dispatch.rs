@@ -197,8 +197,74 @@ pub struct Dispatcher {
     notified_missing_lsps: HashSet<String>,
 }
 
+#[cfg(windows)]
+mod windows_job {
+    use std::os::windows::io::AsRawHandle;
+    use std::ptr;
+    use windows_sys::Win32::Foundation::*;
+    use windows_sys::Win32::System::JobObjects::*;
+
+    /// A Windows job object configured to kill all assigned processes when the
+    /// job handle closes — which happens when this process (the IDE) exits,
+    /// including on crash / force-kill. Holding it ties the agent's lifetime
+    /// to the IDE's.
+    pub struct WindowsJob {
+        handle: HANDLE,
+    }
+
+    impl WindowsJob {
+        pub fn new() -> std::io::Result<Self> {
+            let handle = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+            if handle == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            unsafe {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION =
+                    std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags =
+                    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()
+                        as u32,
+                ) == 0
+                {
+                    let err = std::io::Error::last_os_error();
+                    CloseHandle(handle);
+                    return Err(err);
+                }
+            }
+            Ok(Self { handle })
+        }
+
+        pub fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
+            let res = unsafe {
+                AssignProcessToJobObject(self.handle, child.as_raw_handle() as HANDLE)
+            };
+            if res == 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl Drop for WindowsJob {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
 pub struct NativeAgent {
     pub child: Child,
+    /// Kept alive so the agent dies with the IDE (closed on IDE exit/crash).
+    #[cfg(windows)]
+    _job: Option<windows_job::WindowsJob>,
 }
 
 impl NativeAgent {
@@ -242,7 +308,25 @@ impl NativeAgent {
                         }
                     }
                 });
-                Some(Self { child })
+                #[cfg(windows)]
+                let _job = match windows_job::WindowsJob::new() {
+                    Ok(job) => match job.assign(&child) {
+                        Ok(()) => Some(job),
+                        Err(e) => {
+                            tracing::warn!("Failed to assign agent to job object: {e}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!("Failed to create agent job object: {e}");
+                        None
+                    }
+                };
+                Some(Self {
+                    child,
+                    #[cfg(windows)]
+                    _job,
+                })
             }
             Err(e) => {
                 tracing::error!("Failed to spawn ownstack-agent: {}", e);

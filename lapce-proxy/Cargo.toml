@@ -68,3 +68,8 @@ path = "../vendor/wasi-experimental-http-wasmtime"
 [target.'cfg(target_os = "macos")'.dependencies.locale_config]
 git    = "https://github.com/lapce/locale_config.git"
 branch = "lapce"
+
+# Job object so the spawned agent is killed even if the IDE crashes / is force-killed.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version  = "0.52"
+features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"]
