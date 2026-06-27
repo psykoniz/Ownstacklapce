@@ -60,6 +60,7 @@ const OWNSTACK_ONBOARDING_STATE_FILE: &str = "ownstack-onboarding.json";
 const OWNSTACK_KEYRING_SERVICE: &str = "OwnStack IDE";
 const OPENROUTER_KEY_ENTRY: &str = "openrouter_api_key";
 const ANTHROPIC_KEY_ENTRY: &str = "anthropic_api_key";
+const OPENAI_KEY_ENTRY: &str = "openai_api_key";
 
 fn ownstack_executable_name(base: &str) -> String {
     format!("{base}{}", std::env::consts::EXE_SUFFIX)
@@ -109,6 +110,12 @@ fn apply_ownstack_runtime_env(cmd: &mut Command) {
     if let Some(anthropic_key) = read_secret(ANTHROPIC_KEY_ENTRY) {
         cmd.env("ANTHROPIC_API_KEY", anthropic_key);
     }
+    if let Some(openai_key) = read_secret(OPENAI_KEY_ENTRY) {
+        cmd.env("OPENAI_API_KEY", openai_key);
+    }
+    // Persistent OpenAI-compatible provider config (e.g. codex-everywhere) so the
+    // user configures once instead of exporting env vars before each launch.
+    apply_provider_config(cmd);
 
     if let Some(state) = load_onboarding_state() {
         if !state.completed {
@@ -132,6 +139,47 @@ fn apply_ownstack_runtime_env(cmd: &mut Command) {
                 cmd.env("OLLAMA_HOST", host);
             }
         }
+    }
+}
+
+fn ownstack_home_config() -> Option<PathBuf> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))?;
+    Some(PathBuf::from(home).join(".ownstack").join("provider.json"))
+}
+
+/// Reads `~/.ownstack/provider.json` and exports the OpenAI-compatible provider
+/// settings to the agent. Shape: `{ provider, base_url, model, wire_api, api_key }`.
+fn apply_provider_config(cmd: &mut Command) {
+    let Some(path) = ownstack_home_config() else {
+        return;
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return;
+    };
+    let getstr = |k: &str| {
+        cfg.get(k)
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    if let Some(v) = getstr("provider") {
+        cmd.env("OWNSTACK_PROVIDER", v);
+    }
+    if let Some(v) = getstr("base_url") {
+        cmd.env("OPENAI_BASE_URL", v);
+    }
+    if let Some(v) = getstr("model") {
+        cmd.env("OPENAI_MODEL", v);
+    }
+    if let Some(v) = getstr("wire_api") {
+        cmd.env("OPENAI_WIRE_API", v);
+    }
+    if let Some(v) = getstr("api_key") {
+        cmd.env("OPENAI_API_KEY", v);
     }
 }
 
@@ -214,6 +262,29 @@ impl NativeAgent {
             stdin.flush()?;
         }
         Ok(())
+    }
+}
+
+impl Drop for NativeAgent {
+    fn drop(&mut self) {
+        // The agent spawns its own children (MCP servers, exec sandboxes). A plain
+        // Child drop does not kill them on Windows, which left orphaned
+        // ownstack-agent processes. Kill the whole process tree on shutdown.
+        let pid = self.child.id();
+        let _ = self.child.kill();
+        #[cfg(windows)]
+        {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = pid; // killed above; descendants reparent to init
+        }
     }
 }
 
