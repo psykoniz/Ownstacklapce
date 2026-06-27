@@ -558,6 +558,8 @@ impl HealerToolkit {
             "You are a remediation assistant. Suggest safe shell commands to fix a failing development command.\n\
 Return ONLY JSON: {{\"suggested_fixes\": [\"cmd1\", \"cmd2\"]}}.\n\
 Do not include prose.\n\
+You MAY: install a missing dependency (pip/npm/cargo add), create a missing file \
+via redirection (e.g. echo \"...\" > path), or fix a config/command typo.\n\
 The commands must stay in the current workspace and avoid privileged/system operations.\n\n\
 Original command:\n{}\n\n\
 Failure type:\n{}\n\n\
@@ -588,7 +590,13 @@ Output snippet:\n{}",
         };
 
         let content = response.content.unwrap_or_default();
-        let parsed = serde_json::from_str::<LlmFixResponse>(&content);
+        // Models often wrap JSON in ```json fences or add prose; extract the
+        // outermost object so valid fixes aren't silently dropped on parse.
+        let cleaned = match (content.find('{'), content.rfind('}')) {
+            (Some(a), Some(b)) if b > a => &content[a..=b],
+            _ => content.as_str(),
+        };
+        let parsed = serde_json::from_str::<LlmFixResponse>(cleaned);
         match parsed {
             Ok(payload) => payload
                 .suggested_fixes

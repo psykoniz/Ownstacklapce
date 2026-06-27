@@ -174,6 +174,35 @@ fn build_fim_engine() -> ownstack_agent::fim::FimEngine {
         }
     }
 
+    // OpenAI-compatible FIM (e.g. codex-everywhere). Opt-in (FIM via a large
+    // remote model has typing latency), enabled by OWNSTACK_FIM_BACKEND=openai.
+    if backend_pref == "openai" || backend_pref == "openai-compatible" {
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            let base = std::env::var("OPENAI_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com".to_string());
+            let base = base.trim_end_matches('/');
+            // complete_openrouter posts to {base}/chat/completions; ensure /v1.
+            let base_url = if base.ends_with("/v1") {
+                base.to_string()
+            } else {
+                format!("{base}/v1")
+            };
+            let model = std::env::var("OWNSTACK_FIM_MODEL")
+                .or_else(|_| std::env::var("OPENAI_MODEL"))
+                .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+            return FimEngine::new(FimConfig {
+                backend: FimBackend::OpenAiCompatible,
+                model,
+                base_url,
+                api_key: key,
+                // Remote chat models are far slower than local FIM; the default
+                // 800ms would always time out. Trade typing latency for it.
+                timeout_ms: 20_000,
+                ..Default::default()
+            });
+        }
+    }
+
     let base_url = std::env::var("OLLAMA_HOST")
         .unwrap_or_else(|_| "http://localhost:11434".to_string());
     let model = std::env::var("OWNSTACK_FIM_MODEL")

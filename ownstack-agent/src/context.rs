@@ -139,10 +139,23 @@ impl ContextManager {
         system_tokens + message_tokens
     }
 
-    /// Trim oldest messages if we exceed token limit
+    /// Trim oldest messages if we exceed token limit.
+    ///
+    /// Overflow policy: truncate-and-continue (sliding window over the oldest
+    /// turns). Surfaced via a warning so context overflow is never silent — a
+    /// full LLM-summarize policy can replace the body later.
     fn trim_if_needed(&mut self) {
+        let before = self.messages.len();
         while self.estimated_tokens() > self.max_tokens && self.messages.len() > 1 {
             self.messages.remove(0);
+        }
+        let dropped = before - self.messages.len();
+        if dropped > 0 {
+            tracing::warn!(
+                "ContextManager: context overflow — trimmed {dropped} oldest message(s) to fit ~{} tokens (now {} msgs)",
+                self.max_tokens,
+                self.messages.len(),
+            );
         }
     }
 

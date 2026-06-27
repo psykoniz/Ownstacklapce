@@ -24,6 +24,9 @@ pub enum FimBackend {
     Ollama,
     /// OpenRouter network API.
     OpenRouter,
+    /// Any OpenAI-compatible chat-completions endpoint (e.g. codex-everywhere),
+    /// using the same chat-as-FIM mechanism as OpenRouter.
+    OpenAiCompatible,
 }
 
 /// Configuration for a FIM completion engine.
@@ -153,7 +156,7 @@ impl FimEngine {
     ) -> Result<String, String> {
         match self.config.backend {
             FimBackend::Ollama => self.complete_ollama(prefix, suffix).await,
-            FimBackend::OpenRouter => {
+            FimBackend::OpenRouter | FimBackend::OpenAiCompatible => {
                 self.complete_openrouter(prefix, suffix).await
             }
         }
