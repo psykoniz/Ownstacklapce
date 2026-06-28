@@ -19,7 +19,9 @@ const ONBOARDING_STATE_FILE: &str = "ownstack-onboarding.json";
 const KEYRING_SERVICE: &str = "OwnStack IDE";
 const OPENROUTER_KEY_ENTRY: &str = "openrouter_api_key";
 const ANTHROPIC_KEY_ENTRY: &str = "anthropic_api_key";
+const OPENAI_KEY_ENTRY: &str = "openai_api_key";
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
+const PROVIDER_LABEL_OPENAI: &str = "OpenAI-compatible";
 
 fn keyring_backend_label() -> &'static str {
     #[cfg(target_os = "windows")]
@@ -42,6 +44,10 @@ struct OnboardingState {
     chosen_provider: Option<String>,
     chosen_mode: Option<String>,
     ollama_host: Option<String>,
+    #[serde(default)]
+    openai_base_url: Option<String>,
+    #[serde(default)]
+    openai_model: Option<String>,
 }
 
 /// Read persisted onboarding mode preference.
@@ -58,9 +64,13 @@ pub struct OnboardingData {
     pub chosen_mode: RwSignal<String>,
     pub openrouter_api_key: RwSignal<String>,
     pub anthropic_api_key: RwSignal<String>,
+    pub openai_api_key: RwSignal<String>,
+    pub openai_base_url: RwSignal<String>,
+    pub openai_model: RwSignal<String>,
     pub ollama_host: RwSignal<String>,
     pub openrouter_key_saved: RwSignal<bool>,
     pub anthropic_key_saved: RwSignal<bool>,
+    pub openai_key_saved: RwSignal<bool>,
     /// Toggle: show/hide the API key in plaintext
     pub show_api_key: RwSignal<bool>,
 }
@@ -88,6 +98,13 @@ impl OnboardingData {
             ),
             openrouter_api_key: cx.create_rw_signal(String::new()),
             anthropic_api_key: cx.create_rw_signal(String::new()),
+            openai_api_key: cx.create_rw_signal(String::new()),
+            openai_base_url: cx.create_rw_signal(
+                state.openai_base_url.unwrap_or_default(),
+            ),
+            openai_model: cx.create_rw_signal(
+                state.openai_model.unwrap_or_default(),
+            ),
             ollama_host: cx.create_rw_signal(
                 state
                     .ollama_host
@@ -97,6 +114,8 @@ impl OnboardingData {
                 .create_rw_signal(secret_exists(OPENROUTER_KEY_ENTRY)),
             anthropic_key_saved: cx
                 .create_rw_signal(secret_exists(ANTHROPIC_KEY_ENTRY)),
+            openai_key_saved: cx
+                .create_rw_signal(secret_exists(OPENAI_KEY_ENTRY)),
             show_api_key: cx.create_rw_signal(false),
         }
     }
@@ -124,6 +143,8 @@ impl OnboardingData {
             },
             chosen_mode: Some(self.chosen_mode.get_untracked()),
             ollama_host: Some(self.ollama_host.get_untracked()),
+            openai_base_url: Some(self.openai_base_url.get_untracked()),
+            openai_model: Some(self.openai_model.get_untracked()),
         };
         save_state_file(&state);
         self.active.set(false);
@@ -183,6 +204,24 @@ impl OnboardingData {
             self.anthropic_api_key.set(String::new());
         }
 
+        let openai = self.openai_api_key.get_untracked();
+        if !openai.trim().is_empty()
+            && save_secret(OPENAI_KEY_ENTRY, openai.trim())
+        {
+            self.openai_key_saved.set(true);
+            self.openai_api_key.set(String::new());
+        }
+
+        let openai_base = self.openai_base_url.get_untracked();
+        let openai_model = self.openai_model.get_untracked();
+        // For an OpenAI-compatible provider, persist the non-secret settings to
+        // ~/.ownstack/provider.json (the proxy reads it to configure the agent).
+        if self.chosen_provider.get_untracked() == PROVIDER_LABEL_OPENAI
+            && !openai_base.trim().is_empty()
+        {
+            write_provider_json(openai_base.trim(), openai_model.trim());
+        }
+
         // Only record a chosen provider if a credential actually exists, so a
         // finish-without-key does not leave the agent on an unreachable provider.
         let state = OnboardingState {
@@ -194,6 +233,8 @@ impl OnboardingData {
             },
             chosen_mode: Some(self.chosen_mode.get_untracked()),
             ollama_host: Some(self.ollama_host.get_untracked()),
+            openai_base_url: Some(openai_base),
+            openai_model: Some(openai_model),
         };
         save_state_file(&state);
     }
@@ -578,10 +619,12 @@ fn provider_setup_step(
     let selected_openrouter = data.clone();
     let selected_anthropic = data.clone();
     let selected_ollama = data.clone();
+    let selected_openai = data.clone();
 
     v_stack((
         provider_button("OpenRouter", data.clone(), config),
         provider_button("Anthropic", data.clone(), config),
+        provider_button(PROVIDER_LABEL_OPENAI, data.clone(), config),
         provider_button("Local (Ollama)", data.clone(), config),
         provider_secret_input(
             "OpenRouter API key",
@@ -614,6 +657,31 @@ fn provider_setup_step(
         ollama_host_input(data.ollama_host, config).style(move |s| {
             s.apply_if(
                 selected_ollama.chosen_provider.get() != "Local (Ollama)",
+                |s| s.hide(),
+            )
+        }),
+        // OpenAI-compatible custom provider (e.g. codex-everywhere): base URL +
+        // model are persisted to ~/.ownstack/provider.json; the key to keyring.
+        v_stack((
+            labeled_text_input(
+                "Base URL",
+                "https://codex-everywhere.com",
+                data.openai_base_url,
+                config,
+            ),
+            labeled_text_input("Model", "gpt-5.5", data.openai_model, config),
+            provider_secret_input(
+                "API key",
+                "sk-...",
+                data.openai_api_key,
+                data.openai_key_saved,
+                data.show_api_key,
+                config,
+            ),
+        ))
+        .style(move |s| {
+            s.flex_col().gap(8.0).width_full().apply_if(
+                selected_openai.chosen_provider.get() != PROVIDER_LABEL_OPENAI,
                 |s| s.hide(),
             )
         }),
@@ -854,6 +922,30 @@ fn provider_secret_input(
     .style(|s| s.width_full().gap(6.0))
 }
 
+fn labeled_text_input(
+    label_text: &'static str,
+    placeholder: &'static str,
+    value: RwSignal<String>,
+    config: RwSignal<Arc<LapceConfig>>,
+) -> impl View {
+    v_stack((
+        label(move || label_text.to_string()).style(move |s| {
+            s.font_size(12.0)
+                .color(config.get().color(LapceColor::EDITOR_FOREGROUND))
+        }),
+        text_input(value).placeholder(placeholder).style(move |s| {
+            let config = config.get();
+            s.width_full()
+                .padding(10.0)
+                .border(1.0)
+                .border_radius(4.0)
+                .border_color(config.color(LapceColor::LAPCE_BORDER))
+                .background(config.color(LapceColor::EDITOR_BACKGROUND))
+        }),
+    ))
+    .style(|s| s.width_full().gap(6.0))
+}
+
 fn ollama_host_input(
     value: RwSignal<String>,
     config: RwSignal<Arc<LapceConfig>>,
@@ -1014,7 +1106,32 @@ pub fn is_ai_provider_configured() -> bool {
     {
         return true;
     }
-    secret_exists(OPENROUTER_KEY_ENTRY) || secret_exists(ANTHROPIC_KEY_ENTRY)
+    secret_exists(OPENROUTER_KEY_ENTRY)
+        || secret_exists(ANTHROPIC_KEY_ENTRY)
+        || secret_exists(OPENAI_KEY_ENTRY)
+}
+
+/// Persist non-secret OpenAI-compatible provider settings so the proxy can
+/// configure the agent (`~/.ownstack/provider.json`). The key stays in keyring.
+fn write_provider_json(base_url: &str, model: &str) {
+    let home = match std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+    {
+        Some(h) => PathBuf::from(h),
+        None => return,
+    };
+    let dir = home.join(".ownstack");
+    let _ = std::fs::create_dir_all(&dir);
+    let mut obj = serde_json::Map::new();
+    obj.insert("provider".to_string(), serde_json::json!("openai"));
+    obj.insert("base_url".to_string(), serde_json::json!(base_url));
+    if !model.is_empty() {
+        obj.insert("model".to_string(), serde_json::json!(model));
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&serde_json::Value::Object(obj))
+    {
+        let _ = std::fs::write(dir.join("provider.json"), text);
+    }
 }
 
 fn secret_exists(entry_name: &str) -> bool {

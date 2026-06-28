@@ -98,6 +98,7 @@ fn normalize_provider_name(provider: &str) -> Option<&'static str> {
     match provider.to_ascii_lowercase().as_str() {
         "openrouter" => Some("openrouter"),
         "anthropic" => Some("anthropic"),
+        "openai-compatible" | "openai" => Some("openai"),
         "local (ollama)" | "ollama" | "local" => Some("local"),
         _ => None,
     }
