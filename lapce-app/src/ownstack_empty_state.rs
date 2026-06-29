@@ -86,8 +86,6 @@ pub fn empty_editor_placeholder(
                     .hover(|s| {
                         s.background(CTA_BG_HOVER)
                             .border_color(CTA_BORDER_HOVER)
-                            .box_shadow_blur(8.0)
-                            .box_shadow_color(BRAND_ACCENT.multiply_alpha(0.14))
                     })
                     .active(|s| s.background(CTA_BG_ACTIVE).border_color(CTA_BORDER))
                     .margin_bottom(16.0)
@@ -151,8 +149,6 @@ pub fn chat_empty_state() -> impl View {
                 .border_radius(12.0)
                 .border_color(BRAND_ACCENT.multiply_alpha(0.16))
                 .background(BRAND_ACCENT.multiply_alpha(0.03))
-                .box_shadow_blur(16.0)
-                .box_shadow_color(BRAND_ACCENT.multiply_alpha(0.08))
         }),
         // Title
         label(|| "Start a conversation").style(|s| {

@@ -294,8 +294,6 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         .background(crate::ownstack_theme::SURFACE_1)
                         .color(Color::WHITE)
                         .font_size(13.0)
-                        .box_shadow_blur(8.0)
-                        .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.16))
                 })
                 .on_event_stop(floem::event::EventListener::KeyDown, {
                     let pd = palette_data.clone();
@@ -321,8 +319,6 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
                         .cursor(CursorStyle::Pointer)
                         .hover(|s| {
                             s.background(crate::ownstack_theme::ACCENT_BRIGHT)
-                                .box_shadow_blur(12.0)
-                                .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.47))
                         })
                 })
                 .on_click_stop({
@@ -437,8 +433,6 @@ pub fn ownstack_palette_view(palette_data: OwnStackPaletteData) -> impl floem::V
             .border(1.5)
             .border_color(crate::ownstack_theme::BORDER_STRONG)
             .border_radius(16.0)
-            .box_shadow_blur(40.0)
-            .box_shadow_color(Color::from_rgba8(0, 0, 0, 180))
     });
 
     // ── Full-screen overlay (click-outside backdrop) ─────────────────────

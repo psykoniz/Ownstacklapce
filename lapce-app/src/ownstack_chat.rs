@@ -789,8 +789,6 @@ pub fn ownstack_chat_panel(
                                         .color(LapceColor::PANEL_BACKGROUND)
                                         .multiply_alpha(0.6),
                                 )
-                                .box_shadow_blur(10.0)
-                                .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.12))
                         })
                     },
                 ),
@@ -857,7 +855,11 @@ pub fn ownstack_chat_panel(
             ))
             .style(|s| s.width_full().padding(12.0).gap(20.0)),
         )
-        .style(|s| s.flex_grow(1.0).width_full()),
+        .style(move |s| {
+            let config = config.get();
+            s.flex_grow(1.0).width_full()
+                .background(config.color(LapceColor::PANEL_BACKGROUND))
+        }),
         container(
             v_stack((
                 h_stack((
@@ -1037,7 +1039,7 @@ pub fn ownstack_chat_panel(
                                 let config = config.get();
                                 s.width_full()
                                     .height(4.0)
-                                    .border_radius(999.0)
+                                    .border_radius(2.0)
                                     .background(
                                         config
                                             .color(
@@ -1064,7 +1066,7 @@ pub fn ownstack_chat_panel(
                                 };
                                 s.width_pct(ratio)
                                     .height(4.0)
-                                    .border_radius(999.0)
+                                    .border_radius(2.0)
                                     .background(fill)
                             }),
                         ))
@@ -1157,8 +1159,6 @@ pub fn ownstack_chat_panel(
                                 })
                                 .active(|s| {
                                     s.border_color(crate::ownstack_theme::ACCENT_BRIGHT)
-                                        .box_shadow_blur(5.0)
-                                        .box_shadow_color(crate::ownstack_theme::ACCENT.multiply_alpha(0.39))
                                 })
                         })
                         .on_event_stop(floem::event::EventListener::KeyDown, {
