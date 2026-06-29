@@ -113,6 +113,7 @@ features = ["Win32_Foundation"]
 inherits      = "release"
 lto           = true
 codegen-units = 1
+strip         = "symbols"   # distribution build: smaller binaries, no debug symbols
 
 [profile.dev]
 opt-level = 0

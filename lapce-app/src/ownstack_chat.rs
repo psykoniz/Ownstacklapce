@@ -1347,7 +1347,7 @@ fn message_view(
     } else if msg.is_error {
         crate::ownstack_theme::STATE_ERROR.multiply_alpha(0.31)
     } else {
-        crate::ownstack_theme::SURFACE_0
+        crate::ownstack_theme::SURFACE_2
     };
 
     let bubble_border = if is_user {
@@ -1355,7 +1355,7 @@ fn message_view(
     } else if msg.is_error {
         crate::ownstack_theme::STATE_ERROR.multiply_alpha(0.47)
     } else {
-        crate::ownstack_theme::SURFACE_0.multiply_alpha(0.59)
+        crate::ownstack_theme::BORDER
     };
 
     let text_color = if is_user {
@@ -1494,9 +1494,10 @@ fn message_view(
         empty().into_any()
     };
 
+    let msg_text = msg.content.clone();
     let main_content = v_stack((
         header,
-        text(msg.content.clone()).style(move |s| {
+        label(move || msg_text.clone()).style(move |s| {
             s.width_full()
                 .color(text_color)
                 .line_height(1.6)

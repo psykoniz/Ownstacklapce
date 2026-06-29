@@ -93,6 +93,7 @@ jobs:
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $signtool) { throw "signtool.exe not found" }
           & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f "$env:OWNSTACK_CODESIGN_CERT" /p "$env:WINDOWS_CERTIFICATE_PWD" ".\\target\\release-lto\\ownstack-ide.exe"
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f "$env:OWNSTACK_CODESIGN_CERT" /p "$env:WINDOWS_CERTIFICATE_PWD" ".\\target\\release-lto\\ownstack-agent.exe"
 
       - name: Create msi installer
         run: |
@@ -115,7 +116,11 @@ jobs:
         shell: pwsh
         run: |
           cargo build --profile release-lto --features lapce-app/portable
-          Compress-Archive ./target/release-lto/ownstack-ide.exe ./OwnStack-windows-portable.zip
+          # Bundle the agent too — the IDE spawns ownstack-agent.exe from its own
+          # directory, so a portable zip without it ships a dead AI bridge.
+          Compress-Archive `
+            -Path ./target/release-lto/ownstack-ide.exe, ./target/release-lto/ownstack-agent.exe `
+            -DestinationPath ./OwnStack-windows-portable.zip
 
       - name: Verify signatures (optional)
         if: ${{ env.WINDOWS_CODESIGN_ENABLED == 'true' }}

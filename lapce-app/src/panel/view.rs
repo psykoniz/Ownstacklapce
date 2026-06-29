@@ -447,8 +447,7 @@ pub fn panel_container_view(
                     .background(config.color(LapceColor::PANEL_BACKGROUND))
             })
             .apply_if(position == PanelContainerPosition::Right, |s| {
-                // When content is hidden, shrink to just the icon picker width
-                let w = if is_shown { size as f32 } else { 30.0 };
+                let w = if is_shown { (size as f32).max(200.0) } else { 30.0 };
                 s.border_left(1.0)
                     .width(w)
                     .height_pct(100.0)
