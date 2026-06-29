@@ -75,7 +75,7 @@ impl GitToolkit {
 
     async fn run_git(&self, command: &str) -> Result<ToolResult, ToolkitError> {
         let start = Instant::now();
-        let full_command = format!("git {}", command);
+        let full_command = format!("git --no-pager {}", command);
         // PolicyEngine::evaluate is static in ownstack-engine/src/policy.rs
         let decision = PolicyEngine::evaluate(&full_command);
 

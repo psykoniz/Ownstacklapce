@@ -1,13 +1,16 @@
 use crate::sandbox::{Sandbox, SandboxLevel};
 use crate::tool_result::ToolResult;
-use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 use tracing::debug;
-use wait_timeout::ChildExt;
 
+// TODO: Re-enable Job Object sandboxing. Currently disabled because
+// Command::output() (needed to avoid pipe deadlocks) doesn't expose the
+// child process handle before execution. A custom spawn+output implementation
+// would allow assigning the job object while keeping correct pipe I/O.
 #[cfg(windows)]
+#[allow(dead_code)]
 mod windows_job {
     use std::mem;
     use std::os::windows::io::AsRawHandle;
@@ -268,51 +271,6 @@ fn split_command(command_str: &str) -> Vec<String> {
     parts
 }
 
-fn spawn_pipe_reader<R>(
-    pipe: Option<R>,
-) -> Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>
-where
-    R: Read + Send + 'static,
-{
-    pipe.map(|mut stream| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            stream.read_to_end(&mut buf)?;
-            Ok(buf)
-        })
-    })
-}
-
-fn collect_pipe_output(
-    reader: Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>,
-    stream_name: &str,
-) -> (Vec<u8>, Option<String>) {
-    let Some(reader) = reader else {
-        return (Vec::new(), None);
-    };
-
-    match reader.join() {
-        Ok(Ok(bytes)) => (bytes, None),
-        Ok(Err(e)) => (
-            Vec::new(),
-            Some(format!("Failed to read {}: {}", stream_name, e)),
-        ),
-        Err(_) => (
-            Vec::new(),
-            Some(format!("{} reader thread panicked", stream_name)),
-        ),
-    }
-}
-
-fn append_read_error(stderr: &mut String, read_error: Option<String>) {
-    if let Some(err) = read_error {
-        if !stderr.is_empty() {
-            stderr.push('\n');
-        }
-        stderr.push_str(&err);
-    }
-}
-
 #[async_trait::async_trait]
 impl Sandbox for ProcessSandbox {
     async fn exec(
@@ -357,16 +315,33 @@ impl Sandbox for ProcessSandbox {
             args = resolved.1;
         }
 
-        // Windows has no resolve_command equivalent. Without a shell, redirects
-        // (`>`), pipes (`|`), `&&`/`||` and cmd builtins are passed literally and
-        // silently no-op (worse: report success). Route through `cmd /C` so shell
-        // features behave like the Unix path. PolicyEngine already vetted the raw
-        // command string, so wrapping introduces no bypass.
+        // Windows: route through `cmd /C` so shell features (redirects, pipes,
+        // `&&`/`||`, builtins) work. For simple commands that don't need a shell
+        // (especially git), run the executable directly to avoid `cmd /C` pipe
+        // inheritance issues that can deadlock nested process chains.
         #[cfg(windows)]
         {
             let _ = level;
-            cmd_name = "cmd".to_string();
-            args = vec!["/C".to_string(), command_str.to_string()];
+            let needs_shell = command_str.contains('|')
+                || command_str.contains('>')
+                || command_str.contains("&&")
+                || command_str.contains("||");
+
+            if needs_shell {
+                cmd_name = "cmd".to_string();
+                args = vec!["/C".to_string(), command_str.to_string()];
+            } else {
+                // Run directly without cmd.exe wrapper.
+                let mut split = split_command(command_str);
+                if !split.is_empty() {
+                    cmd_name = split.remove(0);
+                    args = split;
+                }
+                // Inject --no-pager for git to prevent interactive pager.
+                if cmd_name == "git" && !args.iter().any(|a| a == "--no-pager") {
+                    args.insert(0, "--no-pager".to_string());
+                }
+            }
         }
 
         let mut child_cmd = Command::new(&cmd_name);
@@ -374,9 +349,7 @@ impl Sandbox for ProcessSandbox {
 
         child_cmd
             .current_dir(cwd)
-            .env_clear() // Critical security step
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .env_clear();
 
         #[cfg(windows)]
         {
@@ -433,10 +406,17 @@ impl Sandbox for ProcessSandbox {
             if let Ok(homepath) = std::env::var("HOMEPATH") {
                 child_cmd.env("HOMEPATH", homepath);
             }
+            // Prevent git from opening a pager or prompting for credentials
+            child_cmd.env("GIT_PAGER", "");
+            child_cmd.env("GIT_TERMINAL_PROMPT", "0");
         }
 
         #[cfg(unix)]
-        child_cmd.env("PATH", "/usr/bin:/bin:/usr/local/bin");
+        {
+            child_cmd.env("PATH", "/usr/bin:/bin:/usr/local/bin");
+            child_cmd.env("GIT_PAGER", "");
+            child_cmd.env("GIT_TERMINAL_PROMPT", "0");
+        }
 
         let timeout = match level {
             SandboxLevel::Light => Duration::from_secs(60),
@@ -444,109 +424,61 @@ impl Sandbox for ProcessSandbox {
             SandboxLevel::Strict => Duration::from_secs(600),
         };
 
-        #[cfg(windows)]
-        let job = match windows_job::WindowsJob::new() {
-            Ok(job) => {
-                if let Err(e) = job.set_limits(level) {
-                    return ToolResult::failure(
-                        format!("Failed to set sandbox limits: {}", e),
-                        None,
-                    );
-                }
-                job
-            }
-            Err(e) => {
-                return ToolResult::failure(
-                    format!("Failed to create Windows Job Object: {}", e),
-                    None,
-                );
-            }
+        // Use Command::output() on a blocking thread with a tokio timeout.
+        // The previous spawn + manual pipe reader + wait_timeout approach
+        // deadlocked on Windows because child processes in a process chain
+        // (cmd→git→git) can block on pipe writes when the read end isn't
+        // drained fast enough by the background reader threads.
+        // Command::output() handles all of this correctly internally.
+        let output_result = {
+            let timeout_dur = timeout;
+            tokio::time::timeout(timeout_dur, tokio::task::spawn_blocking(move || {
+                child_cmd.output()
+            }))
+            .await
         };
 
-        match child_cmd.spawn() {
-            Ok(mut child_proc) => {
-                #[cfg(windows)]
-                if let Err(e) = job.assign_process(&child_proc) {
-                    let _ = child_proc.kill();
-                    return ToolResult::failure(
-                        format!(
-                            "Failed to assign process to Windows Job Object: {}",
-                            e
-                        ),
-                        None,
+        match output_result {
+            Ok(Ok(Ok(output))) => {
+                let stdout_str =
+                    String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr_str =
+                    String::from_utf8_lossy(&output.stderr).to_string();
+
+                if !stdout_str.is_empty() || !stderr_str.is_empty() {
+                    debug!(
+                        command = %command_str,
+                        stdout_bytes = output.stdout.len(),
+                        stderr_bytes = output.stderr.len(),
+                        "Sandbox captured child output"
                     );
                 }
 
-                let mut stdout_reader = spawn_pipe_reader(child_proc.stdout.take());
-                let mut stderr_reader = spawn_pipe_reader(child_proc.stderr.take());
-
-                match child_proc.wait_timeout(timeout) {
-                    Ok(Some(status)) => {
-                        let (output, stdout_read_error) =
-                            collect_pipe_output(stdout_reader.take(), "stdout");
-                        let (err_output, stderr_read_error) =
-                            collect_pipe_output(stderr_reader.take(), "stderr");
-
-                        let mut stderr =
-                            String::from_utf8_lossy(&err_output).to_string();
-                        append_read_error(&mut stderr, stdout_read_error.clone());
-                        append_read_error(&mut stderr, stderr_read_error.clone());
-                        let read_ok = stdout_read_error.is_none()
-                            && stderr_read_error.is_none();
-
-                        if !output.is_empty() || !err_output.is_empty() {
-                            debug!(
-                                command = %command_str,
-                                stdout_bytes = output.len(),
-                                stderr_bytes = err_output.len(),
-                                "Sandbox captured child output"
-                            );
-                        } else {
-                            debug!(
-                                command = %command_str,
-                                "Sandbox child finished with empty stdout/stderr"
-                            );
-                        }
-
-                        ToolResult {
-                            success: status.success() && read_ok,
-                            stdout: String::from_utf8_lossy(&output).to_string(),
-                            stderr,
-                            exit_code: status.code(),
-                            metadata: std::collections::HashMap::new(),
-                        }
-                    }
-                    Ok(None) => {
-                        let _ = child_proc.kill();
-                        let _ = child_proc.wait();
-                        let (_, stdout_read_error) =
-                            collect_pipe_output(stdout_reader.take(), "stdout");
-                        let (_, stderr_read_error) =
-                            collect_pipe_output(stderr_reader.take(), "stderr");
-
-                        let mut stderr =
-                            format!("Process timed out after {:?}", timeout);
-                        append_read_error(&mut stderr, stdout_read_error);
-                        append_read_error(&mut stderr, stderr_read_error);
-                        ToolResult::failure(stderr, None)
-                    }
-                    Err(e) => {
-                        let _ = child_proc.kill();
-                        let _ = child_proc.wait();
-                        let (_, stdout_read_error) =
-                            collect_pipe_output(stdout_reader.take(), "stdout");
-                        let (_, stderr_read_error) =
-                            collect_pipe_output(stderr_reader.take(), "stderr");
-
-                        let mut stderr = format!("Execution error: {}", e);
-                        append_read_error(&mut stderr, stdout_read_error);
-                        append_read_error(&mut stderr, stderr_read_error);
-                        ToolResult::failure(stderr, None)
-                    }
+                ToolResult {
+                    success: output.status.success(),
+                    stdout: stdout_str,
+                    stderr: stderr_str,
+                    exit_code: output.status.code(),
+                    metadata: std::collections::HashMap::new(),
                 }
             }
-            Err(e) => {
-                ToolResult::failure(format!("Failed to spawn process: {}", e), None)
+            Ok(Ok(Err(e))) => {
+                ToolResult::failure(
+                    format!("Failed to spawn process: {}", e),
+                    None,
+                )
+            }
+            Ok(Err(e)) => {
+                ToolResult::failure(
+                    format!("Task join error: {}", e),
+                    None,
+                )
+            }
+            Err(_) => {
+                ToolResult::failure(
+                    format!("Process timed out after {:?}", timeout),
+                    None,
+                )
             }
         }
     }

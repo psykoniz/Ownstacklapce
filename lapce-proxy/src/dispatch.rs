@@ -1155,11 +1155,14 @@ impl ProxyHandler for Dispatcher {
                 let items = self
                     .buffers
                     .iter()
-                    .map(|(path, buffer)| TextDocumentItem {
-                        uri: Url::from_file_path(path).unwrap(),
-                        language_id: buffer.language_id.to_string(),
-                        version: buffer.rev as i32,
-                        text: buffer.get_document(),
+                    .filter_map(|(path, buffer)| {
+                        let uri = Url::from_file_path(path).ok()?;
+                        Some(TextDocumentItem {
+                            uri,
+                            language_id: buffer.language_id.to_string(),
+                            version: buffer.rev as i32,
+                            text: buffer.get_document(),
+                        })
                     })
                     .collect();
                 let resp = ProxyResponse::GetOpenFilesContentResponse { items };

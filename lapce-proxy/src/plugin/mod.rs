@@ -85,6 +85,10 @@ use self::{
 };
 use crate::buffer::language_id_from_path;
 
+fn safe_uri(path: &Path) -> Option<Url> {
+    Url::from_file_path(path).ok()
+}
+
 pub type PluginName = String;
 
 #[allow(clippy::large_enum_variant)]
@@ -502,8 +506,8 @@ impl PluginCatalogRpcHandler {
     }
 
     pub fn did_save_text_document(&self, path: &Path, text: Rope) {
-        let text_document =
-            TextDocumentIdentifier::new(Url::from_file_path(path).unwrap());
+        let Some(uri) = safe_uri(path) else { return };
+        let text_document = TextDocumentIdentifier::new(uri);
         let language_id = language_id_from_path(path).unwrap_or("").to_string();
         if let Err(err) =
             self.plugin_tx.send(PluginCatalogRpc::DidSaveTextDocument {
@@ -525,10 +529,8 @@ impl PluginCatalogRpcHandler {
         text: Rope,
         new_text: Rope,
     ) {
-        let document = VersionedTextDocumentIdentifier::new(
-            Url::from_file_path(path).unwrap(),
-            rev as i32,
-        );
+        let Some(uri) = safe_uri(path) else { return };
+        let document = VersionedTextDocumentIdentifier::new(uri, rev as i32);
         let language_id = language_id_from_path(path).unwrap_or("").to_string();
         if let Err(err) =
             self.plugin_tx
@@ -553,7 +555,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = GotoDefinition::METHOD;
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -584,7 +586,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = GotoTypeDefinition::METHOD;
         let params = GotoTypeDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -644,7 +646,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = CallHierarchyPrepare::METHOD;
         let params = CallHierarchyPrepareParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -674,7 +676,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = References::METHOD;
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {
@@ -709,7 +711,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = FoldingRangeRequest::METHOD;
         let params = FoldingRangeParams {
             text_document: TextDocumentIdentifier { uri },
@@ -737,7 +739,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = GotoImplementation::METHOD;
         let params = GotoTypeDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -769,7 +771,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = CodeActionRequest::METHOD;
         let params = CodeActionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -804,7 +806,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = CodeLensRequest::METHOD;
         let params = CodeLensParams {
             text_document: TextDocumentIdentifier { uri },
@@ -852,7 +854,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = InlayHintRequest::METHOD;
         let params = InlayHintParams {
             text_document: TextDocumentIdentifier { uri },
@@ -880,7 +882,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = InlineCompletionRequest::METHOD;
         let params = InlineCompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -912,7 +914,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = DocumentSymbolRequest::METHOD;
         let params = DocumentSymbolParams {
             text_document: TextDocumentIdentifier { uri },
@@ -955,7 +957,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = Formatting::METHOD;
         let params = DocumentFormattingParams {
             text_document: TextDocumentIdentifier { uri },
@@ -986,7 +988,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = PrepareRenameRequest::METHOD;
         let params = TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -1013,7 +1015,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = Rename::METHOD;
         let params = RenameParams {
             text_document_position: TextDocumentPositionParams {
@@ -1042,7 +1044,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = SemanticTokensFullRequest::METHOD;
         let params = SemanticTokensParams {
             text_document: TextDocumentIdentifier { uri },
@@ -1069,7 +1071,7 @@ impl PluginCatalogRpcHandler {
         + Send
         + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = SelectionRangeRequest::METHOD;
         let params = SelectionRangeParams {
             text_document: TextDocumentIdentifier { uri },
@@ -1094,7 +1096,7 @@ impl PluginCatalogRpcHandler {
         position: Position,
         cb: impl FnOnce(PluginId, Result<Hover, RpcError>) + Clone + Send + 'static,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = HoverRequest::METHOD;
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -1122,7 +1124,7 @@ impl PluginCatalogRpcHandler {
         input: String,
         position: Position,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = Completion::METHOD;
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -1202,7 +1204,7 @@ impl PluginCatalogRpcHandler {
         path: &Path,
         position: Position,
     ) {
-        let uri = Url::from_file_path(path).unwrap();
+        let Some(uri) = safe_uri(path) else { return };
         let method = SignatureHelpRequest::METHOD;
         let params = SignatureHelpParams {
             // TODO: We could provide more information about the signature for the LSP to work with

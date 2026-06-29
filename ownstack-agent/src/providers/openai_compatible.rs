@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::provider::{
     ContentPart, FinishReason, LlmMessage, LlmProvider, LlmResponse, MessageContent,
@@ -287,19 +287,30 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let wire = Wire::from_u8(self.effective_wire.load(Ordering::Relaxed));
         let tool_count = tools.as_ref().map_or(0, |t| t.len());
         let msg_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-        debug!(
+        let wire_name = match wire {
+            Wire::Chat => "chat",
+            Wire::Responses => "responses",
+        };
+        info!(
             "OpenAI-compatible: complete via {} ({}) — {} messages ({} chars), {} tools",
-            match wire {
-                Wire::Chat => "chat",
-                Wire::Responses => "responses",
-            },
+            wire_name,
             self.base_url,
             messages.len(),
             msg_chars,
             tool_count,
         );
 
-        match self.complete_with_wire(wire, &messages, &tools, &options).await {
+        let result = self.complete_with_wire(wire, &messages, &tools, &options).await;
+        match &result {
+            Ok(resp) => info!(
+                "OpenAI-compatible: response received — finish={:?}, content_len={}, tool_calls={}",
+                resp.finish_reason,
+                resp.content.as_ref().map_or(0, |c| c.len()),
+                resp.tool_calls.len(),
+            ),
+            Err(e) => info!("OpenAI-compatible: error — {}", e),
+        }
+        match result {
             Ok(resp) => Ok(resp),
             // If the configured wire's path is 404, the endpoint likely speaks
             // the other wire — flip, retry once, and remember.
